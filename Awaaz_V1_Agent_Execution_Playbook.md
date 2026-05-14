@@ -535,10 +535,14 @@ Create a test queue and worker in a throwaway script. Verify jobs enqueue and pr
 
 **Objective:** Clerk fully integrated, multi-tenant middleware active, user can belong to orgs, invitation flow works.
 
+### Phase 2 — execution status (agent-maintained)
+
+**Overall Phase 2 status:** **⏳ IN PROGRESS — pending owner verification & Clerk webhook wiring.** Code paths implemented in repo: Clerk JWT middleware, full tenant middleware with membership checks, `POST /webhooks/clerk` (Svix) + handlers (`user.created` / `user.updated` / `user.deleted` / `organizationInvitation.accepted`), organizations + members + invitations routes per `spec.md` §7, minimal agents `GET`/`POST`, Next.js org switcher + `NEXT_PUBLIC_API_URL` API client. **Schema:** `Organization.clerkOrganizationId` (`@unique`, nullable) links Clerk `org_*` IDs to DB orgs — migration **`20260517120000_organization_clerk_id`** (not in baseline §5 copy). **Human required:** add **`CLERK_WEBHOOK_SECRET`** on Render, register webhook URL **`https://<render-host>/webhooks/clerk`**, deploy migration (**`prisma migrate deploy`** on next Render build), set **Vercel `NEXT_PUBLIC_API_URL`** to production API origin. **Success Gate 2** stays **OPEN** until curl + invitation E2E are confirmed below.
+
 ### ☐ PRE-PHASE CHECKLIST
 - [x] Gate 1 is passed.
-- [ ] `.cursorrules` reviewed for authentication, webhook, and middleware conventions.
-- [ ] Clerk Dashboard is open and accessible.
+- [x] `.cursorrules` reviewed for authentication, webhook, and middleware conventions (agent).
+- [ ] Clerk Dashboard is open and accessible (**human** — webhook endpoint + signing secret).
 
 ---
 
