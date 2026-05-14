@@ -5,8 +5,9 @@ services:
     runtime: node
     plan: free
     rootDir: .
-    # Install pnpm on Render (global npm), apply migrations, generate client, build Nest.
-    buildCommand: npm install -g pnpm@9 && pnpm install --frozen-lockfile && pnpm --filter @awaaz/api exec prisma migrate deploy && pnpm --filter @awaaz/api exec prisma generate && pnpm --filter @awaaz/api build
+    # `--prod=false`: Render sets NODE_ENV=production; without this pnpm skips devDependencies
+    # and `@nestjs/cli` is missing → `nest: not found`.
+    buildCommand: npm install -g pnpm@9 && pnpm install --frozen-lockfile --prod=false && pnpm --filter @awaaz/api exec prisma migrate deploy && pnpm --filter @awaaz/api exec prisma generate && pnpm --filter @awaaz/api build
     startCommand: node apps/api/dist/main.js
     healthCheckPath: /health
     envVars:
