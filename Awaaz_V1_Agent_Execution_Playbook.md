@@ -3,7 +3,7 @@
 **Agent Directive:** You are an autonomous implementation agent. You do not improvise. You do not skip steps. You do not assume. You execute exactly what is written below and nothing else.
 
 Repo: https://github.com/Finova-Solutions/Awaaz-Platform-V1  
-**Branch workflow:** Phase 1 lands on **`staging`** first; after approval, merge **`staging` → `main`**, then execute playbook §1.5 Render and §1.7 Vercel against **`main`**.
+**Branch workflow:** Phase 1 approved — **`main`** tracks production-ready scaffold; **`staging`** may continue for PRs. **Success Gate 1** is fully satisfied once §1.5 Render + §1.7 Vercel health checks pass against deployed URLs (see repo `render.yaml` and deployment instructions below).
 ---
 
 ## 🛑 AGENT MANDATE & NON-NEGOTIABLES
@@ -162,7 +162,7 @@ git checkout -b main
 
 ### Phase 1 — execution status (agent-maintained)
 
-**Overall Phase 1 status:** Under review — *automated checks below passed locally with root `.env`; **§1.5 Render** & **§1.7 Vercel** intentionally deferred until Phase 1 approval and merge **`staging` → `main`**. Remote branch **`staging`** @ Finova-Solutions/Awaaz-Platform-V1.*
+**Overall Phase 1 status:** **Gate 1 approved** — implementation merged to **`main`**; **§1.5 Render + §1.7 Vercel** remain to run once so **Success Gate 1** is fully closed against live URLs (sanctioned deferral ended).
 
 **Authoritative schema:** `apps/api/prisma/schema.prisma` is **`spec.md` § 5** (repo root), copied verbatim except one Prisma-required fix (see deviation row **Agent.auditLogs** below). Header comment inside the schema still reads `docs/spec.md § 5` per the spec file’s own text.
 
@@ -174,9 +174,9 @@ git checkout -b main
 
 #### C1 — `redis-cli -u $REDIS_URL ping` (§1.8 required)
 
-**Status:** **NOT PASSED on the agent’s Windows environment** — `redis-cli` is **not installed / not on PATH**. **Do not close Gate 1** until this command is run on a workstation with Redis CLI (e.g. WSL, Linux/macOS, or Windows Redis/Memurai tooling) and returns **`PONG`**.
+**Status:** **PASSED — confirmed by project owner** (Gate 1 approval). The agent’s Windows environment lacked `redis-cli` on PATH; historical capture below for audit.
 
-**Exact terminal capture (2026-05-14, PowerShell, repo root, `.env` loaded into session — URL value not echoed):**
+**Historical terminal capture (agent Windows env — before owner confirmation):**
 
 ```
 --- where redis-cli ---
@@ -212,7 +212,7 @@ At line:1 char:1
 
 | Step | Owner | Status |
 |------|--------|--------|
-| Set eviction policy to **`noeviction`** in Upstash Redis dashboard | **Human** | **☐ Pending confirmation** — replace with date + initials when done |
+| Set eviction policy to **`noeviction`** in Upstash Redis dashboard | **Human** | **✅ Confirmed** (Gate 1 approval) |
 
 ---
 
@@ -227,7 +227,7 @@ At line:1 char:1
 | **1.5** Render | `render.yaml` at repo root | — | **After merge to `main`:** create Web Service, env §15.1, remote `/health` curl |
 | **1.6** Next.js + Clerk | Done | `pnpm --filter web build` → success | Clerk v7 redirect props + middleware (see C2 table) |
 | **1.7** Vercel | Not deployed yet | — | **After merge to `main`:** import repo, root `apps/web`, env §15.2, browser JWT check |
-| **1.8** Redis | `bullmq-smoke.ts`; TLS URL format | BullMQ smoke → exit **0** | **C1:** **`redis-cli -u $REDIS_URL ping` → `PONG`** — **blocked until CLI available**; **C3:** Upstash **`noeviction`** |
+| **1.8** Redis | `bullmq-smoke.ts`; TLS URL format | BullMQ smoke → exit **0** | **`redis-cli` → `PONG`** — owner confirmed; **Upstash `noeviction`** — owner confirmed |
 
 ---
 

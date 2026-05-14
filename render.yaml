@@ -5,7 +5,8 @@ services:
     runtime: node
     plan: free
     rootDir: .
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @awaaz/api exec prisma generate && pnpm --filter @awaaz/api build
+    # Install pnpm on Render (global npm), apply migrations, generate client, build Nest.
+    buildCommand: npm install -g pnpm@9 && pnpm install --frozen-lockfile && pnpm --filter @awaaz/api exec prisma migrate deploy && pnpm --filter @awaaz/api exec prisma generate && pnpm --filter @awaaz/api build
     startCommand: node apps/api/dist/main.js
     healthCheckPath: /health
     envVars:
