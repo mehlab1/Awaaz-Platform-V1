@@ -489,7 +489,7 @@ Create a test queue and worker in a throwaway script. Verify jobs enqueue and pr
 
 | Error | Likely Cause | Resolution |
 |---|---|---|
-| `prisma migrate dev` fails with P1001 | Wrong `DATABASE_URL` or Supabase IP restrictions | Verify Supabase URI. Check if IPv4/IPv6 is restricted. Use Direct URL for migrations. |
+| Prisma **`migrate`** fails with **P1001** (Can’t reach database server at `db.*.supabase.co:5432`) especially **on Render CI/build** | Supabase **direct** hostname is **IPv6-first**. Many hosts (including Render build runners) use **IPv4-only** outbound, so the direct URL never connects. Network bans on Supabase can cause this too. | Use **`DATABASE_DIRECT_URL` = Session pooler** string from Supabase Dashboard → **Connect** → **Session mode** (host `*.pooler.supabase.com`, port **5432**, user often `postgres.[PROJECT_REF]`). Keep **`DATABASE_URL`** as **Transaction** pooler `:6543` + `?pgbouncer=true` for app runtime. Or enable Supabase [**IPv4 add-on**](https://supabase.com/docs/guides/platform/ipv4-address) for direct `db.*` access. See [Connecting to Postgres](https://supabase.com/docs/guides/database/connecting-to-postgres). |
 | `BigInt` serialization error | Forgot BigInt patch in `main.ts` | Add the patch BEFORE `app.listen()`. Restart server. |
 | Render build fails with "command not found" | Wrong build command or missing `pnpm` | Verify build command matches 1.5 exactly. Ensure `pnpm` is available in Render environment. |
 | Vercel redirect loop | Wrong `afterSignInUrl` or middleware | Verify `middleware.ts` exact code. Ensure `afterSignInUrl` is `/agents`, not env var. |
