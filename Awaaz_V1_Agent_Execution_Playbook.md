@@ -2,7 +2,8 @@
 **Version:** 1.3-Agent | **Target:** Production-ready Sirius Agent handling real calls  
 **Agent Directive:** You are an autonomous implementation agent. You do not improvise. You do not skip steps. You do not assume. You execute exactly what is written below and nothing else.
 
-Repo: https://github.com/Finova-Solutions/Awaaz-Platform-V1
+Repo: https://github.com/Finova-Solutions/Awaaz-Platform-V1  
+**Branch workflow:** Phase 1 lands on **`staging`** first; after approval, merge **`staging` → `main`**, then execute playbook §1.5 Render and §1.7 Vercel against **`main`**.
 ---
 
 ## 🛑 AGENT MANDATE & NON-NEGOTIABLES
@@ -161,24 +162,26 @@ git checkout -b main
 
 ### Phase 1 — execution status (agent-maintained)
 
-**Overall Phase 1 status:** Under review — *implementation pushed as far as possible without your secrets / cloud dashboards; several checklist rows remain YOUR verification.*
+**Overall Phase 1 status:** Under review — *automated checks below passed locally with root `.env`; **§1.5 Render** & **§1.7 Vercel** intentionally deferred until Phase 1 approval and merge **`staging` → `main`**. Initial remote push: **`staging`** @ Finova-Solutions/Awaaz-Platform-V1.*
 
 **Deviation logged (.cursorrules > verbatim playbook):** Official **spec Section 5** is **not present** in this repository (`schema.prisma` is the derived domain model already checked in). Replacing it with the publisher’s Section 5 verbatim remains **`redo`** when you add the spec file.
 
 **Dependency note:** Installed `@nestjs/bullmq` / `bullmq` versions differ slightly from the exact `pnpm add` line in §1.2 (`^10` / `5.30.x` vs playbook `^5`). Builds succeed locally; align versions only if you require bitwise parity with the playbook.
 
+**Infra notes from verification:** `REDIS_URL` must be a **`rediss://…`** URL for BullMQ/ioredis (not a `redis-cli …` shell snippet). Upstash warned eviction policy is not **`noeviction`** — recommended for queue workloads. Migration **`20260514120000_init`** hit duplicate enum on deploy because enums already existed; migration was **`migrate resolve --applied`** after **`prisma migrate diff`** showed DB ↔ schema Drift = empty — schema confirmed aligned.
+
 | Playbook ref | Implementation | Automated verification | Human verification |
 |--------------|----------------|---------------------|-------------------|
-| **Gate 0** | Not runnable by agent | — | **YOU:** Confirm Phase 0 checklist complete before marking Gate 1 ready |
-| **1.1** Monorepo | Done — `apps/*`, `packages/*`, `packages/shared-types`, `apps/agent-worker`, `apps/qualicall-worker` scaffold | `pnpm install` (workspace resolves 4 projects) | — |
-| **1.2** NestJS API | Done — deps, Prisma datasource `url` + `directUrl`, `main.ts` BigInt + CORS, `ConfigModule`, `AppController` health | `pnpm --filter @awaaz/api build` → success | Prisma **verbatim Section 5** when spec arrives |
-| **1.3** Database | Migration SQL present (`init`); agent cannot apply without YOUR URLs | — prismatic validation needs `.env` with `DATABASE_URL` + `DATABASE_DIRECT_URL` | **YOU:** `export`/`.env` + `npx prisma migrate dev --name init` (if not applied), Prisma Studio, confirm Organization / Agent / Call tables |
+| **Gate 0** | User-declared complete | — | Confirm Phase 0 accounts/API curls remain healthy |
+| **1.1** Monorepo | Done — `apps/*`, `packages/*`, `packages/shared-types`, worker placeholders | `pnpm install` (workspace resolves 4 projects). **`staging`** pushed (`.env` **never** committed; `.gitignore` hardened). | — |
+| **1.2** NestJS API | Done — deps, Prisma datasource `url` + `directUrl`, `main.ts` BigInt + CORS, `ConfigModule`, health | `pnpm --filter @awaaz/api build` → success | Verbatim **Section 5** schema when spec arrives |
+| **1.3** Database | `init` migration + resolve/applied path documented above | `prisma validate`, `migrate status` up to date, **`migrate diff` datamodel ↔ datasource = empty migration** | Optional: Prisma Studio visual spot-check |
 | **1.3** TenantMiddleware skeleton | Done — parses `x-organization-id` onto `req` | Nest build | — |
-| **1.4** `/health` | Done | Response shape verified via controller source | **YOU:** `curl http://localhost:3001/health` after `pnpm --filter @awaaz/api start` |
-| **1.5** Render | `render.yaml` blueprint added at repo root (adjust env in dashboard) | — | **YOU:** Create Web Service, env vars §15.1, `curl https://<your-service>/health` |
-| **1.6** Next.js + Clerk | Done — App Router, shadcn, Clerk middleware, sign-in, dashboard layout | `pnpm --filter web build` → success | Clerk **`signInFallbackRedirectUrl="/agents"`** used (Clerk v7 replacement for deprecated `afterSignInUrl`) |
-| **1.7** Vercel | Not configurable by agent | — | **YOU:** Import repo, root `apps/web`, env §15.2, manual browser JWT check |
-| **1.8** Redis | Script `apps/api/scripts/bullmq-smoke.ts` + `pnpm --filter @awaaz/api run bullmq:smoke` | Run fails fast without `REDIS_URL` in `.env` | **YOU:** `redis-cli -u $REDIS_URL ping` → `PONG`; then run `bullmq:smoke` with valid URL |
+| **1.4** `/health` | Done | `curl http://127.0.0.1:3001/health` → `{"status":"ok","timestamp":"..."}` with env-loaded `pnpm exec nest start` | — |
+| **1.5** Render | `render.yaml` at repo root | — | **After merge to `main`:** create Web Service, env §15.1, remote `/health` curl |
+| **1.6** Next.js + Clerk | Done | `pnpm --filter web build` → success | Clerk **`signInFallbackRedirectUrl="/agents"`** (Clerk v7) |
+| **1.7** Vercel | Not deployed yet | — | **After merge to `main`:** import repo, root `apps/web`, env §15.2, browser JWT check |
+| **1.8** Redis | `apps/api/scripts/bullmq-smoke.ts` | **`ts-node scripts/bullmq-smoke.ts`** with env loaded → exit **0** (queue enqueue/process). `redis-cli` ping optional | Consider setting Upstash eviction to **`noeviction`** |
 
 ---
 
