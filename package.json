@@ -1,0 +1,15 @@
+{
+  "name": "awaaz",
+  "private": true,
+  "engines": {
+    "node": ">=20 <21",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @awaaz/api start:dev",
+    "build:api": "pnpm --filter @awaaz/api build",
+    "dev:web": "pnpm --filter web dev",
+    "build:web": "pnpm --filter web build"
+  },
+  "devDependencies": {}
+}

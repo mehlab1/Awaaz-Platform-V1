@@ -1,0 +1,15 @@
+# Render blueprint — Phase 1.5 (adjust service name / branch / env in dashboard as needed)
+services:
+  - type: web
+    name: awaaz-api
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @awaaz/api exec prisma generate && pnpm --filter @awaaz/api build
+    startCommand: node apps/api/dist/main.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"

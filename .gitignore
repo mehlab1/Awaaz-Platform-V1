@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Secrets and env master (never commit)
+.env
+.env.master
+.env.local
+.env.*.local
+!.env.example
+
+# Build outputs
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
