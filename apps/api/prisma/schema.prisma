@@ -1,5 +1,9 @@
-// Derived from plan.md domain model (spec Section 5 not present in repo).
-// When you have the official spec, replace this file with Section 5 verbatim.
+// ============================================================
+// Awaaz V1 — Authoritative Prisma Schema
+// Source of truth: docs/spec.md § 5
+// DO NOT MODIFY field names, types, or enum values without
+// updating this spec file and creating a new migration.
+// ============================================================
 
 generator client {
   provider = "prisma-client-js"
@@ -11,16 +15,15 @@ datasource db {
   directUrl = env("DATABASE_DIRECT_URL")
 }
 
-enum MembershipRole {
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum Role {
   OWNER
   ADMIN
   BUILDER
   VIEWER
-}
-
-enum CallDirection {
-  INBOUND
-  OUTBOUND
 }
 
 enum CallStatus {
@@ -31,197 +34,331 @@ enum CallStatus {
   ABANDONED
 }
 
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum EventType {
+  USER_SPEECH
+  AGENT_SPEECH
+  CALL_STARTED
+  CALL_ENDED
+  TRANSFER_INITIATED
+  ERROR
+}
+
+enum AuditAction {
+  CREATED
+  UPDATED
+  DELETED
+  PUBLISHED
+  RESTORED
+  INVITED
+  REVOKED
+  ASSIGNED
+  UNASSIGNED
+}
+
+// ─────────────────────────────────────────────
+// ORGANIZATION
+// ─────────────────────────────────────────────
+
 model Organization {
-  id        String   @id @default(cuid())
-  name      String
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships       Membership[]
+  pendingInvitations PendingInvitation[]
+  agents            Agent[]
+  phoneNumbers      PhoneNumber[]
+  calls             Call[]
+  apiKeys           ApiKey[]
+  auditLogs         AuditLog[]
+
+  @@map("organizations")
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id        String   @id  // Clerk user ID (e.g. "user_...")
+  email     String?  @unique
+  firstName String?
+  lastName  String?
+  imageUrl  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  memberships        Membership[]
-  pendingInvitations PendingInvitation[]
-  agents             Agent[]
-  phoneNumbers       PhoneNumber[]
-  calls              Call[]
-  auditLogs          AuditLog[]
-  apiKeys            ApiKey[]
-}
-
-model User {
-  id          String    @id @default(cuid())
-  clerkUserId String    @unique
-  email       String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  deletedAt   DateTime?
-
   memberships Membership[]
+  auditLogs   AuditLog[]
+
+  @@map("users")
 }
+
+// ─────────────────────────────────────────────
+// MEMBERSHIP
+// ─────────────────────────────────────────────
 
 model Membership {
-  id             String         @id @default(cuid())
+  id             String   @id @default(cuid())
   userId         String
   organizationId String
-  role           MembershipRole
-  createdAt      DateTime       @default(now())
+  role           Role     @default(VIEWER)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([userId, organizationId])
-  @@index([organizationId])
+  @@map("memberships")
 }
 
+// ─────────────────────────────────────────────
+// PENDING INVITATION
+// ─────────────────────────────────────────────
+
 model PendingInvitation {
-  id             String         @id @default(cuid())
+  id             String   @id @default(cuid())
   organizationId String
   email          String
-  role           MembershipRole
-  clerkInviteId  String?
-  createdAt      DateTime       @default(now())
+  role           Role     @default(VIEWER)
+  clerkInviteId  String?  @unique
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  @@index([email])
-  @@index([organizationId])
+  @@unique([organizationId, email])
+  @@map("pending_invitations")
 }
 
+// ─────────────────────────────────────────────
+// AGENT
+// ─────────────────────────────────────────────
+
 model Agent {
-  id               String    @id @default(cuid())
+  id               String   @id @default(cuid())
   organizationId   String
   name             String
   description      String?
-  currentVersionId String?   @unique
-  deletedAt        DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  isActive         Boolean  @default(true)
+  currentVersionId String?  @unique
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  deletedAt        DateTime?  // soft-delete
 
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  currentVersion AgentVersion? @relation("CurrentVersion", fields: [currentVersionId], references: [id])
   versions       AgentVersion[] @relation("AgentVersions")
-  currentVersion AgentVersion?  @relation("CurrentAgentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
   phoneNumbers   PhoneNumber[]
   calls          Call[]
+  // NOTE (Gate 1 C — spec §5 drift): spec lists `auditLogs` here but `AuditLog` defines no
+  // inverse `agent` relation; Prisma validate fails. Agent-related audits use `AuditLog.entityType` / `entityId`.
+
+  @@map("agents")
 }
+
+// ─────────────────────────────────────────────
+// AGENT VERSION
+// ─────────────────────────────────────────────
 
 model AgentVersion {
-  id            String    @id @default(cuid())
+  id            String   @id @default(cuid())
   agentId       String
   versionNumber Int
-  systemPrompt  String    @db.Text
-  voiceId       String?
-  isLive        Boolean   @default(false)
+  systemPrompt  String   @db.Text
+  voiceId       String
+  model         String   @default("llama-3.3-70b-versatile")
+  temperature   Float    @default(0.7)
+  maxTokens     Int      @default(1024)
+  firstMessage  String?
+  endCallPhrases String[] @default([])
+  isLive        Boolean  @default(false)
   publishedAt   DateTime?
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  agent           Agent  @relation("AgentVersions", fields: [agentId], references: [id], onDelete: Cascade)
-  currentForAgent Agent? @relation("CurrentAgentVersion")
+  agent           Agent   @relation("AgentVersions", fields: [agentId], references: [id], onDelete: Cascade)
+  agentAsCurrent  Agent?  @relation("CurrentVersion")
+  calls           Call[]
 
   @@unique([agentId, versionNumber])
-  @@index([agentId])
+  @@map("agent_versions")
 }
+
+// ─────────────────────────────────────────────
+// PHONE NUMBER
+// ─────────────────────────────────────────────
 
 model PhoneNumber {
   id                    String   @id @default(cuid())
   organizationId        String
-  e164                  String
   agentId               String?
+  number                String   @unique   // E.164 format, e.g. "+923001234567"
+  friendlyName          String?
+  twilioSid             String?  @unique
   liveKitDispatchRuleId String?
+  isActive              Boolean  @default(true)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  agent        Agent?       @relation(fields: [agentId], references: [id])
+  agent        Agent?        @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  calls        Call[]
 
-  @@unique([organizationId, e164])
+  @@map("phone_numbers")
 }
 
-model Voice {
+// ─────────────────────────────────────────────
+// CALL
+// ─────────────────────────────────────────────
+
+model Call {
+  id               String        @id @default(cuid())
+  organizationId   String
+  agentId          String?
+  agentVersionId   String?
+  phoneNumberId    String?
+  direction        CallDirection
+  status           CallStatus    @default(INITIATED)
+  fromNumber       String?
+  toNumber         String?
+  twilioCallSid    String?       @unique
+  liveKitRoomId    String?       @unique
+  startedAt        DateTime?
+  endedAt          DateTime?
+  durationSeconds  Int?
+  recordingUrl     String?       // R2 object key, not full URL
+  costBreakdown    Json?
+  totalCostUsd     Float?
+  metadata         Json?         // includes isTest: true for browser test calls
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent?         @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  agentVersion AgentVersion?  @relation(fields: [agentVersionId], references: [id], onDelete: SetNull)
+  phoneNumber  PhoneNumber?   @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
+  events       CallEvent[]
+  transcript   Transcript?
+
+  @@index([organizationId, createdAt])
+  @@index([agentId, createdAt])
+  @@index([status])
+  @@index([direction])
+  @@map("calls")
+}
+
+// ─────────────────────────────────────────────
+// CALL EVENT
+// ─────────────────────────────────────────────
+
+model CallEvent {
+  id         String    @id @default(cuid())
+  callId     String
+  eventType  EventType
+  content    String?   @db.Text
+  speaker    String?   // "user" | "agent"
+  latencyMs  Int?
+  tokenCount Int?
+  startedAt  DateTime?
+  endedAt    DateTime?
+  durationMs Int?
+  metadata   Json?
+  createdAt  DateTime  @default(now())
+
+  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  @@index([callId, eventType])
+  @@index([callId, createdAt])
+  @@map("call_events")
+}
+
+// ─────────────────────────────────────────────
+// TRANSCRIPT
+// ─────────────────────────────────────────────
+
+model Transcript {
   id          String   @id @default(cuid())
-  rimeVoiceId String
-  name        String
-  previewUrl  String?
-  metadata    Json?
+  callId      String   @unique
+  content     Json     // Array of { speaker, text, startedAt, endedAt, latencyMs }
+  assembledAt DateTime @default(now())
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@index([rimeVoiceId])
-}
-
-model Call {
-  id              String        @id @default(cuid())
-  organizationId  String
-  agentId         String?
-  direction       CallDirection
-  status          CallStatus    @default(INITIATED)
-  phoneNumber     String?
-  liveKitRoomId   String?
-  twilioCallSid   String?
-  startedAt       DateTime?
-  endedAt         DateTime?
-  durationSeconds Int?
-  recordingUrl    String?
-  costBreakdown   Json?
-  metadata        Json?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  agent        Agent?       @relation(fields: [agentId], references: [id])
-  transcript   Transcript?
-  events       CallEvent[]
-
-  @@index([organizationId])
-  @@index([twilioCallSid])
-}
-
-model Transcript {
-  id        String   @id @default(cuid())
-  callId    String   @unique
-  content   Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
-}
-
-model CallEvent {
-  id        String   @id @default(cuid())
-  callId    String
-  eventType String
-  payload   Json?
-  latencyMs Int?
-  createdAt DateTime @default(now())
-
   call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
 
-  @@index([callId])
+  @@map("transcripts")
 }
+
+// ─────────────────────────────────────────────
+// VOICE
+// ─────────────────────────────────────────────
+
+model Voice {
+  id             String   @id @default(cuid())
+  rimeVoiceId    String   @unique   // Rime's internal voice identifier
+  name           String
+  description    String?
+  language       String   @default("en")
+  gender         String?
+  previewAudioUrl String?  // R2 presigned-compatible key
+  isActive       Boolean  @default(true)
+  syncedAt       DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("voices")
+}
+
+// ─────────────────────────────────────────────
+// API KEY
+// ─────────────────────────────────────────────
 
 model ApiKey {
-  id             String    @id @default(cuid())
-  organizationId String
-  name           String
-  keyPrefix      String
-  keyHash        String
-  isRevoked      Boolean   @default(false)
-  lastUsedAt     DateTime?
-  createdAt      DateTime  @default(now())
-
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  @@index([organizationId])
-}
-
-model AuditLog {
   id             String   @id @default(cuid())
   organizationId String
-  actorUserId    String?
-  action         String
-  resourceType   String
-  resourceId     String?
-  details        Json?
+  name           String
+  keyPrefix      String                   // First 8 chars, displayed in UI
+  keyHash        String   @unique         // SHA-256 of full key — never store plaintext
+  isRevoked      Boolean  @default(false)
+  lastUsedAt     DateTime?
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+  @@map("api_keys")
+}
+
+// ─────────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────────
+
+model AuditLog {
+  id             String      @id @default(cuid())
+  organizationId String
+  userId         String?
+  action         AuditAction
+  entityType     String      // "Agent" | "AgentVersion" | "PhoneNumber" | "Member" | "ApiKey" | etc.
+  entityId       String?
+  metadata       Json?       // snapshot of changed fields or context
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
 }

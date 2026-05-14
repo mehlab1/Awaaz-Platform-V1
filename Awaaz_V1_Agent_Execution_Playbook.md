@@ -162,26 +162,72 @@ git checkout -b main
 
 ### Phase 1 — execution status (agent-maintained)
 
-**Overall Phase 1 status:** Under review — *automated checks below passed locally with root `.env`; **§1.5 Render** & **§1.7 Vercel** intentionally deferred until Phase 1 approval and merge **`staging` → `main`**. Initial remote push: **`staging`** @ Finova-Solutions/Awaaz-Platform-V1.*
+**Overall Phase 1 status:** Under review — *automated checks below passed locally with root `.env`; **§1.5 Render** & **§1.7 Vercel** intentionally deferred until Phase 1 approval and merge **`staging` → `main`**. Remote branch **`staging`** @ Finova-Solutions/Awaaz-Platform-V1.*
 
-**Deviation logged (.cursorrules > verbatim playbook):** Official **spec Section 5** is **not present** in this repository (`schema.prisma` is the derived domain model already checked in). Replacing it with the publisher’s Section 5 verbatim remains **`redo`** when you add the spec file.
+**Authoritative schema:** `apps/api/prisma/schema.prisma` is **`spec.md` § 5** (repo root), copied verbatim except one Prisma-required fix (see deviation row **Agent.auditLogs** below). Header comment inside the schema still reads `docs/spec.md § 5` per the spec file’s own text.
 
-**Dependency note:** Installed `@nestjs/bullmq` / `bullmq` versions differ slightly from the exact `pnpm add` line in §1.2 (`^10` / `5.30.x` vs playbook `^5`). Builds succeed locally; align versions only if you require bitwise parity with the playbook.
+**Infra notes:** `REDIS_URL` must be a **`rediss://…`** URL for TLS clients (not a `redis-cli …` shell prefix).
 
-**Infra notes from verification:** `REDIS_URL` must be a **`rediss://…`** URL for BullMQ/ioredis (not a `redis-cli …` shell snippet). Upstash warned eviction policy is not **`noeviction`** — recommended for queue workloads. Migration **`20260514120000_init`** hit duplicate enum on deploy because enums already existed; migration was **`migrate resolve --applied`** after **`prisma migrate diff`** showed DB ↔ schema Drift = empty — schema confirmed aligned.
+---
+
+### Gate 1 correction tasks (C1–C3)
+
+#### C1 — `redis-cli -u $REDIS_URL ping` (§1.8 required)
+
+**Status:** **NOT PASSED on the agent’s Windows environment** — `redis-cli` is **not installed / not on PATH**. **Do not close Gate 1** until this command is run on a workstation with Redis CLI (e.g. WSL, Linux/macOS, or Windows Redis/Memurai tooling) and returns **`PONG`**.
+
+**Exact terminal capture (2026-05-14, PowerShell, repo root, `.env` loaded into session — URL value not echoed):**
+
+```
+--- where redis-cli ---
+where.exe : INFO: Could not find files for the given pattern(s).
+At line:1 char:1
++ where.exe redis-cli 2>&1
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO: Could not...ven pattern(s).:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+--- redis-cli ping ---
+redis-cli : The term 'redis-cli' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ redis-cli -u $env:REDIS_URL ping 2>&1
++ ~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (redis-cli:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+```
+
+#### C2 — Documented deviations (execution status extensions)
+
+| Topic | Detail | Verification |
+|-------|--------|--------------|
+| **BullMQ / @nestjs/bullmq vs playbook §1.2 `pnpm add` line** | Playbook suggests `@nestjs/bullmq@^5` + `bullmq@^5`. **Installed:** `@nestjs/bullmq` **10.2.3**, `bullmq` **5.30.0** (`apps/api/package.json` + lockfile). | API **build** OK; **`bullmq:smoke`** / `ts-node scripts/bullmq-smoke.ts` OK |
+| **Clerk v7 breaking changes** | **`afterSignInUrl`** → **`signInFallbackRedirectUrl`** (and sign-up equivalent); middleware **`auth().protect()`** pattern → **`await auth.protect()`** in Clerk v7 Next.js middleware — **intentional** per Clerk v7 docs. | **`pnpm --filter web build`** OK |
+| **BigInt patch vs playbook snippet** | Playbook shows `(BigInt.prototype as any).toJSON = …`; code uses **`Object.defineProperty(BigInt.prototype, 'toJSON', { value: function … })`** — **functionally equivalent**; avoids `any` per `.cursorrules`. | Nest bootstrap OK |
+| **Migration recovery + §5 baseline** | Legacy migration **`20260514120000_init`** removed. New baseline **`20260516100000_spec_section_5_init`** applies **`spec.md` §5** DDL. First deploy attempt failed (**`P3018`**) due to **UTF-8 BOM** at start of `migration.sql` (`syntax error at or near "﻿"`). Recovery: **`prisma migrate resolve --rolled-back 20260516100000_spec_section_5_init`**, rewrite SQL **UTF-8 without BOM**, **`prisma migrate deploy`**, **`prisma generate`**. | **`migrate status`** up to date; **`migrate diff`** schema ↔ DB = **empty** |
+| **Prisma vs spec §5 (`Agent.auditLogs`)** | Spec lists `auditLogs AuditLog[]` on **`Agent`** but **`AuditLog`** has **no inverse** `agent` relation → Prisma **P1012**. **Fix:** removed orphan `auditLogs` from **`Agent`** with comment; use **`AuditLog.entityType` / `entityId`** for agent-related audits. | **`prisma validate`** OK |
+
+#### C3 — Upstash eviction policy (`noeviction`)
+
+**Operational risk (Phase 3 queues):** Upstash default eviction may evict keys BullMQ relies on.
+
+| Step | Owner | Status |
+|------|--------|--------|
+| Set eviction policy to **`noeviction`** in Upstash Redis dashboard | **Human** | **☐ Pending confirmation** — replace with date + initials when done |
+
+---
 
 | Playbook ref | Implementation | Automated verification | Human verification |
 |--------------|----------------|---------------------|-------------------|
 | **Gate 0** | User-declared complete | — | Confirm Phase 0 accounts/API curls remain healthy |
 | **1.1** Monorepo | Done — `apps/*`, `packages/*`, `packages/shared-types`, worker placeholders | `pnpm install` (workspace resolves 4 projects). **`staging`** pushed (`.env` **never** committed; `.gitignore` hardened). | — |
-| **1.2** NestJS API | Done — deps, Prisma datasource `url` + `directUrl`, `main.ts` BigInt + CORS, `ConfigModule`, health | `pnpm --filter @awaaz/api build` → success | Verbatim **Section 5** schema when spec arrives |
-| **1.3** Database | `init` migration + resolve/applied path documented above | `prisma validate`, `migrate status` up to date, **`migrate diff` datamodel ↔ datasource = empty migration** | Optional: Prisma Studio visual spot-check |
+| **1.2** NestJS API | Done — deps; Prisma **`spec.md` §5** (+ `Agent.auditLogs` fix); `main.ts` BigInt + CORS; `ConfigModule`; health | `pnpm --filter @awaaz/api build` → success | Supply **`spec.md`** changes if §5 is amended upstream |
+| **1.3** Database | Baseline migration **`20260516100000_spec_section_5_init`** applied | `prisma validate`, **`migrate status`** up to date, **`migrate diff`** datamodel ↔ datasource = **empty** | Optional: Prisma Studio |
 | **1.3** TenantMiddleware skeleton | Done — parses `x-organization-id` onto `req` | Nest build | — |
-| **1.4** `/health` | Done | `curl http://127.0.0.1:3001/health` → `{"status":"ok","timestamp":"..."}` with env-loaded `pnpm exec nest start` | — |
+| **1.4** `/health` | Done | `curl http://127.0.0.1:3001/health` → `{"status":"ok","timestamp":"..."}` with env-loaded Nest | — |
 | **1.5** Render | `render.yaml` at repo root | — | **After merge to `main`:** create Web Service, env §15.1, remote `/health` curl |
-| **1.6** Next.js + Clerk | Done | `pnpm --filter web build` → success | Clerk **`signInFallbackRedirectUrl="/agents"`** (Clerk v7) |
+| **1.6** Next.js + Clerk | Done | `pnpm --filter web build` → success | Clerk v7 redirect props + middleware (see C2 table) |
 | **1.7** Vercel | Not deployed yet | — | **After merge to `main`:** import repo, root `apps/web`, env §15.2, browser JWT check |
-| **1.8** Redis | `apps/api/scripts/bullmq-smoke.ts` | **`ts-node scripts/bullmq-smoke.ts`** with env loaded → exit **0** (queue enqueue/process). `redis-cli` ping optional | Consider setting Upstash eviction to **`noeviction`** |
+| **1.8** Redis | `bullmq-smoke.ts`; TLS URL format | BullMQ smoke → exit **0** | **C1:** **`redis-cli -u $REDIS_URL ping` → `PONG`** — **blocked until CLI available**; **C3:** Upstash **`noeviction`** |
 
 ---
 
