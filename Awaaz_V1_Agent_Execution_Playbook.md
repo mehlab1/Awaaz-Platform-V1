@@ -2,7 +2,7 @@
 **Version:** 1.3-Agent | **Target:** Production-ready Sirius Agent handling real calls  
 **Agent Directive:** You are an autonomous implementation agent. You do not improvise. You do not skip steps. You do not assume. You execute exactly what is written below and nothing else.
 
-Repo: https://github.com/Finova-Solutions/Awaaz-Platform-V1  
+Repo: https://github.com/mehlab1/Awaaz-Platform-V1  
 **Branch workflow:** Phase 1 approved — **`main`** tracks production-ready scaffold; **`staging`** may continue for PRs. **Success Gate 1** is fully satisfied once §1.5 Render + §1.7 Vercel health checks pass against deployed URLs (see repo `render.yaml` and deployment instructions below).
 ---
 
