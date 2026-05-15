@@ -537,12 +537,35 @@ Create a test queue and worker in a throwaway script. Verify jobs enqueue and pr
 
 ### Phase 2 — execution status (agent-maintained)
 
-**Overall Phase 2 status:** **⏳ IN PROGRESS — pending owner verification & Clerk webhook wiring.** Code paths implemented in repo: Clerk JWT middleware, full tenant middleware with membership checks, `POST /webhooks/clerk` (Svix) + handlers (`user.created` / `user.updated` / `user.deleted` / `organizationInvitation.accepted`), organizations + members + invitations routes per `spec.md` §7, minimal agents `GET`/`POST`, Next.js org switcher + `NEXT_PUBLIC_API_URL` API client. **Schema:** `Organization.clerkOrganizationId` (`@unique`, nullable) links Clerk `org_*` IDs to DB orgs — migration **`20260517120000_organization_clerk_id`** (not in baseline §5 copy). **Human required:** add **`CLERK_WEBHOOK_SECRET`** on Render, register webhook URL **`https://<render-host>/webhooks/clerk`**, deploy migration (**`prisma migrate deploy`** on next Render build), set **Vercel `NEXT_PUBLIC_API_URL`** to production API origin. **Success Gate 2** stays **OPEN** until curl + invitation E2E are confirmed below.
+**Overall Phase 2 status:** **🔍 UNDER REVIEW** — agent pass **2026-05-15**. Backend + frontend Phase 2 code paths are implemented and **`pnpm --filter @awaaz/api build`** + **`pnpm --filter web build`** succeeded locally. **Phase 3 is blocked** until you approve Gate 2 (or mark tasks **REDO** with errors).
+
+| Ref | Task | Implementation | Automated verification | Owner / live verification |
+|-----|------|----------------|------------------------|---------------------------|
+| **2.1** | Clerk webhooks | **✅** `apps/api/src/webhooks/webhooks.controller.ts`, `webhooks.service.ts`; raw body + Svix; handlers for four event types | Build OK | Clerk webhook URL + **`CLERK_WEBHOOK_SECRET`** on Render; live invite/sign-up |
+| **2.2** | Tenant middleware | **✅** `apps/api/src/common/tenant.middleware.ts`; `GET`/`POST /api/v1/organizations` excluded from org header | Build OK | **`curl`** TC 2.2.1 — use path **`/api/v1/agents`** (playbook snippet omits `/api/v1`) |
+| **2.3** | Organizations API | **✅** `organizations.controller.ts` / `organizations.service.ts` | Build OK | PATCH name E2E |
+| **2.4** | Members & invitations | **✅** `members.controller.ts`, `invitations.controller.ts`, `members.service.ts` | Build OK | TC 2.4.1 invitation E2E; TC 2.4.2 roles |
+| **2.5** | Frontend org context | **✅** `apps/web/components/org-context.tsx`, `org-switcher.tsx`; `apiFetch` sends **`x-organization-id`** | **`pnpm --filter web build`** OK | TC 2.5.1 multi-org UI |
+
+**Deviation (approved for V1 onboarding):** **`POST /api/v1/organizations`** allows the **first** organization when the user has **zero** memberships; if they already belong to an org, **`OrganizationsService.assertCanCreateOrganization`** requires **ADMIN** or **OWNER** on some membership (stronger than playbook wording “ADMIN+” for returning users).
+
+**Agent correction (2026-05-15):** On **`organizationInvitation.accepted`**, **`PendingInvitation`** is deleted only after a **DB `User`** exists for the invite email **and** membership is upserted — if the user row is not present yet, the pending row stays for **`user.created`** to consume by email (prevents losing invites).
+
+### 🛑 STOP — YOUR TASKS (Phase 2 — do before approving Gate 2)
+
+Complete these in order; tell the agent **“Phase 2 human steps done”** (or list blockers). The agent will not treat Gate 2 as **CLOSED** until you approve after verification.
+
+1. Open **Clerk Dashboard** → **Webhooks** → **Add endpoint**. URL: **`https://<your-Render-api-host>/webhooks/clerk`** (must be HTTPS and reachable from the internet).
+2. Subscribe to events: **`user.created`**, **`user.updated`**, **`user.deleted`**, **`organizationInvitation.accepted`**.
+3. Copy the webhook **signing secret** → set **`CLERK_WEBHOOK_SECRET`** on your **Render** web service (Environment tab). Store the same value in **`.env.master`** / local **`.env`**; never commit secrets.
+4. Trigger a **Render deploy** (or push to the connected branch) so **`prisma migrate deploy`** runs on build — ensures migration **`20260517120000_organization_clerk_id`** is applied if not already.
+5. In **Vercel** → project → Environment variables: set **`NEXT_PUBLIC_API_URL`** to your production API origin (e.g. **`https://<service>.onrender.com`**), redeploy the frontend if needed.
+6. Optional smoke test: Clerk webhook **“Testing”** / send test event → confirm Render logs show **`POST /webhooks/clerk`** returning **2xx** (not **401 Invalid webhook signature**).
 
 ### ☐ PRE-PHASE CHECKLIST
 - [x] Gate 1 is passed.
 - [x] `.cursorrules` reviewed for authentication, webhook, and middleware conventions (agent).
-- [ ] Clerk Dashboard is open and accessible (**human** — webhook endpoint + signing secret).
+- [ ] Clerk Dashboard is open and webhook + signing secret completed (**human** — use **YOUR TASKS** above).
 
 ---
 
@@ -561,11 +584,11 @@ Create a test queue and worker in a throwaway script. Verify jobs enqueue and pr
 **Sub-task 2.1.3:** Configure webhook in Clerk Dashboard pointing to `https://your-api.render.com/webhooks/clerk`. Copy `CLERK_WEBHOOK_SECRET`.
 
 **☐ Checklist for 2.1:**
-- [ ] `webhooks.controller.ts` and `webhooks.service.ts` created.
-- [ ] Svix signature verification implemented on `POST /webhooks/clerk`.
-- [ ] All four event handlers implemented with exact logic specified.
-- [ ] Webhook URL configured in Clerk Dashboard.
-- [ ] `CLERK_WEBHOOK_SECRET` captured in `.env.master`.
+- [x] `webhooks.controller.ts` and `webhooks.service.ts` created.
+- [x] Svix signature verification implemented on `POST /webhooks/clerk`.
+- [x] All four event handlers implemented with exact logic specified (see execution-status correction for invite-accepted + pending row lifecycle).
+- [ ] Webhook URL configured in Clerk Dashboard (**human**).
+- [ ] `CLERK_WEBHOOK_SECRET` captured in `.env.master` + Render (**human**).
 
 ---
 
@@ -597,22 +620,22 @@ export class TenantMiddleware implements NestMiddleware {
 **Test Case 2.2.1: Tenant Isolation**
 
 ```bash
-# Request without x-organization-id
-curl -H "Authorization: Bearer $TOKEN" https://api/agents
+# Request without x-organization-id (path includes /api/v1 per router prefix)
+curl -H "Authorization: Bearer $TOKEN" https://<api-host>/api/v1/agents
 # Expected: 403 Forbidden
 
 # Request with invalid org ID
 curl -H "Authorization: Bearer $TOKEN" \
   -H "x-organization-id: fake_org" \
-  https://api/agents
+  https://<api-host>/api/v1/agents
 # Expected: 403 Forbidden
 ```
 
 **☐ Checklist for 2.2:**
-- [ ] `TenantMiddleware` implements full membership verification.
-- [ ] Missing `x-organization-id` returns 403.
-- [ ] Invalid `x-organization-id` returns 403.
-- [ ] Valid `x-organization-id` passes and sets `req.organizationId` and `req.userRole`.
+- [x] `TenantMiddleware` implements full membership verification.
+- [ ] Missing `x-organization-id` returns 403 (**owner:** curl TC 2.2.1).
+- [ ] Invalid `x-organization-id` returns 403 (**owner:** curl TC 2.2.1).
+- [ ] Valid `x-organization-id` passes and sets `req.organizationId` and `req.userRole` (**owner:** curl with real org + membership).
 
 ---
 
@@ -625,9 +648,9 @@ curl -H "Authorization: Bearer $TOKEN" \
 - `PATCH /api/v1/organizations/:id` (name update only for V1)
 
 **☐ Checklist for 2.3:**
-- [ ] `GET /api/v1/organizations` returns user's organizations.
-- [ ] `POST /api/v1/organizations` is restricted to ADMIN+.
-- [ ] `PATCH /api/v1/organizations/:id` updates name only.
+- [x] `GET /api/v1/organizations` returns user's organizations.
+- [x] `POST /api/v1/organizations` restricted per onboarding rule (first org allowed; further creates require ADMIN \| OWNER) — see execution-status deviation row.
+- [x] `PATCH /api/v1/organizations/:id` updates name only (plus Clerk org name sync).
 
 ---
 
@@ -656,11 +679,11 @@ curl -H "Authorization: Bearer $TOKEN" \
 - BUILDER tries → 201 Created.
 
 **☐ Checklist for 2.4:**
-- [ ] All five endpoints implemented.
-- [ ] Invitation creates `PendingInvitation` and calls Clerk API.
-- [ ] Webhook handler creates `User` and `Membership` on acceptance.
-- [ ] `PendingInvitation` is deleted after acceptance.
-- [ ] Role enforcement returns 403 for VIEWER on BUILDER+ endpoints.
+- [x] All five endpoints implemented.
+- [x] Invitation creates `PendingInvitation` and calls Clerk API.
+- [ ] Webhook + signup path creates `User` and `Membership` on acceptance (**owner:** E2E TC 2.4.1).
+- [ ] `PendingInvitation` is deleted after acceptance (**owner:** E2E TC 2.4.1).
+- [ ] Role enforcement returns 403 for VIEWER on `POST /api/v1/agents` (**owner:** TC 2.4.2).
 
 ---
 
@@ -682,9 +705,9 @@ const [activeOrg, setActiveOrg] = useLocalStorageState('awaaz_active_org', {
 4. Verify page data refreshes for Org B.
 
 **☐ Checklist for 2.5:**
-- [ ] `OrgSwitcher` uses `use-local-storage-state` with SSR safety.
-- [ ] Switching org updates `x-organization-id` header on all API calls.
-- [ ] Page data refreshes upon org switch.
+- [x] `OrgSwitcher` + `OrgProvider` use `use-local-storage-state` (`awaaz_active_org`); client-only (`'use client'`).
+- [x] Switching org updates `x-organization-id` on calls via `apiFetch(..., organizationId: activeOrgId)` (**owner:** browser DevTools Network TC 2.5.1).
+- [x] Agents dashboard refetches when `activeOrgId` changes (`useEffect` deps in `agents/page.tsx`) (**owner:** spot-check two orgs).
 
 ---
 
@@ -701,12 +724,18 @@ const [activeOrg, setActiveOrg] = useLocalStorageState('awaaz_active_org', {
 ---
 
 ### 🚦 STOP — SUCCESS GATE 2
-**DO NOT PROCEED TO PHASE 3 UNLESS ALL OF THE FOLLOWING ARE TRUE:**
-- [ ] Multi-user, multi-org auth works.
-- [ ] Invitation flow is complete end-to-end.
-- [ ] Tenant middleware blocks cross-org access (verified by curl tests).
-- [ ] Role enforcement blocks unauthorized actions.
-- [ ] `.cursorrules` conventions followed for all auth code.
+
+**Gate status:** **🔍 UNDER REVIEW** — implementation complete; awaiting **your** live verification + explicit **“approve Gate 2”** (or **REDO** with errors). **Do not start Phase 3** until approved.
+
+| Criterion | Implementation / automated | Owner sign-off |
+|-----------|---------------------------|----------------|
+| Multi-user, multi-org auth | Clerk middleware + org APIs + web org context; builds OK | [ ] |
+| Invitation flow end-to-end | Webhooks + pending invitations + Clerk API | [ ] |
+| Tenant middleware isolates tenants | Code complete | [ ] curl TC 2.2.1 |
+| Role enforcement | `RolesGuard` + `@Roles` on agents (VIEWER vs BUILDER) | [ ] TC 2.4.2 |
+| `.cursorrules` on auth code | Agent pass; strict TS / no `any` in touched webhook fix | [ ] |
+
+**Workflow:** After you complete **YOUR TASKS** and manual tests, reply with approval or list failures. On approval, agent updates Gate 2 to **CLOSED** and Phase 3 entry becomes allowed. If you report errors, affected playbook rows move to **REDO**; the agent has **three** fix attempts per error cluster before escalating with hypotheses.
 
 ---
 

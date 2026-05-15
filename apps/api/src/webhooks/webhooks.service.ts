@@ -220,22 +220,24 @@ export class WebhooksService {
       where: { email },
     });
 
-    if (user) {
-      await this.prisma.membership.upsert({
-        where: {
-          userId_organizationId: {
-            userId: user.id,
-            organizationId: org.id,
-          },
-        },
-        create: {
+    if (!user) {
+      return;
+    }
+
+    await this.prisma.membership.upsert({
+      where: {
+        userId_organizationId: {
           userId: user.id,
           organizationId: org.id,
-          role,
         },
-        update: { role },
-      });
-    }
+      },
+      create: {
+        userId: user.id,
+        organizationId: org.id,
+        role,
+      },
+      update: { role },
+    });
 
     if (pending) {
       await this.prisma.pendingInvitation.delete({
