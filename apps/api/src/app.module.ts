@@ -52,20 +52,16 @@ export class AppModule implements NestModule {
       AgentsController,
     );
 
-    consumer
-      .apply(TenantMiddleware)
-      .exclude(
-        { path: 'health', method: RequestMethod.GET },
-        { path: 'webhooks/clerk', method: RequestMethod.POST },
-        {
-          path: 'api/v1/organizations',
-          method: RequestMethod.GET,
-        },
-        {
-          path: 'api/v1/organizations',
-          method: RequestMethod.POST,
-        },
-      )
-      .forRoutes('*');
+    // Tenant header required only on org-scoped routes — same `forRoutes('*')` + exclude
+    // pattern can still hit webhooks → 403 Missing organization.
+    consumer.apply(TenantMiddleware).forRoutes(
+      {
+        path: 'api/v1/organizations/:id',
+        method: RequestMethod.PATCH,
+      },
+      MembersController,
+      InvitationsController,
+      AgentsController,
+    );
   }
 }
