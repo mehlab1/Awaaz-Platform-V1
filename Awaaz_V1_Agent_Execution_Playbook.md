@@ -953,25 +953,28 @@ curl -H "x-worker-secret: $WORKER_SECRET" https://api/internal/agents/123/config
 
 ---
 
-### 3.9 Render Background Worker Deployment
+### 3.9 Local Background Worker Verification
 
-**Agent Instruction:** Create Background Worker on Render.
+**Current decision (2026-05-17):** Do **not** create a paid Render Background Worker for the current Phase 3 pass. Run the Python worker locally and verify it connects to LiveKit. Cloud worker deployment is deferred until payment/hosting is approved.
 
-- **Build:** `cd apps/agent-worker && pip install -r requirements.txt`
-- **Start:** `cd apps/agent-worker && python main.py start`
-- Add env vars from Section 15.3.
+- **Local setup:** activate `apps/agent-worker/venv`
+- **Start:** `python main.py start`
+- Add env vars locally from Section 15.3 / `.env.master`.
+
+**Implementation note (2026-05-17):** Render paid worker deployment was intentionally removed from `render.yaml`. The API remains deployed on Render; the Python worker runs from the local machine and connects outbound to LiveKit, Render API, Deepgram, Groq, and Rime.
 
 **Test Case 3.9.1: Worker Registration**
 
-1. Deploy worker.
+1. Start the worker locally.
 2. Check LiveKit Cloud dashboard → Agents → verify worker shows as "Connected".
-3. Check Render logs → verify no import errors.
+3. Check local terminal logs → verify no import errors.
 
 **☐ Checklist for 3.9:**
-- [ ] Render Background Worker created with exact build/start commands.
-- [ ] Environment variables from Section 15.3 configured.
+- [ ] Paid Render Background Worker deferred.
+- [ ] Local worker started with `python main.py start`.
+- [ ] Environment variables from Section 15.3 configured locally.
 - [ ] LiveKit dashboard shows worker as "Connected".
-- [ ] Render logs show no import errors.
+- [ ] Local terminal logs show no import errors.
 
 ---
 
