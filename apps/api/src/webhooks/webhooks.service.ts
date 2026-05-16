@@ -224,6 +224,18 @@ export class WebhooksService {
       return;
     }
 
+    const existingMembership = await this.prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: user.id,
+          organizationId: org.id,
+        },
+      },
+      select: { role: true },
+    });
+
+    const finalRole = pending?.role ?? existingMembership?.role ?? role;
+
     await this.prisma.membership.upsert({
       where: {
         userId_organizationId: {
@@ -234,9 +246,9 @@ export class WebhooksService {
       create: {
         userId: user.id,
         organizationId: org.id,
-        role,
+        role: finalRole,
       },
-      update: { role },
+      update: { role: finalRole },
     });
 
     if (pending) {
