@@ -251,10 +251,11 @@ export class WebhooksService {
       update: { role: finalRole },
     });
 
-    if (pending) {
-      await this.prisma.pendingInvitation.delete({
-        where: { id: pending.id },
-      });
-    }
+    await this.prisma.pendingInvitation.deleteMany({
+      where: {
+        organizationId: org.id,
+        email,
+      },
+    });
   }
 }
