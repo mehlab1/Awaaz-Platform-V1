@@ -121,23 +121,20 @@ export class WebhooksService {
       return;
     }
     const chosen = pendings[0];
-    await this.prisma.$transaction([
-      this.prisma.membership.upsert({
-        where: {
-          userId_organizationId: {
-            userId: clerkUserId,
-            organizationId: chosen.organizationId,
-          },
-        },
-        create: {
+    await this.prisma.membership.upsert({
+      where: {
+        userId_organizationId: {
           userId: clerkUserId,
           organizationId: chosen.organizationId,
-          role: chosen.role,
         },
-        update: { role: chosen.role },
-      }),
-      this.prisma.pendingInvitation.delete({ where: { id: chosen.id } }),
-    ]);
+      },
+      create: {
+        userId: clerkUserId,
+        organizationId: chosen.organizationId,
+        role: chosen.role,
+      },
+      update: { role: chosen.role },
+    });
   }
 
   private async onUserCreated(data: UserJSON): Promise<void> {
