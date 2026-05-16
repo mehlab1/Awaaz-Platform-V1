@@ -1,0 +1,31 @@
+Phase 3.1.1 ChunkedStream reference
+Source inspected from livekit-agents==0.8.11.
+
+class ChunkedStream(ABC):
+    """Used by the non-streamed synthesize API, some providers support chunked http responses"""
+
+    def __init__(self):
+        self._event_ch = aio.Chan[SynthesizedAudio]()
+        self._task = asyncio.create_task(self._main_task())
+        self._task.add_done_callback(lambda _: self._event_ch.close())
+
+    async def collect(self) -> rtc.AudioFrame:
+        """Utility method to collect every frame in a single call"""
+        frames = []
+        async for ev in self:
+            frames.append(ev.frame)
+        return misc.merge_frames(frames)
+
+    @abstractmethod
+    async def _main_task(self) -> None: ...
+
+    async def aclose(self) -> None:
+        """Close is automatically called if the stream is completely collected"""
+        await aio.gracefully_cancel(self._task)
+        self._event_ch.close()
+
+    async def __anext__(self) -> SynthesizedAudio:
+        return await self._event_ch.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[SynthesizedAudio]:
+        return self

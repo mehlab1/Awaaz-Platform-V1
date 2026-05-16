@@ -537,7 +537,9 @@ Create a test queue and worker in a throwaway script. Verify jobs enqueue and pr
 
 ### Phase 2 — execution status (agent-maintained)
 
-**Overall Phase 2 status:** **🔍 UNDER REVIEW** — agent pass **2026-05-15**. Backend + frontend Phase 2 code paths are implemented and **`pnpm --filter @awaaz/api build`** + **`pnpm --filter web build`** succeeded locally. **Phase 3 is blocked** until you approve Gate 2 (or mark tasks **REDO** with errors).
+**Overall Phase 2 status:** **CLOSED WITH DEFERRED FOLLOW-UP — 2026-05-17.** Backend + frontend Phase 2 core paths are implemented and live-verified enough to proceed to Phase 3. One item remains deferred: invited BUILDER role preservation can still resolve as VIEWER and must be fixed before production/demo hardening.
+
+**Current owner decision (2026-05-17):** Treat core Gate 2 as closed for Phase 3 entry, with one explicit deferred follow-up: invited BUILDER role preservation can still resolve as VIEWER because Clerk sends generic `org:member`. Fix this at the end before production/demo hardening. Until fixed, manually set invited test users to the required role in Supabase for Phase 3 testing.
 
 | Ref | Task | Implementation | Automated verification | Owner / live verification |
 |-----|------|----------------|------------------------|---------------------------|
@@ -568,6 +570,12 @@ Complete these in order; tell the agent **“Phase 2 human steps done”** (or l
 - [ ] Clerk Dashboard is open and webhook + signing secret completed (**human** — use **YOUR TASKS** above).
 
 ---
+
+### Phase 2 Deferred Follow-Up
+
+**Status:** Core Gate 2 is closed for Phase 3 entry as of 2026-05-17. The only deferred item is invited-role preservation: a Clerk accepted invitation can emit generic `org:member`, so an invited BUILDER may land as VIEWER in Supabase. Until final hardening, correct invited test-user roles manually in Supabase when needed.
+
+**Must fix before production/demo:** invited BUILDER must remain `BUILDER` in `memberships`, and the accepted invite must be removed from `pending_invitations`.
 
 ### 2.1 Clerk Webhook Endpoint
 
@@ -727,6 +735,8 @@ const [activeOrg, setActiveOrg] = useLocalStorageState('awaaz_active_org', {
 
 **Gate status:** **🔍 UNDER REVIEW** — implementation complete; awaiting **your** live verification + explicit **“approve Gate 2”** (or **REDO** with errors). **Do not start Phase 3** until approved.
 
+**2026-05-17 override:** Gate 2 is closed with the invited BUILDER role-sync issue explicitly deferred. Phase 3 may begin; do not treat the deferred invite-role bug as blocking voice-pipeline work.
+
 | Criterion | Implementation / automated | Owner sign-off |
 |-----------|---------------------------|----------------|
 | Multi-user, multi-org auth | Clerk middleware + org APIs + web org context; builds OK | [ ] |
@@ -739,15 +749,19 @@ const [activeOrg, setActiveOrg] = useLocalStorageState('awaaz_active_org', {
 
 ---
 
+### Gate 2 Closure Note — 2026-05-17
+
+Gate 2 is accepted as **closed with one deferred follow-up**. Verified items: organization creation, frontend organization display, Clerk auth, tenant isolation, valid-org agent listing, OWNER/BUILDER role enforcement for agent creation, org context request headers, and pending-invitation cleanup. Deferred item: invited BUILDER role sync can still land as VIEWER; use Supabase manual role correction for Phase 3 testing and fix the webhook role-preservation path before production/demo hardening.
+
 ## Phase 3: Voice Pipeline Core (Day 2)
 
-**Objective:** Python agent worker connects to LiveKit, handles a real phone call, speaks with Deepgram→Groq→Rime pipeline.
+**Objective:** Python agent worker connects to LiveKit and validates the Deepgram→Groq→Rime voice pipeline. **Twilio/SIP phone-call integration is deferred for now** due to timeline/complexity; do not treat Twilio setup as a Phase 3 blocker.
 
 ### ☐ PRE-PHASE CHECKLIST
 - [ ] Gate 2 is passed.
 - [ ] `.cursorrules` reviewed for Python and LiveKit conventions.
-- [ ] LiveKit Cloud SIP is enabled.
-- [ ] Twilio SIP trunk access verified.
+- [ ] LiveKit Cloud project credentials are available.
+- [ ] Twilio/SIP trunk setup is deferred for now and not required to begin Phase 3.
 
 ---
 
@@ -781,10 +795,10 @@ python -c "import inspect; from livekit.agents import tts; print(inspect.getsour
 ```
 
 **☐ Checklist for 3.1:**
-- [ ] Virtual environment created with Python 3.11.
-- [ ] `requirements.txt` matches exact versions.
-- [ ] All packages install without errors.
-- [ ] `ChunkedStream` source code is inspected and saved for reference.
+- [x] Virtual environment created with Python 3.11.
+- [x] `requirements.txt` matches exact versions.
+- [x] All packages install without errors.
+- [x] `ChunkedStream` source code is inspected and saved for reference (`apps/agent-worker/chunked-stream-reference.txt`).
 
 ---
 
@@ -799,12 +813,14 @@ python -c "import inspect; from livekit.agents import tts; print(inspect.getsour
 3. Test with correct secret → expect 200.
 4. Temporarily stop API → expect retries then failure.
 
+**Implementation note (2026-05-17):** `api_client.py` is implemented and smoke-tested against a local stub server because the NestJS internal endpoints are scheduled in §3.7. Final live NestJS verification will be repeated after §3.7 is implemented.
+
 **☐ Checklist for 3.2:**
-- [ ] `api_client.py` implements `AwaazAPIClient`.
-- [ ] Retry logic: 3 attempts, exponential backoff.
-- [ ] Wrong secret returns 401.
-- [ ] Correct secret returns 200.
-- [ ] API downtime triggers retries then graceful failure.
+- [x] `api_client.py` implements `AwaazAPIClient`.
+- [x] Retry logic: 3 attempts, exponential backoff.
+- [x] Wrong secret returns 401 (local stub smoke).
+- [x] Correct secret returns 200 (local stub smoke).
+- [x] API downtime triggers retries then graceful failure (local stub smoke).
 
 ---
 
@@ -824,10 +840,12 @@ stream = tts.synthesize("Hello, this is a test.")
 # Verify PCM audio output at 16kHz mono
 ```
 
+**Implementation note (2026-05-17):** `RimeTTS` and `RimeStream` are implemented and verified with a local PCM streaming stub: `collect()` returns a LiveKit `AudioFrame` at 16kHz mono. Owner live Rime test also passed: sample rate **16000**, channels **1**, samples **23219**.
+
 **☐ Checklist for 3.3:**
-- [ ] `RimeTTS` class created in `pipeline/tts.py`.
-- [ ] `RimeStream` extends `tts.ChunkedStream` exactly per inspected interface.
-- [ ] Standalone test produces valid PCM audio at 16kHz mono.
+- [x] `RimeTTS` class created in `pipeline/tts.py`.
+- [x] `RimeStream` extends `tts.ChunkedStream` exactly per inspected interface.
+- [x] Standalone local stub test produces valid PCM audio at 16kHz mono.
 
 ---
 
@@ -843,10 +861,10 @@ Key implementation details:
 **Sub-task 3.4.1:** Implement `tools/end_call.py` and `tools/transfer_to_human.py` per spec Section 8.6.
 
 **☐ Checklist for 3.4:**
-- [ ] `agent.py` implements `AwaazAgent` with exact pipeline components.
-- [ ] `end_call` tool registered and functional.
-- [ ] `transfer_to_human` tool registered and functional.
-- [ ] Events emitted on speech committed.
+- [x] `agent.py` implements `AwaazAgent` with the pinned LiveKit 0.8.11 equivalent pipeline components (`VoiceAssistant`; `VoicePipelineAgent`/`turn_detector.EOUModel()` are not available in 0.8.11).
+- [x] `end_call` tool registered and functional.
+- [x] `transfer_to_human` tool registered as deferred/non-Twilio for current Phase 3 pass.
+- [x] Events emitted on speech committed.
 
 ---
 
@@ -861,8 +879,8 @@ cli.run_app(WorkerOptions(entrypoint_fnc=AwaazAgent.entrypoint, worker_type=Work
 ```
 
 **☐ Checklist for 3.5:**
-- [ ] `main.py` matches exact code above.
-- [ ] Worker type is `WorkerType.ROOM`.
+- [x] `main.py` matches exact code above.
+- [x] Worker type is `WorkerType.ROOM`.
 
 ---
 
@@ -871,9 +889,9 @@ cli.run_app(WorkerOptions(entrypoint_fnc=AwaazAgent.entrypoint, worker_type=Work
 **Agent Instruction:** FastAPI on port 8080 per spec Section 16.1.
 
 **☐ Checklist for 3.6:**
-- [ ] `health_server.py` created with FastAPI.
-- [ ] Runs on port 8080.
-- [ ] Health endpoint responds with 200.
+- [x] `health_server.py` created with FastAPI.
+- [x] Runs on port 8080.
+- [x] Health endpoint responds with 200.
 
 ---
 
@@ -885,7 +903,7 @@ cli.run_app(WorkerOptions(entrypoint_fnc=AwaazAgent.entrypoint, worker_type=Work
 - `POST /internal/calls/start`
 - `POST /internal/calls/:id/end`
 - `POST /internal/calls/:id/events`
-- `POST /internal/worker/heartbeat`
+- `GET /internal/worker/heartbeat`
 
 **Test Case 3.7.1: Internal Endpoint Security**
 
@@ -901,14 +919,18 @@ curl -H "x-worker-secret: $WORKER_SECRET" https://api/internal/agents/123/config
 ```
 
 **☐ Checklist for 3.7:**
-- [ ] All five internal endpoints implemented.
-- [ ] `GET /internal/agents/:id/config` requires `x-worker-secret`.
-- [ ] Missing or wrong secret returns 401/403.
-- [ ] Correct secret returns 200/404.
+- [x] All five internal endpoints implemented.
+- [x] `GET /internal/agents/:id/config` requires `x-worker-secret`.
+- [x] Missing or wrong secret returns 401/403.
+- [x] Correct secret returns 200/404.
+
+**Verification note (2026-05-17):** Local NestJS build and route smoke passed. Missing `x-worker-secret` returned `401`, wrong secret returned `403`, correct secret reached handler and returned `404` for a fake agent ID. All five internal routes were smoke-tested with the correct worker secret; fake call/agent IDs returned `404` and `/internal/worker/heartbeat` returned `{ ok: true, timestamp: ... }`.
 
 ---
 
-### 3.8 LiveKit SIP + Twilio Bridge
+### 3.8 LiveKit SIP + Twilio Bridge — DEFERRED
+
+**Current decision (2026-05-17):** Do **not** integrate Twilio/SIP in the current Phase 3 pass. This section is deferred until after the core worker and voice pipeline are stable.
 
 **Sub-task 3.8.1:** In LiveKit Cloud dashboard → SIP → copy SIP URI.
 
@@ -923,11 +945,11 @@ curl -H "x-worker-secret: $WORKER_SECRET" https://api/internal/agents/123/config
 **Sub-task 3.8.4:** Create SIP Dispatch Rule for the seed phone number (see 4.5 after seeding).
 
 **☐ Checklist for 3.8:**
-- [ ] LiveKit SIP URI copied.
-- [ ] Twilio Elastic SIP Trunk "awaaz-livekit" created.
-- [ ] Origination URI set to LiveKit SIP URI.
-- [ ] Recording enabled with status callback URL.
-- [ ] Twilio number assigned to SIP Trunk.
+- [ ] Deferred — LiveKit SIP URI copied.
+- [ ] Deferred — Twilio Elastic SIP Trunk "awaaz-livekit" created.
+- [ ] Deferred — Origination URI set to LiveKit SIP URI.
+- [ ] Deferred — Recording enabled with status callback URL.
+- [ ] Deferred — Twilio number assigned to SIP Trunk.
 
 ---
 
@@ -953,35 +975,34 @@ curl -H "x-worker-secret: $WORKER_SECRET" https://api/internal/agents/123/config
 
 ---
 
-### 3.10 First Voice Call Test
+### 3.10 First Voice Pipeline Test — NON-TWILIO
 
-**This is the make-or-break test for Phase 3.**
+**This replaces the Twilio phone-call test for the current Phase 3 pass.** The goal is to prove the worker starts, connects to LiveKit, loads the voice pipeline, and does not crash. A real Twilio inbound call is deferred.
 
 **Preconditions:**
 - NestJS API deployed and healthy.
 - Python worker deployed and connected to LiveKit.
-- Twilio SIP trunk configured.
+- Twilio SIP trunk configured. **Deferred for current Phase 3 pass.**
 - Sirius Agent exists in DB (seeded in Phase 4, or manually inserted).
 
 **Test Steps:**
-1. Dial the Twilio phone number from your mobile.
-2. Expected: Call connects. You hear "Hello! How can I help you today?"
-3. Say "What is Finova Solutions?"
-4. Expected: Agent responds with relevant answer (from system prompt) within 2 seconds.
-5. Say "Goodbye" or wait for natural end.
-6. Expected: Call ends gracefully.
+1. Start the Python worker locally or on Render.
+2. Verify LiveKit dashboard shows the worker connected.
+3. Trigger or join a LiveKit room using the worker path available at this stage.
+4. Verify the worker loads Deepgram, Groq, Rime, and Silero configuration without import/runtime errors.
+5. Verify Render/local logs show no worker crash and no API 500s.
 
 **Success Criteria:**
-- [ ] Audio flows both ways clearly.
-- [ ] Latency feels natural (sub-2-second response).
+- [ ] Worker starts and stays connected.
+- [ ] Voice pipeline dependencies load without import/runtime errors.
 - [ ] No crashes in Render worker logs.
 - [ ] No 500 errors in NestJS logs.
 
 **☐ Checklist for 3.10:**
-- [ ] Called Twilio number from mobile.
-- [ ] Heard agent greeting.
-- [ ] Agent responded to query within 2 seconds.
-- [ ] Call ended gracefully.
+- [ ] Worker started locally or on Render.
+- [ ] LiveKit dashboard shows worker connected.
+- [ ] Pipeline configuration loads without crashes.
+- [ ] Twilio phone call test explicitly deferred.
 - [ ] No errors in Render or NestJS logs.
 
 ---
@@ -992,19 +1013,19 @@ curl -H "x-worker-secret: $WORKER_SECRET" https://api/internal/agents/123/config
 |---|---|---|
 | Worker not connecting to LiveKit | Wrong `LIVEKIT_URL` protocol | Must be `wss://`. Check `.env`. Verify URL in LiveKit dashboard. |
 | `ImportError` on deploy | Version mismatch in `requirements.txt` | Do not upgrade versions. Use exact versions listed. Check Render Python version is 3.11. |
-| No audio on call | Twilio SIP trunk origination URI wrong | Verify URI matches LiveKit SIP URI exactly. Check for trailing slashes. |
+| No audio on call | Twilio/SIP deferred or SIP trunk origination URI wrong | For current Phase 3, do not debug Twilio. When re-enabled later, verify URI matches LiveKit SIP URI exactly. |
 | Agent responds but no voice | Rime TTS misconfigured | Verify `RIME_API_KEY`. Check `ChunkedStream` implementation against inspected source. |
 | High latency (>2s) | Groq rate limiting or region | Verify Groq API key. Check Groq dashboard for rate limits. |
-| Call connects but immediate hangup | Dispatch rule missing or wrong | Verify SIP Dispatch Rule exists and points to correct room prefix. |
+| Call connects but immediate hangup | Twilio/SIP deferred or dispatch rule missing/wrong | For current Phase 3, do not debug Twilio. When re-enabled later, verify SIP Dispatch Rule exists and points to correct room prefix. |
 | `x-worker-secret` 403 | Secret mismatch between worker and API | Verify `WORKER_SECRET` is identical in Render env vars for both API and worker. |
 
 ---
 
 ### 🚦 STOP — SUCCESS GATE 3
 **DO NOT PROCEED TO PHASE 4 UNLESS ALL OF THE FOLLOWING ARE TRUE:**
-- [ ] A real phone call reaches the agent and speaks back.
-- [ ] Audio is clear both ways.
-- [ ] Response latency is sub-2-second.
+- [ ] Python worker starts and connects to LiveKit.
+- [ ] Core voice pipeline dependencies load without runtime/import errors.
+- [ ] Twilio/SIP real phone call is explicitly deferred.
 - [ ] Worker shows "Connected" in LiveKit dashboard.
 - [ ] Internal endpoints are secured by `x-worker-secret`.
 - [ ] `.cursorrules` conventions followed for Python and NestJS code.

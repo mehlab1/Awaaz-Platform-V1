@@ -14,6 +14,7 @@ import { AppController } from './app.controller';
 import { ClerkAuthMiddleware } from './auth/clerk-auth.middleware';
 import { RolesGuard } from './common/roles.guard';
 import { TenantMiddleware } from './common/tenant.middleware';
+import { InternalModule } from './internal/internal.module';
 import { InvitationsController } from './organizations/invitations.controller';
 import { MembersController } from './organizations/members.controller';
 import { OrganizationsController } from './organizations/organizations.controller';
@@ -34,6 +35,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     WebhooksModule,
     OrganizationsModule,
     AgentsModule,
+    InternalModule,
   ],
   controllers: [AppController],
   providers: [

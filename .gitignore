@@ -1,5 +1,11 @@
 # Dependencies
 node_modules/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+apps/agent-worker/test_rime.py
+apps/agent-worker/rime-test.wav
 
 # Secrets and env master (never commit)
 .env
