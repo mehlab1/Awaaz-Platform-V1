@@ -17,7 +17,6 @@ import type {
 import { Role } from '@prisma/client';
 import { Webhook } from 'svix';
 
-import { mapClerkMembershipRoleToDbRole } from '../clerk/clerk-invite-role';
 import {
   normalizeEmail,
   primaryEmailFromUserJson,
@@ -105,8 +104,17 @@ export class WebhooksService {
   }
 
   private roleFromClerkWhenSpecific(clerkRole: string): Role | null {
-    const role = mapClerkMembershipRoleToDbRole(clerkRole);
-    return role === Role.VIEWER && clerkRole === 'org:member' ? null : role;
+    return clerkRole === 'org:admin' ? Role.ADMIN : null;
+  }
+
+  private strongerRole(left: Role, right: Role): Role {
+    const order: Record<Role, number> = {
+      [Role.VIEWER]: 0,
+      [Role.BUILDER]: 1,
+      [Role.ADMIN]: 2,
+      [Role.OWNER]: 3,
+    };
+    return order[left] >= order[right] ? left : right;
   }
 
   private async consumePendingInvitesForNewUser(
@@ -121,8 +129,21 @@ export class WebhooksService {
       return;
     }
     const chosen = pendings[0];
-    await this.prisma.$transaction([
-      this.prisma.membership.upsert({
+    await this.prisma.$transaction(async (tx) => {
+      const existingMembership = await tx.membership.findUnique({
+        where: {
+          userId_organizationId: {
+            userId: clerkUserId,
+            organizationId: chosen.organizationId,
+          },
+        },
+        select: { role: true },
+      });
+      const finalRole = existingMembership
+        ? this.strongerRole(existingMembership.role, chosen.role)
+        : chosen.role;
+
+      await tx.membership.upsert({
         where: {
           userId_organizationId: {
             userId: clerkUserId,
@@ -132,12 +153,17 @@ export class WebhooksService {
         create: {
           userId: clerkUserId,
           organizationId: chosen.organizationId,
-          role: chosen.role,
+          role: finalRole,
         },
-        update: { role: chosen.role },
-      }),
-      this.prisma.pendingInvitation.delete({ where: { id: chosen.id } }),
-    ]);
+        update: { role: finalRole },
+      });
+      await tx.pendingInvitation.deleteMany({
+        where: {
+          organizationId: chosen.organizationId,
+          email: emailNormalized,
+        },
+      });
+    });
   }
 
   private async onUserCreated(data: UserJSON): Promise<void> {
@@ -241,10 +267,12 @@ export class WebhooksService {
       select: { role: true },
     });
 
+    const eventRole =
+      pending?.role ?? this.roleFromClerkWhenSpecific(String(data.role ?? ''));
     const finalRole =
-      pending?.role ??
-      existingMembership?.role ??
-      this.roleFromClerkWhenSpecific(String(data.role));
+      existingMembership && eventRole
+        ? this.strongerRole(existingMembership.role, eventRole)
+        : existingMembership?.role ?? eventRole;
 
     if (!finalRole) {
       this.logger.warn(
@@ -306,10 +334,12 @@ export class WebhooksService {
       select: { role: true },
     });
 
+    const eventRole =
+      pending?.role ?? this.roleFromClerkWhenSpecific(String(data.role));
     const finalRole =
-      pending?.role ??
-      existingMembership?.role ??
-      this.roleFromClerkWhenSpecific(String(data.role));
+      existingMembership && eventRole
+        ? this.strongerRole(existingMembership.role, eventRole)
+        : existingMembership?.role ?? eventRole;
 
     if (!finalRole) {
       this.logger.warn(
