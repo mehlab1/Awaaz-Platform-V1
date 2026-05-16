@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import type {
   DeletedObjectJSON,
   OrganizationInvitationJSON,
+  OrganizationMembershipJSON,
   UserJSON,
   WebhookEvent,
 } from '@clerk/backend';
@@ -94,9 +95,18 @@ export class WebhooksService {
       case 'organizationInvitation.accepted':
         await this.onOrganizationInvitationAccepted(evt.data);
         return;
+      case 'organizationMembership.created':
+      case 'organizationMembership.updated':
+        await this.onOrganizationMembershipUpserted(evt.data);
+        return;
       default:
         return;
     }
+  }
+
+  private roleFromClerkWhenSpecific(clerkRole: string): Role | null {
+    const role = mapClerkMembershipRoleToDbRole(clerkRole);
+    return role === Role.VIEWER && clerkRole === 'org:member' ? null : role;
   }
 
   private async consumePendingInvitesForNewUser(
@@ -213,9 +223,6 @@ export class WebhooksService {
       },
     });
 
-    const role: Role =
-      pending?.role ?? mapClerkMembershipRoleToDbRole(String(data.role));
-
     const user = await this.prisma.user.findFirst({
       where: { email },
     });
@@ -234,7 +241,17 @@ export class WebhooksService {
       select: { role: true },
     });
 
-    const finalRole = pending?.role ?? existingMembership?.role ?? role;
+    const finalRole =
+      pending?.role ??
+      existingMembership?.role ??
+      this.roleFromClerkWhenSpecific(String(data.role));
+
+    if (!finalRole) {
+      this.logger.warn(
+        `No DB role source for accepted invitation ${data.id}; leaving membership unchanged`,
+      );
+      return;
+    }
 
     await this.prisma.membership.upsert({
       where: {
@@ -245,6 +262,88 @@ export class WebhooksService {
       },
       create: {
         userId: user.id,
+        organizationId: org.id,
+        role: finalRole,
+      },
+      update: { role: finalRole },
+    });
+
+    await this.prisma.pendingInvitation.deleteMany({
+      where: {
+        organizationId: org.id,
+        email,
+      },
+    });
+  }
+
+  private async onOrganizationMembershipUpserted(
+    data: OrganizationMembershipJSON,
+  ): Promise<void> {
+    const email = normalizeEmail(data.public_user_data.identifier);
+    const org = await this.prisma.organization.findUnique({
+      where: { clerkOrganizationId: data.organization.id },
+    });
+    if (!org) {
+      this.logger.warn(
+        `No DB organization for Clerk org ${data.organization.id}`,
+      );
+      return;
+    }
+
+    const pending = await this.prisma.pendingInvitation.findUnique({
+      where: {
+        organizationId_email: { organizationId: org.id, email },
+      },
+    });
+
+    const existingMembership = await this.prisma.membership.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: data.public_user_data.user_id,
+          organizationId: org.id,
+        },
+      },
+      select: { role: true },
+    });
+
+    const finalRole =
+      pending?.role ??
+      existingMembership?.role ??
+      this.roleFromClerkWhenSpecific(String(data.role));
+
+    if (!finalRole) {
+      this.logger.warn(
+        `No DB role source for Clerk membership ${data.id}; skipping membership sync`,
+      );
+      return;
+    }
+
+    await this.prisma.user.upsert({
+      where: { id: data.public_user_data.user_id },
+      create: {
+        id: data.public_user_data.user_id,
+        email,
+        firstName: data.public_user_data.first_name,
+        lastName: data.public_user_data.last_name,
+        imageUrl: data.public_user_data.image_url,
+      },
+      update: {
+        email,
+        firstName: data.public_user_data.first_name,
+        lastName: data.public_user_data.last_name,
+        imageUrl: data.public_user_data.image_url,
+      },
+    });
+
+    await this.prisma.membership.upsert({
+      where: {
+        userId_organizationId: {
+          userId: data.public_user_data.user_id,
+          organizationId: org.id,
+        },
+      },
+      create: {
+        userId: data.public_user_data.user_id,
         organizationId: org.id,
         role: finalRole,
       },
