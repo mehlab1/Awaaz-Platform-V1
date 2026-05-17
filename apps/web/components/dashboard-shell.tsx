@@ -4,6 +4,7 @@ import Link from 'next/link';
 
 import { OrgProvider } from '@/components/org-context';
 import { OrgSwitcher } from '@/components/org-switcher';
+import { Badge } from '@/components/ui/badge';
 
 export function DashboardShell({
   children,
@@ -20,6 +21,13 @@ export function DashboardShell({
           <nav className="flex flex-col gap-2 text-sm text-muted-foreground">
             <Link href="/agents" className="text-foreground hover:underline">
               Agents
+            </Link>
+            <Link
+              href="/qualicall"
+              className="flex items-center gap-2 text-foreground hover:underline"
+            >
+              Qualicall
+              <Badge variant="secondary">Soon</Badge>
             </Link>
           </nav>
           <div className="mt-auto">

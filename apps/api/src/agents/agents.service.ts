@@ -14,10 +14,12 @@ import type { PatchAgentDto } from './dto/patch-agent.dto';
 export class AgentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(organizationId: string) {
-    return this.prisma.agent.findMany({
+  async list(organizationId: string) {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const rows = await this.prisma.agent.findMany({
       where: { organizationId, deletedAt: null },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { updatedAt: 'desc' },
       select: {
         id: true,
         name: true,
@@ -26,15 +28,51 @@ export class AgentsService {
         currentVersionId: true,
         createdAt: true,
         updatedAt: true,
+        phoneNumbers: {
+          select: { number: true },
+          orderBy: { createdAt: 'asc' },
+        },
         currentVersion: {
           select: {
             id: true,
+            voiceId: true,
             versionNumber: true,
             isLive: true,
             publishedAt: true,
           },
         },
       },
+    });
+
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const agentIds = rows.map((row) => row.id);
+    const grouped = await this.prisma.call.groupBy({
+      by: ['agentId'],
+      where: {
+        organizationId,
+        agentId: { in: agentIds },
+        createdAt: { gte: sevenDaysAgo },
+      },
+      _count: { _all: true },
+    });
+
+    const countByAgent = new Map<string, number>();
+    for (const g of grouped) {
+      if (g.agentId) {
+        countByAgent.set(g.agentId, g._count._all);
+      }
+    }
+
+    return rows.map((agent) => {
+      const { phoneNumbers, ...rest } = agent;
+      return {
+        ...rest,
+        assignedPhoneNumbers: phoneNumbers.map((pn) => pn.number),
+        callsLast7Days: countByAgent.get(agent.id) ?? 0,
+      };
     });
   }
 
