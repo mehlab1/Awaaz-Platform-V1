@@ -43,7 +43,9 @@ class AwaazAgent:
 
         api = AwaazAPIClient()
         config = await api.get_agent_config(agent_id)
-        call = await api.start_call(start_call_payload(ctx, config, room_metadata))
+        call = await api.start_call(
+            await start_call_payload(ctx, config, room_metadata),
+        )
         call_id = string_value(call, "id")
 
         rime = RimeTTS(voice_id=required_string(config, "voiceId", "mist-default"))
@@ -93,8 +95,13 @@ def register_events(
         logger.warning("Call ID missing; speech events will not be emitted")
         return
 
+    def on_emit_done(task: asyncio.Task[None]) -> None:
+        error = task.exception()
+        if error is not None:
+            logger.warning("Failed to emit speech event", exc_info=error)
+
     def emit(event_type: str, message: llm.ChatMessage) -> None:
-        asyncio.create_task(
+        task = asyncio.create_task(
             api.emit_event(
                 call_id,
                 {
@@ -103,18 +110,19 @@ def register_events(
                 },
             ),
         )
+        task.add_done_callback(on_emit_done)
 
     assistant.on("user_speech_committed", lambda msg: emit("USER_SPEECH", msg))
     assistant.on("agent_speech_committed", lambda msg: emit("AGENT_SPEECH", msg))
 
 
-def start_call_payload(
+async def start_call_payload(
     ctx: JobContext,
     config: Mapping[str, object],
     room_metadata: Mapping[str, object],
 ) -> dict[str, object]:
     return {
-        "liveKitRoomId": ctx.room.sid or ctx.room.name,
+        "liveKitRoomId": await ctx.room.sid,
         "agentId": string_value(config, "agentId"),
         "organizationId": string_value(config, "organizationId"),
         "direction": string_value(room_metadata, "direction", "INBOUND"),

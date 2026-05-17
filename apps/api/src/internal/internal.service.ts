@@ -1,18 +1,28 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   CallStatus,
   EventType,
   Prisma,
 } from '@prisma/client';
+import type { Queue } from 'bullmq';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
+import type { TranscriptJobData } from '../queues/transcript.processor';
 import type { CallEventDto } from './dto/call-event.dto';
 import type { EndCallDto } from './dto/end-call.dto';
 import type { StartCallDto } from './dto/start-call.dto';
 
 @Injectable()
 export class InternalService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(InternalService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @InjectQueue(TRANSCRIPT_QUEUE)
+    private readonly transcriptQueue: Queue<TranscriptJobData>,
+  ) {}
 
   async getAgentConfig(agentId: string) {
     const agent = await this.prisma.agent.findFirst({
@@ -78,7 +88,7 @@ export class InternalService {
   async endCall(callId: string, dto: EndCallDto): Promise<{ ok: true }> {
     const call = await this.prisma.call.findUnique({
       where: { id: callId },
-      select: { startedAt: true },
+      select: { startedAt: true, liveKitRoomId: true },
     });
     if (!call) {
       throw new NotFoundException('Call not found');
@@ -94,6 +104,7 @@ export class InternalService {
         metadata: this.toJson(dto.metadata),
       },
     });
+    await this.enqueueTranscriptJob(callId, call.liveKitRoomId);
     return { ok: true };
   }
 
@@ -139,6 +150,27 @@ export class InternalService {
       return undefined;
     }
     return Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000));
+  }
+
+  private async enqueueTranscriptJob(
+    callId: string,
+    liveKitRoomId: string | null,
+  ): Promise<void> {
+    try {
+      await this.transcriptQueue.add(
+        'call_ended',
+        { callId, liveKitRoomId: liveKitRoomId ?? undefined },
+        {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1_000 },
+          removeOnComplete: true,
+          removeOnFail: 50,
+        },
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to enqueue transcript job for ${callId}: ${message}`);
+    }
   }
 
   private toJson(value: Record<string, unknown> | undefined): Prisma.InputJsonValue | undefined {
