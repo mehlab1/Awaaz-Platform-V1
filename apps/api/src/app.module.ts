@@ -10,6 +10,10 @@ import { APP_GUARD } from '@nestjs/core';
 
 import { AgentsController } from './agents/agents.controller';
 import { AgentsModule } from './agents/agents.module';
+import { AnalyticsController } from './analytics/analytics.controller';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { ApiKeysController } from './api-keys/api-keys.controller';
+import { ApiKeysModule } from './api-keys/api-keys.module';
 import { AppController } from './app.controller';
 import { CallsController } from './calls/calls.controller';
 import { CallsModule } from './calls/calls.module';
@@ -41,6 +45,8 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     WebhooksModule,
     OrganizationsModule,
     AgentsModule,
+    AnalyticsModule,
+    ApiKeysModule,
     CallsModule,
     PhoneNumbersModule,
     VoicesModule,
@@ -61,6 +67,8 @@ export class AppModule implements NestModule {
       MembersController,
       InvitationsController,
       AgentsController,
+      AnalyticsController,
+      ApiKeysController,
       CallsController,
       PhoneNumbersController,
       VoicesController,
@@ -76,6 +84,8 @@ export class AppModule implements NestModule {
       MembersController,
       InvitationsController,
       AgentsController,
+      AnalyticsController,
+      ApiKeysController,
       CallsController,
       PhoneNumbersController,
       VoicesController,

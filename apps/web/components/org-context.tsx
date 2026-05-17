@@ -26,6 +26,7 @@ interface OrgContextValue {
   activeOrgId: string | undefined;
   setActiveOrgId: (value: string | undefined) => void;
   loadingOrgs: boolean;
+  refreshOrgs: () => Promise<void>;
   apiCall: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
@@ -39,36 +40,36 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
     string | undefined
   >('awaaz_active_org', { defaultValue: undefined });
 
-  useEffect(() => {
+  const refreshOrgs = useCallback(async () => {
     if (!isLoaded) {
       return;
     }
-    let cancelled = false;
     setLoadingOrgs(true);
+    try {
+      const res = await apiFetch('/api/v1/organizations', {
+        method: 'GET',
+        getToken,
+      });
+      if (!res.ok) {
+        return;
+      }
+      setOrgs((await res.json()) as OrgSummary[]);
+    } finally {
+      setLoadingOrgs(false);
+    }
+  }, [getToken, isLoaded]);
+
+  useEffect(() => {
+    let cancelled = false;
     void (async () => {
-      try {
-        const res = await apiFetch('/api/v1/organizations', {
-          method: 'GET',
-          getToken,
-        });
-        if (!res.ok || cancelled) {
-          return;
-        }
-        const data = (await res.json()) as OrgSummary[];
-        if (cancelled) {
-          return;
-        }
-        setOrgs(data);
-      } finally {
-        if (!cancelled) {
-          setLoadingOrgs(false);
-        }
+      if (!cancelled) {
+        await refreshOrgs();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [getToken, isLoaded]);
+  }, [refreshOrgs]);
 
   useEffect(() => {
     if (loadingOrgs) {
@@ -101,9 +102,10 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
       activeOrgId,
       setActiveOrgId,
       loadingOrgs,
+      refreshOrgs,
       apiCall,
     }),
-    [orgs, activeOrgId, setActiveOrgId, loadingOrgs, apiCall],
+    [orgs, activeOrgId, setActiveOrgId, loadingOrgs, refreshOrgs, apiCall],
   );
 
   return (
