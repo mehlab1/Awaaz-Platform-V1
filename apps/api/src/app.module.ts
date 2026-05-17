@@ -11,6 +11,8 @@ import { APP_GUARD } from '@nestjs/core';
 import { AgentsController } from './agents/agents.controller';
 import { AgentsModule } from './agents/agents.module';
 import { AppController } from './app.controller';
+import { CallsController } from './calls/calls.controller';
+import { CallsModule } from './calls/calls.module';
 import { ClerkAuthMiddleware } from './auth/clerk-auth.middleware';
 import { RolesGuard } from './common/roles.guard';
 import { TenantMiddleware } from './common/tenant.middleware';
@@ -39,6 +41,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     WebhooksModule,
     OrganizationsModule,
     AgentsModule,
+    CallsModule,
     PhoneNumbersModule,
     VoicesModule,
     InternalModule,
@@ -58,6 +61,7 @@ export class AppModule implements NestModule {
       MembersController,
       InvitationsController,
       AgentsController,
+      CallsController,
       PhoneNumbersController,
       VoicesController,
     );
@@ -72,6 +76,7 @@ export class AppModule implements NestModule {
       MembersController,
       InvitationsController,
       AgentsController,
+      CallsController,
       PhoneNumbersController,
       VoicesController,
     );

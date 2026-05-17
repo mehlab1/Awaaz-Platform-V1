@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import useLocalStorageState from 'use-local-storage-state';
@@ -27,6 +28,14 @@ import {
 import { useOrgContext } from '@/components/org-context';
 import { VersionPromptDiff } from '@/components/version-prompt-diff';
 import { cn } from '@/lib/utils';
+
+const TestCallModal = dynamic(
+  () =>
+    import('@/components/test-call-modal').then((m) => ({
+      default: m.TestCallModal,
+    })),
+  { ssr: false },
+);
 
 interface AgentVersion {
   id: string;
@@ -108,6 +117,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     | { kind: 'restore' | 'publish'; versionId: string }
     | null
   >(null);
+  const [testCallOpen, setTestCallOpen] = useState(false);
 
   useEffect(() => {
     setPromptHydrated(false);
@@ -356,12 +366,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
   };
 
+  const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
+  const selectedPreviewUrl = selectedVoice?.previewAudioUrl;
+  const canPlayVoicePreview =
+    typeof selectedPreviewUrl === 'string' &&
+    /^https?:\/\//.test(selectedPreviewUrl);
+
   const playVoicePreview = () => {
-    const voice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
-    const url = voice?.previewAudioUrl;
-    if (!url?.startsWith('http')) {
+    const url = selectedPreviewUrl;
+    if (!url || !/^https?:\/\//.test(url)) {
       setToast(
-        voice
+        selectedVoice
           ? 'No playable preview URL for this voice yet (sync voices with storage configured).'
           : 'Pick a voice to preview.',
       );
@@ -494,6 +509,24 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
+            variant="secondary"
+            disabled={
+              !agent.isActive ||
+              !agent.currentVersion ||
+              saveBusy !== null ||
+              versionPanelBusy
+            }
+            title={
+              !agent.isActive || !agent.currentVersion
+                ? 'Activate the agent and configure a current version first.'
+                : 'Run a browser preview over LiveKit.'
+            }
+            onClick={() => setTestCallOpen(true)}
+          >
+            Test Agent
+          </Button>
+          <Button
+            type="button"
             variant="outline"
             disabled={
               saveBusy !== null || versionPanelBusy || !promptHydrated
@@ -518,6 +551,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       {pageError ? (
         <p className="text-sm text-destructive">{pageError}</p>
       ) : null}
+
+      <TestCallModal
+        open={testCallOpen}
+        onOpenChange={setTestCallOpen}
+        agentId={agentId}
+        agentName={agent.name}
+        apiCall={apiCall}
+      />
 
       <div className="grid gap-6 lg:grid-cols-[1fr_minmax(16rem,20rem)]">
         <Card>
@@ -570,7 +611,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   size="sm"
                   variant="secondary"
                   onClick={playVoicePreview}
-                  disabled={!selectedVoiceId}
+                  disabled={!selectedVoiceId || !canPlayVoicePreview}
+                  title={
+                    canPlayVoicePreview
+                      ? 'Play this voice preview.'
+                      : 'Voice preview playback is deferred until preview URLs are playable.'
+                  }
                 >
                   Play preview
                 </Button>

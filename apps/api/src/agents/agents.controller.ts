@@ -42,6 +42,15 @@ export class AgentsController {
     return this.agents.create(organizationIdFromRequest(req), dto);
   }
 
+  @Post(':id/test-call')
+  @Roles(Role.BUILDER)
+  browserTestCall(@Req() req: Request, @Param('id') id: string) {
+    return this.agents.createBrowserTestCall(
+      organizationIdFromRequest(req),
+      id,
+    );
+  }
+
   @Get(':id')
   @Roles(Role.VIEWER)
   get(@Req() req: Request, @Param('id') id: string) {

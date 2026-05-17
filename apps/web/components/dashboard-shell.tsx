@@ -22,6 +22,9 @@ export function DashboardShell({
             <Link href="/agents" className="text-foreground hover:underline">
               Agents
             </Link>
+            <Link href="/calls" className="text-foreground hover:underline">
+              Calls
+            </Link>
             <Link
               href="/qualicall"
               className="flex items-center gap-2 text-foreground hover:underline"

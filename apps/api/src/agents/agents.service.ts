@@ -2,9 +2,11 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 
+import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateAgentVersionDto } from './dto/create-agent-version.dto';
 import type { CreateAgentDto } from './dto/create-agent.dto';
@@ -12,7 +14,10 @@ import type { PatchAgentDto } from './dto/patch-agent.dto';
 
 @Injectable()
 export class AgentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly liveKitBrowserTest: LiveKitBrowserTestService,
+  ) {}
 
   async list(organizationId: string) {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -241,6 +246,46 @@ export class AgentsService {
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+  }
+
+  async createBrowserTestCall(
+    organizationId: string,
+    agentId: string,
+  ) {
+    const agent = await this.prisma.agent.findFirst({
+      where: {
+        id: agentId,
+        organizationId,
+        deletedAt: null,
+        isActive: true,
+      },
+      include: { currentVersion: true },
+    });
+    if (!agent?.currentVersion) {
+      throw new NotFoundException(
+        'Agent not found or not active without a configured version',
+      );
+    }
+    if (!this.liveKitBrowserTest.isConfigured()) {
+      throw new ServiceUnavailableException(
+        'LiveKit is not configured (set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET).',
+      );
+    }
+
+    try {
+      return await this.liveKitBrowserTest.issueBrowserParticipantSession({
+        agentId,
+        organizationId,
+      });
+    } catch (error: unknown) {
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(
+        `Unable to prepare browser test room: ${message}`,
+      );
+    }
   }
 
   private async ensureAgent(
