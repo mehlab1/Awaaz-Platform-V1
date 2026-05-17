@@ -882,6 +882,8 @@ cli.run_app(WorkerOptions(entrypoint_fnc=AwaazAgent.entrypoint, worker_type=Work
 - [x] `main.py` matches exact code above.
 - [x] Worker type is `WorkerType.ROOM`.
 
+**Windows local-run note (2026-05-17):** `cli.run_app(...)` is wrapped in `if __name__ == "__main__":` so LiveKit's multiprocessing job executor can start on Windows without the Python bootstrap `RuntimeError`.
+
 ---
 
 ### 3.6 Health Server (`health_server.py`)
@@ -970,11 +972,13 @@ curl -H "x-worker-secret: $WORKER_SECRET" https://api/internal/agents/123/config
 3. Check local terminal logs → verify no import errors.
 
 **☐ Checklist for 3.9:**
-- [ ] Paid Render Background Worker deferred.
-- [ ] Local worker started with `python main.py start`.
-- [ ] Environment variables from Section 15.3 configured locally.
-- [ ] LiveKit dashboard shows worker as "Connected".
-- [ ] Local terminal logs show no import errors.
+- [x] Paid Render Background Worker deferred.
+- [x] Local worker started with `python main.py start`.
+- [x] Environment variables from Section 15.3 configured locally.
+- [x] LiveKit registration confirmed from local terminal logs (`registered worker`, LiveKit Cloud server info).
+- [x] Local terminal logs show no import errors.
+
+**Verification note (2026-05-17):** Local worker registered with LiveKit Cloud and received worker ID `AW_5KYoX36zCJYx`. LiveKit dashboard access was unavailable, so terminal registration logs are accepted as the verification signal for this local Phase 3 pass.
 
 ---
 
