@@ -1781,104 +1781,127 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 ---
 
-## Phase 8: End-to-End Integration & Hardening (Day 5–6)
+## Phase 8: Non-Twilio Hardening & Handoff Prep (Day 5–6)
 
-**Objective:** Full system test. Security verification. Free-tier survival setup.
+**Objective:** Harden the verified non-Twilio platform, run security/database checks, prepare handoff docs, and configure free-tier survival. Do **not** implement or verify Twilio/PSTN live calls, R2 recording upload/download, voice preview playback, or real recording waveform playback in Phase 8; those remain Phase 9.
+
+**Phase 8 scope split:**
+- **Do now:** `.cursorrules` review, non-Twilio security audit, final Supabase verification, README/DEPLOYMENT/TROUBLESHOOTING docs, and free-tier/UptimeRobot setup.
+- **Deferred to Phase 9:** Twilio/PSTN live calls, Twilio webhook production flow, R2 recording upload/download, voice preview playback, recording waveform/audio playback from real recordings, and live PSTN performance checks.
+- **Known backlog:** `New Agent` create UI remains intentionally disabled and is not part of the closed current non-Twilio Gate 7 or Phase 8 hardening scope.
+
+**Recommended Phase 8 order:**
+1. Review `.cursorrules` for security, testing, and documentation conventions.
+2. Run 8.2 non-Twilio security audit.
+3. Run 8.6 final database verification.
+4. Update `README.md`, `DEPLOYMENT.md`, and `TROUBLESHOOTING.md`.
+5. Set up free-tier survival checks / UptimeRobot.
 
 ### ☐ PRE-PHASE CHECKLIST
 - [x] Gate 7 is passed (**current non-Twilio scope**; Phase 9 deferrals remain).
 - [ ] `.cursorrules` reviewed for security, testing, and documentation conventions.
 - [x] All previous phases' non-Twilio test cases are passing.
+- [x] Phase 9 deferrals are explicitly out of Phase 8 scope.
+- [x] `New Agent` create UI is recorded as known backlog, not a Phase 8 blocker.
 
 ---
 
-### 8.1 Complete User Journey Test
+### 8.1 Non-Twilio User Journey Regression
 
-**Scenario: New Agent Creation to Call Analysis**
+**Scenario: Existing Agent to Browser Test Call Analysis**
 
 | Step | Action | Verification |
 |---|---|---|
-| 1 | Admin creates "Sales Agent" | Appears in list, V1 created |
-| 2 | Assigns phone number | Dispatch rule created |
-| 3 | Edits prompt, saves V2 | Version history shows V2 |
-| 4 | Publishes V2 | V2 is live |
-| 5 | Makes inbound call | Call connects, uses V2 prompt |
-| 6 | Ends call | Status = COMPLETED |
-| 7 | Wait 30 seconds | Recording in R2, transcript built |
-| 8 | Opens Call Detail | Audio plays, transcript accurate |
-| 9 | Checks Analytics | Call counted, cost calculated |
-| 10 | Viewer logs in | Can see everything, cannot edit |
+| 1 | Admin opens `/agents` | Seeded agent list renders; `New Agent` button may remain disabled as known backlog |
+| 2 | Admin opens an existing agent | Editor, Monaco, version history, and phone assignment controls load |
+| 3 | Admin edits prompt and saves V2 | Version history shows V2 |
+| 4 | Admin publishes V2 | V2 is live |
+| 5 | Admin runs browser test call | Browser LiveKit flow creates a completed Test call row |
+| 6 | Admin opens `/calls` | Filters/table render and Test badge is present |
+| 7 | Admin opens `/calls/:id` | Transcript, cost, latency, and graceful recording fallback render |
+| 8 | Admin opens `/analytics` | Non-test analytics remain correct; test calls remain excluded |
+| 9 | Viewer logs in | Viewer can read allowed pages and cannot perform admin/builder mutations |
 
 **☐ Checklist for 8.1:**
-- [ ] Step 1: Sales Agent created and visible.
-- [ ] Step 2: Dispatch rule created for assigned number.
+**Out of scope for 8.1:** New Agent creation, real inbound PSTN calls, Twilio recording ingest, R2 recording playback, and waveform/audio verification from real recordings. These remain backlog/Phase 9 as noted above.
+
+- [ ] Step 1: Existing seeded agent list visible; disabled `New Agent` noted as backlog.
+- [ ] Step 2: Existing agent editor loads.
 - [ ] Step 3: V2 saved and visible in history.
 - [ ] Step 4: V2 published and live.
-- [ ] Step 5: Inbound call connects and uses V2 prompt.
-- [ ] Step 6: Call ends with status COMPLETED.
-- [ ] Step 7: Recording and transcript available within 30s.
-- [ ] Step 8: Call detail page fully functional.
-- [ ] Step 9: Analytics reflects the call and cost.
-- [ ] Step 10: Viewer role restricted to read-only.
+- [ ] Step 5: Browser test call completes and creates Test call row.
+- [ ] Step 6: Call history filters/table render.
+- [ ] Step 7: Call detail page renders transcript/cost/latency and graceful recording fallback.
+- [ ] Step 8: Analytics still exclude test calls and reflect real non-test data.
+- [ ] Step 9: Viewer role restricted to read-only behavior.
 
 ---
 
 ### 8.2 Security Audit
 
-**Agent Instruction:** Verify all spec security requirements:
+**Agent Instruction:** Verify current non-Twilio security requirements. Do not execute Twilio/PSTN/R2 production verification here; keep those checks in Phase 9.
 
 | Check | Test | Expected |
 |---|---|---|
-| TwiML token | Request `/twiml/outbound?token=fake` | 404 |
-| TwiML domain | Inject bad URI into Redis, request | 400 |
 | Internal endpoints | Request without `x-worker-secret` | 403 |
 | Cross-org access | Request with valid token but wrong `x-organization-id` | 403 |
 | Clerk webhook | Request with wrong signature | 401 |
-| Twilio webhook | Request with wrong signature | 401 |
-| LiveKit webhook | Request with wrong auth | 401 |
 | API key hash | Query DB for created key | `keyHash` is SHA-256, no plaintext |
-| Role enforcement | VIEWER calls `POST /agents` | 403 |
+| API key one-time reveal | Refresh/list keys after creation | Full key is not returned again |
+| Role enforcement | VIEWER calls admin/builder mutation | 403 |
+| Organization route guard | Valid token with mismatched org route/header | 403 |
+
+**Deferred security checks for Phase 9:**
+- TwiML token/domain behavior for outbound PSTN flow.
+- Twilio webhook signature verification with real Twilio callbacks.
+- LiveKit/Twilio/R2 production recording webhook chain.
+- Voice preview and recording presigned playback security.
 
 **☐ Checklist for 8.2:**
-- [ ] All nine security checks performed.
-- [ ] All nine return exact expected status codes.
+- [ ] Current non-Twilio security checks performed.
+- [ ] Current non-Twilio checks return expected status codes.
 - [ ] No security bypasses found.
+- [ ] Phase 9-only security checks remain deferred and documented.
 
 ---
 
 ### 8.3 Free Tier Survival Setup
 
 **Sub-task 8.3.1:** UptimeRobot setup:
-- Add `https://api.render.com/health` → ping every 10 minutes.
-- Add Supabase REST endpoint → ping every 10 minutes (prevents pausing).
+- Add deployed Render API `/health` URL and ping every 10 minutes.
+- Add deployed Vercel web URL and ping every 10 minutes.
+- Optional: add a safe Supabase REST endpoint ping only if credentials/security posture are acceptable.
 
 **Sub-task 8.3.2:** Worker heartbeat:
-- Python worker pings `/internal/worker/heartbeat` every 5 minutes.
-- This is secondary keep-alive, not primary.
+- Current Phase 8 can document heartbeat expectations, but live production worker hardening remains Phase 9 unless the worker is already deployed and safe to verify.
+- Python worker heartbeat to `/internal/worker/heartbeat` every 5 minutes is secondary keep-alive, not primary.
 
 **Sub-task 8.3.3:** Render cold-start mitigation:
-- Document that after any idle period, trigger a test call to warm the worker before real calls.
+- Document that after any idle period, trigger a browser test call to warm non-Twilio flows. Real PSTN warm-up guidance remains Phase 9.
 
 **☐ Checklist for 8.3:**
-- [ ] UptimeRobot configured with two pings every 10 minutes.
-- [ ] Worker heartbeat implemented (5-minute interval).
-- [ ] Cold-start mitigation documented.
+- [ ] UptimeRobot configured for deployed API `/health`.
+- [ ] UptimeRobot configured for deployed web URL.
+- [ ] Optional Supabase keepalive decision documented.
+- [ ] Worker heartbeat status documented; implementation/deployed worker verification deferred to Phase 9 if not already live.
+- [ ] Non-Twilio cold-start mitigation documented.
 
 ---
 
 ### 8.4 Performance Verification
 
-**Test Case 8.4.1: Latency Benchmark**
+**Test Case 8.4.1: Non-Twilio Browser Latency Benchmark**
 
-1. Make 5 test calls.
-2. Query DB: `SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms) FROM call_events WHERE event_type = 'AGENT_SPEECH' AND created_at > NOW() - INTERVAL '1 hour';`
+1. Make 5 browser test calls.
+2. Query DB: `SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY "latencyMs") FROM call_events WHERE "eventType" = 'AGENT_SPEECH' AND "createdAt" > NOW() - INTERVAL '1 hour' AND "latencyMs" IS NOT NULL;`
 
-**Success Criteria:** P50 < 900ms.
+**Success Criteria:** P50 < 900ms for current browser/non-Twilio flow. PSTN latency benchmarking remains Phase 9.
 
 **☐ Checklist for 8.4:**
-- [ ] 5 test calls made.
+- [ ] 5 browser test calls made.
 - [ ] P50 latency queried from database.
 - [ ] P50 is under 900ms.
+- [ ] PSTN/live-call latency benchmark remains deferred to Phase 9.
 
 ---
 
@@ -1888,11 +1911,14 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - All async operations have try/catch.
 - API client in Python worker logs but doesn't crash on event emission failure.
 - NestJS global exception filter returns consistent JSON errors.
+- Current deployed Render/Vercel logs show no Phase 7 regression errors during non-Twilio verification.
+- Live PSTN worker observability remains Phase 9 unless the worker is already deployed and safe to verify.
 
 **☐ Checklist for 8.5:**
 - [ ] All async operations wrapped in try/catch.
-- [ ] Python worker logs errors gracefully without crashing.
+- [ ] Python worker expectations documented; live worker crash behavior deferred to Phase 9 if not currently deployed.
 - [ ] NestJS exception filter returns consistent JSON.
+- [ ] Deployed non-Twilio verification logs reviewed.
 
 ---
 
@@ -1905,15 +1931,18 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [ ] Membership has OWNER role.
 - [ ] Agent "Sirius Agent" exists with `currentVersionId` pointing to V1.
 - [ ] AgentVersion V1 has `isLive=true`.
-- [ ] PhoneNumber has `agentId` = Sirius, `liveKitDispatchRuleId` populated.
+- [ ] PhoneNumber has `agentId` = Sirius, and `liveKitDispatchRuleId` is populated when LiveKit dispatch sync is configured.
 - [ ] PendingInvitation table empty (no stale invites).
-- [ ] Call table has test calls marked with `metadata->isTest = true`.
+- [ ] Call table has browser test calls marked with `metadata->isTest = true` and/or `metadata->isTestCall = true`.
+- [ ] API keys have `keyPrefix`, SHA-256 `keyHash`, no plaintext full key, and correct revoke state.
+- [ ] Organization name and `updatedAt` reflect latest verified persistence check.
+- [ ] No Phase 8 DB check requires Twilio recordings or R2 objects.
 
 ---
 
 ### 8.7 Documentation & Handoff
 
-**Agent Instruction:** Create the following files in repo root:
+**Agent Instruction:** Create or update the following files in repo root:
 
 - [ ] `.env.example` file with all variables documented (no real values).
 - [ ] `README.md` with architecture diagram (ASCII or Mermaid).
@@ -1923,12 +1952,15 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
   - No audio → check Twilio SIP trunk origination URI.
   - Transcript missing → check BullMQ Redis TLS config.
   - Analytics empty → check test call exclusion logic.
+- [ ] Documentation clearly separates current non-Twilio scope from Phase 9 Twilio/R2/PSTN deferrals.
+- [ ] Documentation notes disabled `New Agent` create UI as known backlog.
 
 **☐ Checklist for 8.7:**
-- [ ] `.env.example` created with all variables and descriptions.
+- [ ] `.env.example` reviewed/updated with all variables and descriptions.
 - [ ] `README.md` has architecture diagram.
 - [ ] `DEPLOYMENT.md` has step-by-step setup.
 - [ ] `TROUBLESHOOTING.md` has the four required entries plus resolutions.
+- [ ] Phase 9 deferrals and `New Agent` backlog are documented accurately.
 
 ---
 
@@ -1940,25 +1972,29 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 | UptimeRobot still showing down | Render cold start or wrong path | Verify path is `/health`. Allow 2-3 minutes for first ping after deploy. |
 | P50 latency > 900ms | Groq rate limit or large prompt | Optimize system prompt length. Check Groq dashboard for throttling. |
 | Database state mismatch | Seed not run or manual edits | Re-run `npx prisma db seed`. Verify IDs match Clerk dashboard. |
-| Missing documentation file | Agent skipped file creation | Create all four files listed in 8.7 before declaring completion. |
+| Missing documentation file | Agent skipped file creation/update | Create or update all files listed in 8.7 before declaring completion. |
 
 ---
 
-### 🚦 STOP — SUCCESS GATE 8 (FINAL GATE)
-**DO NOT DECLARE PROJECT COMPLETE UNLESS ALL OF THE FOLLOWING ARE TRUE:**
-- [ ] Full user journey from agent creation to call analysis passes.
-- [ ] Security audit passes all nine checks.
+### 🚦 STOP — SUCCESS GATE 8 (NON-TWILIO HARDENING GATE)
+**DO NOT DECLARE PHASE 8 COMPLETE UNLESS ALL OF THE FOLLOWING ARE TRUE:**
+- [ ] Non-Twilio user journey regression passes.
+- [ ] Current non-Twilio security audit passes.
 - [ ] Free-tier survival is configured (UptimeRobot + heartbeat).
-- [ ] P50 latency is under 900ms.
+- [ ] Browser/non-Twilio P50 latency is under 900ms.
 - [ ] Database verification checklist is all green.
 - [ ] All four documentation files exist and are complete.
 - [ ] `.cursorrules` was adhered to in every single file created during all phases.
+- [ ] Phase 9 Twilio/R2/PSTN deferrals are still clearly documented.
+- [ ] `New Agent` create UI remains explicitly documented as known backlog if still disabled.
 
 ---
 
 ## 🏁 Final Launch Checklist
 
 **Before announcing V1 readiness, verify every item from spec Section "Final Checklist Before V1 Launch":**
+
+**Scope note:** This final launch checklist includes Phase 9 items. Do not use Twilio/PSTN/R2/voice-preview items below to block Phase 8 non-Twilio hardening completion; they block full external V1 launch until Phase 9 is complete.
 
 - [ ] Sirius Agent deployed — inbound calls work on Twilio number.
 - [ ] LiveKit SIP Dispatch Rule created and stored in `PhoneNumber.liveKitDispatchRuleId`.
