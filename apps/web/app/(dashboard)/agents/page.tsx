@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { format } from 'date-fns';
 
 import { Badge } from '@/components/ui/badge';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { buttonVariants } from '@/components/ui/button';
 import {
   Table,
   TableBody,
@@ -17,6 +18,11 @@ import {
 } from '@/components/ui/table';
 import { useOrgContext } from '@/components/org-context';
 import { cn } from '@/lib/utils';
+import {
+  CreateAgentDialog,
+  type CreateAgentInput,
+  type VoiceOption,
+} from './create-agent-dialog';
 
 interface AgentListRow {
   id: string;
@@ -37,46 +43,116 @@ interface AgentListRow {
   } | null;
 }
 
+interface CreatedAgent {
+  id: string;
+}
+
+interface CreatedAgentVersion {
+  id: string;
+}
+
+const CREATE_AGENT_ROLES = new Set(['OWNER', 'ADMIN', 'BUILDER']);
+
 export default function AgentsPage() {
-  const { activeOrgId, apiCall } = useOrgContext();
+  const router = useRouter();
+  const { activeOrgId, apiCall, orgs } = useOrgContext();
   const [agents, setAgents] = useState<AgentListRow[]>([]);
+  const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
+  const loadData = useCallback(async () => {
     if (!activeOrgId) {
       setAgents([]);
+      setVoices([]);
+      setLoading(false);
       return;
     }
-    let cancelled = false;
     setLoading(true);
     setError(null);
-    void (async () => {
-      try {
-        const res = await apiCall('/api/v1/agents', { method: 'GET' });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || res.statusText);
-        }
-        const data = (await res.json()) as AgentListRow[];
-        if (!cancelled) {
-          setAgents(data);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          const message = e instanceof Error ? e.message : String(e);
-          setError(message);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+    try {
+      const [agentsRes, voicesRes] = await Promise.all([
+        apiCall('/api/v1/agents', { method: 'GET' }),
+        apiCall('/api/v1/voices', { method: 'GET' }),
+      ]);
+      if (!agentsRes.ok) {
+        throw new Error(await responseMessage(agentsRes));
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      if (!voicesRes.ok) {
+        throw new Error(await responseMessage(voicesRes));
+      }
+
+      setAgents((await agentsRes.json()) as AgentListRow[]);
+      setVoices((await voicesRes.json()) as VoiceOption[]);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
   }, [activeOrgId, apiCall]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  const activeOrg = orgs.find((org) => org.id === activeOrgId);
+  const canCreateAgent = CREATE_AGENT_ROLES.has(activeOrg?.role ?? '');
+
+  const createAgent = async (input: CreateAgentInput) => {
+    if (!activeOrgId) {
+      throw new Error('Select an organization first.');
+    }
+
+    setCreating(true);
+    setError(null);
+    try {
+      const agentRes = await apiCall('/api/v1/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: input.name,
+          description: input.description || undefined,
+        }),
+      });
+      if (!agentRes.ok) {
+        throw new Error(await responseMessage(agentRes));
+      }
+      const agent = (await agentRes.json()) as CreatedAgent;
+
+      const versionRes = await apiCall(`/api/v1/agents/${agent.id}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemPrompt: input.systemPrompt,
+          voiceId: input.voiceId,
+          model: 'llama-3.3-70b-versatile',
+          temperature: 0.7,
+          maxTokens: 1024,
+          firstMessage: `Hi, this is ${input.name}. How can I help you today?`,
+          endCallPhrases: ['goodbye', 'bye', 'thank you'],
+        }),
+      });
+      if (!versionRes.ok) {
+        throw new Error(await responseMessage(versionRes));
+      }
+      const version = (await versionRes.json()) as CreatedAgentVersion;
+
+      const publishRes = await apiCall(
+        `/api/v1/agents/${agent.id}/versions/${version.id}/publish`,
+        { method: 'POST' },
+      );
+      if (!publishRes.ok) {
+        throw new Error(await responseMessage(publishRes));
+      }
+
+      await loadData();
+      router.push(`/agents/${agent.id}`);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const formatPhones = (nums: string[]) => {
     if (nums.length === 0) {
@@ -99,14 +175,12 @@ export default function AgentsPage() {
             Switch org in the sidebar to refresh tenant data.
           </p>
         </div>
-        <Button
-          type="button"
-          variant="default"
-          disabled
-          title="Agent builder ships in Phase 6.4"
-        >
-          New Agent
-        </Button>
+        <CreateAgentDialog
+          isBusy={creating}
+          canCreate={canCreateAgent}
+          voices={voices}
+          onSubmit={createAgent}
+        />
       </div>
 
       {error ? (
@@ -127,8 +201,8 @@ export default function AgentsPage() {
 
       {!loading && activeOrgId && agents.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No agents found. Seed the Sirius agent (`pnpm prisma db seed` from the
-          API package) or create one via the API (BUILDER role).
+          No agents found. Create one with New Agent or seed the Sirius agent
+          from the API package.
         </p>
       ) : null}
 
@@ -200,4 +274,9 @@ export default function AgentsPage() {
 function safeParseDate(value: string): Date | null {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+async function responseMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  return text || response.statusText;
 }
