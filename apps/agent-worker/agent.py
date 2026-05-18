@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Mapping
 
 from livekit.agents import AutoSubscribe, JobContext, llm
@@ -100,20 +101,41 @@ def register_events(
         if error is not None:
             logger.warning("Failed to emit speech event", exc_info=error)
 
-    def emit(event_type: str, message: llm.ChatMessage) -> None:
+    last_user_speech_at: float | None = None
+
+    def emit(
+        event_type: str,
+        message: llm.ChatMessage,
+        latency_ms: int | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "eventType": event_type,
+            "text": message_text(message),
+        }
+        if latency_ms is not None:
+            payload["latencyMs"] = latency_ms
+
         task = asyncio.create_task(
             api.emit_event(
                 call_id,
-                {
-                    "eventType": event_type,
-                    "text": message_text(message),
-                },
+                payload,
             ),
         )
         task.add_done_callback(on_emit_done)
 
-    assistant.on("user_speech_committed", lambda msg: emit("USER_SPEECH", msg))
-    assistant.on("agent_speech_committed", lambda msg: emit("AGENT_SPEECH", msg))
+    def on_user_speech(message: llm.ChatMessage) -> None:
+        nonlocal last_user_speech_at
+        last_user_speech_at = time.monotonic()
+        emit("USER_SPEECH", message)
+
+    def on_agent_speech(message: llm.ChatMessage) -> None:
+        latency_ms = None
+        if last_user_speech_at is not None:
+            latency_ms = max(0, round((time.monotonic() - last_user_speech_at) * 1000))
+        emit("AGENT_SPEECH", message, latency_ms)
+
+    assistant.on("user_speech_committed", on_user_speech)
+    assistant.on("agent_speech_committed", on_agent_speech)
 
 
 async def start_call_payload(

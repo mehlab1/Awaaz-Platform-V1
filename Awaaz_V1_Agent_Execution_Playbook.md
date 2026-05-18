@@ -1876,10 +1876,13 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 ### 8.3 Free Tier Survival Setup
 
+**Status:** Prepared for manual UptimeRobot configuration. Do not mark this fully configured until the monitors are created in UptimeRobot and show green.
+
 **Sub-task 8.3.1:** UptimeRobot setup:
-- Add deployed Render API `/health` URL and ping every 10 minutes.
-- Add deployed Vercel web URL and ping every 10 minutes.
-- Optional: add a safe Supabase REST endpoint ping only if credentials/security posture are acceptable.
+- Add deployed Render API `/health` URL and ping every 10 minutes: `https://awaaz-api-nxae.onrender.com/health`.
+- Add deployed Vercel web root URL and ping every 10 minutes once the final production URL is selected.
+- Do not monitor authenticated dashboard routes, Clerk-protected API routes, or `/internal/worker/heartbeat` publicly.
+- Optional Supabase keepalive decision: skipped for current Phase 8 scope unless a safe credential-free endpoint is intentionally added.
 
 **Sub-task 8.3.2:** Worker heartbeat:
 - Current Phase 8 can document heartbeat expectations, but live production worker hardening remains Phase 9 unless the worker is already deployed and safe to verify.
@@ -1889,11 +1892,14 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - Document that after any idle period, trigger a browser test call to warm non-Twilio flows. Real PSTN warm-up guidance remains Phase 9.
 
 **☐ Checklist for 8.3:**
-- [ ] UptimeRobot configured for deployed API `/health`.
-- [ ] UptimeRobot configured for deployed web URL.
-- [ ] Optional Supabase keepalive decision documented.
-- [ ] Worker heartbeat status documented; implementation/deployed worker verification deferred to Phase 9 if not already live.
-- [ ] Non-Twilio cold-start mitigation documented.
+- [x] API monitor target documented: `https://awaaz-api-nxae.onrender.com/health`, 10-minute interval.
+- [x] Web monitor target requirements documented: deployed Vercel root URL, 10-minute interval.
+- [x] Optional Supabase keepalive decision documented: skip public Supabase ping in current Phase 8 scope.
+- [x] Worker heartbeat status documented; implementation/deployed worker verification deferred to Phase 9 if not already live.
+- [x] Non-Twilio cold-start mitigation documented.
+- [ ] Manual UptimeRobot monitors created and confirmed green in the UptimeRobot dashboard.
+
+**Verification note:** README, DEPLOYMENT, and TROUBLESHOOTING now document free-tier survival checks, protected worker heartbeat behavior, cold-start mitigation, and the Phase 9 boundary.
 
 ---
 
@@ -1906,11 +1912,19 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 **Success Criteria:** P50 < 900ms for current browser/non-Twilio flow. PSTN latency benchmarking remains Phase 9.
 
+**Status:** DB/analytics verification completed read-only; manual 5-call deployed browser run remains pending because it requires authenticated browser + microphone/audio verification.
+
 **☐ Checklist for 8.4:**
-- [ ] 5 browser test calls made.
-- [ ] P50 latency queried from database.
-- [ ] P50 is under 900ms.
-- [ ] PSTN/live-call latency benchmark remains deferred to Phase 9.
+- [ ] 5 fresh deployed browser test calls made in one verification pass.
+- [x] Recent browser/test-call persistence queried from Supabase.
+- [x] Recent completed calls persisted.
+- [x] Transcript records persisted for recent completed test calls.
+- [x] No stuck `INITIATED` / `IN_PROGRESS` live-call rows found in the recent verification window.
+- [x] Analytics exclusion logic verified by DB query: browser/test calls remain excluded from production calls, production cost, and production latency samples.
+- [ ] P50 latency available and under 900ms. Current recent test rows have no `latencyMs` samples, so P50 is `NULL` / not measurable.
+- [x] PSTN/live-call latency benchmark remains deferred to Phase 9.
+
+**Verification note:** Read-only Supabase verification found 3 recent completed test/smoke calls in the last 24 hours for Finova/Sirius. All 3 were `COMPLETED`, marked as test data, had transcript rows, and there were 0 stuck live-call rows. Recent aggregate event counts: 3 user speech events, 2 agent speech events, 0 latency samples. Average observed latency was unavailable because worker-emitted `AGENT_SPEECH` events currently do not include `latencyMs`; P50 latency was `NULL`. Analytics exclusion query returned 0 production calls, `$0` production cost, and 0 production latency samples, confirming browser/test calls did not pollute production analytics. Browser-level checks still need manual execution for 5 fresh deployed calls: connection, assistant audio, disconnect cleanup, frontend console red errors, and no crash behavior.
 
 ---
 
@@ -1935,17 +1949,20 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 **Agent Instruction:** Run this checklist in Prisma Studio or via queries:
 
-- [ ] Organization table has "Finova Solutions".
-- [ ] User table has your Clerk ID.
-- [ ] Membership has OWNER role.
-- [ ] Agent "Sirius Agent" exists with `currentVersionId` pointing to V1.
-- [ ] AgentVersion V1 has `isLive=true`.
-- [ ] PhoneNumber has `agentId` = Sirius, and `liveKitDispatchRuleId` is populated when LiveKit dispatch sync is configured.
-- [ ] PendingInvitation table empty (no stale invites).
-- [ ] Call table has browser test calls marked with `metadata->isTest = true` and/or `metadata->isTestCall = true`.
-- [ ] API keys have `keyPrefix`, SHA-256 `keyHash`, no plaintext full key, and correct revoke state.
-- [ ] Organization name and `updatedAt` reflect latest verified persistence check.
-- [ ] No Phase 8 DB check requires Twilio recordings or R2 objects.
+- [x] Organization table has verified Finova org (`Finova Solutions Habiba`, slug `finova-solutions`).
+- [x] User table has Clerk users.
+- [x] Membership table has one OWNER role for the verified org.
+- [x] Agent "Sirius Agent" exists with `currentVersionId` populated.
+- [x] Sirius `currentVersionId` points to the current live version (V2 after Phase 6/7 publish verification).
+- [x] Exactly one Sirius version is live.
+- [x] PhoneNumber has `agentId` = Sirius, and `liveKitDispatchRuleId` is populated when LiveKit dispatch sync is configured.
+- [x] PendingInvitation table empty (no stale invites).
+- [x] Call table has browser test calls marked with `metadata->isTest = true` and/or `metadata->isTestCall = true`.
+- [x] API keys have `keyPrefix`, SHA-256 `keyHash`, no plaintext full key, and correct revoke state.
+- [x] Organization name and `updatedAt` reflect latest verified persistence check.
+- [x] No Phase 8 DB check requires Twilio recordings or R2 objects.
+
+**Verification note:** Read-only Prisma queries against Supabase verified 1 org, 9 users, 8 memberships, 1 OWNER, Sirius with 2 versions, V2 current/live, 1 assigned phone number with dispatch rule, 0 pending invitations, 4 sampled browser test calls marked as test, and 1 API key with valid 8-character prefix plus 64-character SHA-256 hash.
 
 ---
 
@@ -1953,23 +1970,25 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 **Agent Instruction:** Create or update the following files in repo root:
 
-- [ ] `.env.example` file with all variables documented (no real values).
-- [ ] `README.md` with architecture diagram (ASCII or Mermaid).
-- [ ] `DEPLOYMENT.md` with Render/Vercel setup steps.
-- [ ] `TROUBLESHOOTING.md` with common errors:
+- [x] `.env.example` file with all variables documented (no real values).
+- [x] `README.md` with architecture diagram (ASCII or Mermaid).
+- [x] `DEPLOYMENT.md` with Render/Vercel setup steps.
+- [x] `TROUBLESHOOTING.md` with common errors:
   - Worker not connecting → check LiveKit URL protocol (`wss://`).
   - No audio → check Twilio SIP trunk origination URI.
   - Transcript missing → check BullMQ Redis TLS config.
   - Analytics empty → check test call exclusion logic.
-- [ ] Documentation clearly separates current non-Twilio scope from Phase 9 Twilio/R2/PSTN deferrals.
-- [ ] Documentation notes disabled `New Agent` create UI as known backlog.
+- [x] Documentation clearly separates current non-Twilio scope from Phase 9 Twilio/R2/PSTN deferrals.
+- [x] Documentation notes disabled `New Agent` create UI as known backlog.
 
 **☐ Checklist for 8.7:**
-- [ ] `.env.example` reviewed/updated with all variables and descriptions.
-- [ ] `README.md` has architecture diagram.
-- [ ] `DEPLOYMENT.md` has step-by-step setup.
-- [ ] `TROUBLESHOOTING.md` has the four required entries plus resolutions.
-- [ ] Phase 9 deferrals and `New Agent` backlog are documented accurately.
+- [x] `.env.example` reviewed/updated with all variables and descriptions.
+- [x] `README.md` has architecture diagram.
+- [x] `DEPLOYMENT.md` has step-by-step setup.
+- [x] `TROUBLESHOOTING.md` has the four required entries plus resolutions.
+- [x] Phase 9 deferrals and `New Agent` backlog are documented accurately.
+
+**Verification note:** Root handoff docs were created/updated for current non-Twilio scope, Phase 9 deferrals, and the disabled `New Agent` backlog.
 
 ---
 
