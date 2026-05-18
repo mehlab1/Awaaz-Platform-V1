@@ -1799,7 +1799,7 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 ### ☐ PRE-PHASE CHECKLIST
 - [x] Gate 7 is passed (**current non-Twilio scope**; Phase 9 deferrals remain).
-- [ ] `.cursorrules` reviewed for security, testing, and documentation conventions.
+- [x] `.cursorrules` reviewed for security, testing, and documentation conventions.
 - [x] All previous phases' non-Twilio test cases are passing.
 - [x] Phase 9 deferrals are explicitly out of Phase 8 scope.
 - [x] `New Agent` create UI is recorded as known backlog, not a Phase 8 blocker.
@@ -1822,9 +1822,9 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 | 8 | Admin opens `/analytics` | Non-test analytics remain correct; test calls remain excluded |
 | 9 | Viewer logs in | Viewer can read allowed pages and cannot perform admin/builder mutations |
 
-**☐ Checklist for 8.1:**
 **Out of scope for 8.1:** New Agent creation, real inbound PSTN calls, Twilio recording ingest, R2 recording playback, and waveform/audio verification from real recordings. These remain backlog/Phase 9 as noted above.
 
+**☐ Checklist for 8.1:**
 - [ ] Step 1: Existing seeded agent list visible; disabled `New Agent` noted as backlog.
 - [ ] Step 2: Existing agent editor loads.
 - [ ] Step 3: V2 saved and visible in history.
@@ -1858,10 +1858,19 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - Voice preview and recording presigned playback security.
 
 **☐ Checklist for 8.2:**
-- [ ] Current non-Twilio security checks performed.
-- [ ] Current non-Twilio checks return expected status codes.
-- [ ] No security bypasses found.
-- [ ] Phase 9-only security checks remain deferred and documented.
+- [x] `.cursorrules` reviewed for security, testing, and documentation conventions.
+- [x] Current non-Twilio security checks code-reviewed.
+- [x] Code-level internal auth fix applied: missing/invalid `x-worker-secret` maps to `403` in `InternalAuthGuard`.
+- [x] Tenant middleware, role guard, and organization route/header mismatch guard reviewed.
+- [x] Clerk webhook wrong-signature path reviewed; invalid Svix signatures return `401`.
+- [x] API key hash/one-time reveal path reviewed; list/revoke responses do not return plaintext keys.
+- [x] No code-level security bypasses found in the current non-Twilio audit.
+- [ ] Deployed internal endpoint without `x-worker-secret` returns `403` after redeploy; current deployed check returned `401` before the local fix was deployed.
+- [ ] Deployed request-level checks requiring real Clerk sessions performed: cross-org access, VIEWER mutation, and org route/header mismatch.
+- [x] Clerk webhook wrong-signature request performed against deployed API; fake Svix signature returned `401`.
+- [x] Phase 9-only security checks remain deferred and documented.
+
+**Verification note:** API build and `git diff --check` passed after the `InternalAuthGuard` status-code fix. Remaining unchecked items require deployed API calls with real Clerk sessions/signatures.
 
 ---
 

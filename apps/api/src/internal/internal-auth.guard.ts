@@ -4,7 +4,6 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
-  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
@@ -23,7 +22,7 @@ export class InternalAuthGuard implements CanActivate {
     const header = req.headers['x-worker-secret'];
     const providedSecret = Array.isArray(header) ? header[0] : header;
     if (!providedSecret) {
-      throw new UnauthorizedException('Missing worker secret');
+      throw new ForbiddenException('Missing worker secret');
     }
     if (providedSecret !== expectedSecret) {
       throw new ForbiddenException('Invalid worker secret');
