@@ -1865,12 +1865,12 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] Clerk webhook wrong-signature path reviewed; invalid Svix signatures return `401`.
 - [x] API key hash/one-time reveal path reviewed; list/revoke responses do not return plaintext keys.
 - [x] No code-level security bypasses found in the current non-Twilio audit.
-- [ ] Deployed internal endpoint without `x-worker-secret` returns `403` after redeploy; current deployed check returned `401` before the local fix was deployed.
-- [ ] Deployed request-level checks requiring real Clerk sessions performed: cross-org access, VIEWER mutation, and org route/header mismatch.
+- [x] Deployed internal endpoint without `x-worker-secret` returns `403` after redeploy.
+- [x] Deployed request-level checks requiring real Clerk sessions performed: cross-org access, VIEWER mutation, and org route/header mismatch returned `403`.
 - [x] Clerk webhook wrong-signature request performed against deployed API; fake Svix signature returned `401`.
 - [x] Phase 9-only security checks remain deferred and documented.
 
-**Verification note:** API build and `git diff --check` passed after the `InternalAuthGuard` status-code fix. Remaining unchecked items require deployed API calls with real Clerk sessions/signatures.
+**Verification note:** API build and `git diff --check` passed after the `InternalAuthGuard` status-code fix. Deployed non-Twilio security checks are verified complete for Phase 8.2.
 
 ---
 
