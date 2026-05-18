@@ -4,8 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AuditAction, Prisma } from '@prisma/client';
 
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { PatchPhoneNumberDto } from './dto/patch-phone-number.dto';
 import type { RegisterPhoneNumberDto } from './dto/register-phone-number.dto';
@@ -15,6 +16,7 @@ import { LiveKitSipService } from './livekit-sip.service';
 export class PhoneNumbersService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
     private readonly liveKitSip: LiveKitSipService,
   ) {}
 
@@ -58,6 +60,7 @@ export class PhoneNumbersService {
 
   async update(
     organizationId: string,
+    actorUserId: string,
     phoneNumberId: string,
     dto: PatchPhoneNumberDto,
   ) {
@@ -91,10 +94,33 @@ export class PhoneNumbersService {
       throw new BadRequestException('No phone number fields to update');
     }
 
-    return this.prisma.phoneNumber.update({
-      where: { id: phoneNumber.id },
-      data,
-      include: { agent: true },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.phoneNumber.update({
+        where: { id: phoneNumber.id },
+        data,
+        include: { agent: true },
+      });
+      if (dto.agentId !== undefined) {
+        await this.audit.record(
+          {
+            organizationId,
+            actorUserId,
+            action:
+              dto.agentId === null
+                ? AuditAction.UNASSIGNED
+                : AuditAction.ASSIGNED,
+            entityType: 'PhoneNumber',
+            entityId: updated.id,
+            metadata: {
+              previousAgentId: phoneNumber.agentId,
+              agentId: updated.agentId,
+              number: updated.number,
+            },
+          },
+          tx,
+        );
+      }
+      return updated;
     });
   }
 

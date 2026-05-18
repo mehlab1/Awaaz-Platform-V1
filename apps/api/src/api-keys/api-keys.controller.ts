@@ -36,12 +36,16 @@ export class ApiKeysController {
   @Post()
   @Roles(Role.ADMIN)
   create(@Req() req: Request, @Body() dto: CreateApiKeyDto) {
-    return this.apiKeys.create(organizationIdFromRequest(req), dto);
+    return this.apiKeys.create(
+      organizationIdFromRequest(req),
+      req.user!.id,
+      dto,
+    );
   }
 
   @Delete(':id')
   @Roles(Role.ADMIN)
   revoke(@Req() req: Request, @Param('id') id: string) {
-    return this.apiKeys.revoke(organizationIdFromRequest(req), id);
+    return this.apiKeys.revoke(organizationIdFromRequest(req), req.user!.id, id);
   }
 }

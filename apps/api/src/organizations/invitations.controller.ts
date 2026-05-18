@@ -30,8 +30,13 @@ export class InvitationsController {
   cancel(
     @Param('id') organizationId: string,
     @Param('invId') invitationId: string,
+    @Req() req: Request,
   ) {
-    return this.members.cancelInvitation(organizationId, invitationId);
+    return this.members.cancelInvitation(
+      organizationId,
+      req.user!.id,
+      invitationId,
+    );
   }
 
   @Post(':invId/resend')

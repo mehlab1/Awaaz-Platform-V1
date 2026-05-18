@@ -6,8 +6,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClerkClient } from '@clerk/backend';
-import { Prisma } from '@prisma/client';
+import { AuditAction, Prisma } from '@prisma/client';
 
+import { AuditService } from '../audit/audit.service';
 import { toClerkOrganizationRole } from '../clerk/clerk-invite-role';
 import { normalizeEmail } from '../clerk/clerk-user';
 import { PrismaService } from '../prisma/prisma.service';
@@ -17,6 +18,7 @@ import type { InviteMemberDto } from './dto/invite-member.dto';
 export class MembersService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
     private readonly config: ConfigService,
   ) {}
 
@@ -67,13 +69,30 @@ export class MembersService {
           inviterUserId,
         });
 
-      const pending = await this.prisma.pendingInvitation.create({
-        data: {
-          organizationId: org.id,
-          email,
-          role: dto.role,
-          clerkInviteId: invitation.id,
-        },
+      const pending = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.pendingInvitation.create({
+          data: {
+            organizationId: org.id,
+            email,
+            role: dto.role,
+            clerkInviteId: invitation.id,
+          },
+        });
+        await this.audit.record(
+          {
+            organizationId: org.id,
+            actorUserId: inviterUserId,
+            action: AuditAction.INVITED,
+            entityType: 'PendingInvitation',
+            entityId: created.id,
+            metadata: {
+              email: created.email,
+              role: created.role,
+            },
+          },
+          tx,
+        );
+        return created;
       });
 
       return {
@@ -102,6 +121,7 @@ export class MembersService {
 
   async cancelInvitation(
     organizationId: string,
+    actorUserId: string,
     invitationId: string,
   ): Promise<{ ok: true }> {
     const pending = await this.prisma.pendingInvitation.findFirst({
@@ -121,8 +141,25 @@ export class MembersService {
       });
     }
 
-    await this.prisma.pendingInvitation.delete({
-      where: { id: pending.id },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.pendingInvitation.delete({
+        where: { id: pending.id },
+      });
+      await this.audit.record(
+        {
+          organizationId,
+          actorUserId,
+          action: AuditAction.REVOKED,
+          entityType: 'PendingInvitation',
+          entityId: pending.id,
+          metadata: {
+            email: pending.email,
+            role: pending.role,
+            clerkInviteIdPresent: Boolean(pending.clerkInviteId),
+          },
+        },
+        tx,
+      );
     });
     return { ok: true };
   }

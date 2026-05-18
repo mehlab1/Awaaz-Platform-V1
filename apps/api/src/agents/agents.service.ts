@@ -4,8 +4,9 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AuditAction, Prisma } from '@prisma/client';
 
+import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateAgentVersionDto } from './dto/create-agent-version.dto';
@@ -16,6 +17,7 @@ import type { PatchAgentDto } from './dto/patch-agent.dto';
 export class AgentsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
     private readonly liveKitBrowserTest: LiveKitBrowserTestService,
   ) {}
 
@@ -81,13 +83,34 @@ export class AgentsService {
     });
   }
 
-  create(organizationId: string, dto: CreateAgentDto) {
-    return this.prisma.agent.create({
-      data: {
-        organizationId,
-        name: dto.name,
-        description: dto.description,
-      },
+  async create(
+    organizationId: string,
+    actorUserId: string,
+    dto: CreateAgentDto,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const agent = await tx.agent.create({
+        data: {
+          organizationId,
+          name: dto.name,
+          description: dto.description,
+        },
+      });
+      await this.audit.record(
+        {
+          organizationId,
+          actorUserId,
+          action: AuditAction.CREATED,
+          entityType: 'Agent',
+          entityId: agent.id,
+          metadata: {
+            name: agent.name,
+            hasDescription: Boolean(agent.description),
+          },
+        },
+        tx,
+      );
+      return agent;
     });
   }
 
@@ -104,6 +127,7 @@ export class AgentsService {
 
   async update(
     organizationId: string,
+    actorUserId: string,
     agentId: string,
     dto: PatchAgentDto,
   ) {
@@ -118,11 +142,25 @@ export class AgentsService {
       throw new BadRequestException('No agent fields to update');
     }
 
-    await this.ensureAgent(organizationId, agentId);
-    return this.prisma.agent.update({
-      where: { id: agentId },
-      data,
-      include: { currentVersion: true },
+    return this.prisma.$transaction(async (tx) => {
+      await this.ensureAgentInTransaction(tx, organizationId, agentId);
+      const agent = await tx.agent.update({
+        where: { id: agentId },
+        data,
+        include: { currentVersion: true },
+      });
+      await this.audit.record(
+        {
+          organizationId,
+          actorUserId,
+          action: AuditAction.UPDATED,
+          entityType: 'Agent',
+          entityId: agent.id,
+          metadata: { fields: Object.keys(data) },
+        },
+        tx,
+      );
+      return agent;
     });
   }
 
@@ -148,6 +186,7 @@ export class AgentsService {
 
   async createVersion(
     organizationId: string,
+    actorUserId: string,
     agentId: string,
     dto: CreateAgentVersionDto,
   ) {
@@ -159,7 +198,7 @@ export class AgentsService {
           orderBy: { versionNumber: 'desc' },
           select: { versionNumber: true },
         });
-        return tx.agentVersion.create({
+        const version = await tx.agentVersion.create({
           data: {
             agentId,
             versionNumber: (last?.versionNumber ?? 0) + 1,
@@ -172,6 +211,28 @@ export class AgentsService {
             endCallPhrases: dto.endCallPhrases,
           },
         });
+        await this.audit.record(
+          {
+            organizationId,
+            actorUserId,
+            action: AuditAction.CREATED,
+            entityType: 'AgentVersion',
+            entityId: version.id,
+            metadata: {
+              agentId,
+              versionNumber: version.versionNumber,
+              voiceId: version.voiceId,
+              model: version.model,
+              temperature: version.temperature,
+              maxTokens: version.maxTokens,
+              systemPromptLength: version.systemPrompt.length,
+              hasFirstMessage: Boolean(version.firstMessage),
+              endCallPhraseCount: version.endCallPhrases.length,
+            },
+          },
+          tx,
+        );
+        return version;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -179,6 +240,7 @@ export class AgentsService {
 
   async publishVersion(
     organizationId: string,
+    actorUserId: string,
     agentId: string,
     versionId: string,
   ) {
@@ -204,6 +266,20 @@ export class AgentsService {
         where: { id: agentId },
         data: { currentVersionId: versionId },
       });
+      await this.audit.record(
+        {
+          organizationId,
+          actorUserId,
+          action: AuditAction.PUBLISHED,
+          entityType: 'AgentVersion',
+          entityId: published.id,
+          metadata: {
+            agentId,
+            versionNumber: published.versionNumber,
+          },
+        },
+        tx,
+      );
       return published;
     });
   }

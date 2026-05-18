@@ -39,7 +39,11 @@ export class AgentsController {
   @Post()
   @Roles(Role.BUILDER)
   create(@Req() req: Request, @Body() dto: CreateAgentDto) {
-    return this.agents.create(organizationIdFromRequest(req), dto);
+    return this.agents.create(
+      organizationIdFromRequest(req),
+      req.user!.id,
+      dto,
+    );
   }
 
   @Post(':id/test-call')
@@ -64,7 +68,12 @@ export class AgentsController {
     @Param('id') id: string,
     @Body() dto: PatchAgentDto,
   ) {
-    return this.agents.update(organizationIdFromRequest(req), id, dto);
+    return this.agents.update(
+      organizationIdFromRequest(req),
+      req.user!.id,
+      id,
+      dto,
+    );
   }
 
   @Delete(':id')
@@ -86,7 +95,12 @@ export class AgentsController {
     @Param('id') id: string,
     @Body() dto: CreateAgentVersionDto,
   ) {
-    return this.agents.createVersion(organizationIdFromRequest(req), id, dto);
+    return this.agents.createVersion(
+      organizationIdFromRequest(req),
+      req.user!.id,
+      id,
+      dto,
+    );
   }
 
   @Post(':id/versions/:versionId/publish')
@@ -98,6 +112,7 @@ export class AgentsController {
   ) {
     return this.agents.publishVersion(
       organizationIdFromRequest(req),
+      req.user!.id,
       id,
       versionId,
     );

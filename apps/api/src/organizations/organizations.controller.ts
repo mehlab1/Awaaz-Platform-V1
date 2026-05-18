@@ -34,7 +34,11 @@ export class OrganizationsController {
   @Patch(':id')
   @UseGuards(OrgRouteMatchesTenantGuard)
   @Roles(Role.ADMIN)
-  patch(@Param('id') id: string, @Body() dto: PatchOrganizationDto) {
-    return this.organizations.patchName(id, dto);
+  patch(
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Body() dto: PatchOrganizationDto,
+  ) {
+    return this.organizations.patchName(id, req.user!.id, dto);
   }
 }

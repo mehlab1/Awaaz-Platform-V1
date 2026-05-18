@@ -5,8 +5,9 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClerkClient } from '@clerk/backend';
-import { Role } from '@prisma/client';
+import { AuditAction, Role } from '@prisma/client';
 
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateOrganizationDto } from './dto/create-organization.dto';
 import type { PatchOrganizationDto } from './dto/patch-organization.dto';
@@ -16,6 +17,7 @@ import { allocateUniqueOrgSlug } from './org-slug';
 export class OrganizationsService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
     private readonly config: ConfigService,
   ) {}
 
@@ -108,7 +110,11 @@ export class OrganizationsService {
     };
   }
 
-  async patchName(organizationId: string, dto: PatchOrganizationDto) {
+  async patchName(
+    organizationId: string,
+    actorUserId: string,
+    dto: PatchOrganizationDto,
+  ) {
     const org = await this.prisma.organization.findUnique({
       where: { id: organizationId },
     });
@@ -121,9 +127,27 @@ export class OrganizationsService {
       { name: dto.name },
     );
 
-    return this.prisma.organization.update({
-      where: { id: organizationId },
-      data: { name: dto.name },
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.organization.update({
+        where: { id: organizationId },
+        data: { name: dto.name },
+      });
+      await this.audit.record(
+        {
+          organizationId,
+          actorUserId,
+          action: AuditAction.UPDATED,
+          entityType: 'Organization',
+          entityId: organizationId,
+          metadata: {
+            field: 'name',
+            previousName: org.name,
+            name: updated.name,
+          },
+        },
+        tx,
+      );
+      return updated;
     });
   }
 }

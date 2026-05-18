@@ -47,7 +47,12 @@ export class PhoneNumbersController {
     @Param('id') id: string,
     @Body() dto: PatchPhoneNumberDto,
   ) {
-    return this.phoneNumbers.update(organizationIdFromRequest(req), id, dto);
+    return this.phoneNumbers.update(
+      organizationIdFromRequest(req),
+      req.user!.id,
+      id,
+      dto,
+    );
   }
 
   @Post(':id/sync-dispatch-rule')
