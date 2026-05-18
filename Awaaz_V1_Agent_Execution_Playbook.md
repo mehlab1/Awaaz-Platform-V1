@@ -1307,14 +1307,14 @@ const response = await fetch(url);
 - Phase 4: Closed for Phase 5 entry.
 - Phase 5 non-Twilio transcript/cost pipeline: Verified.
 - **Phase 6: Closed for non-Twilio scope** (frontend core + browser LiveKit test path + `/calls` + `/calls/[id]`). See Phase 6 section for verification checklist and explicit deferrals.
-- Phase 7.1 Analytics Backend: Implemented.
-- Phase 7.2 Analytics Frontend: Implemented; real-data accuracy verification pending.
+- Phase 7.1 Analytics Backend: Verified for current non-Twilio scope.
+- Phase 7.2 Analytics Frontend: Verified with deployed real/non-test analytics data.
 - Phase 7.3 Phone Numbers Tab: Verified.
-- Phase 7.4 Members Tab: Implemented; invitation acceptance manual verification pending.
-- Phase 7.5 API Keys Tab: Implemented; key lifecycle manual DB verification pending.
-- Phase 7.6 Organization Settings: Implemented; manual DB/Clerk name-update verification pending.
-- Phase 7.7 Qualicall Placeholder: Implemented; browser visibility verification pending.
-- Phase 7 implementation: Complete; Gate 7 manual verification items remain pending before Phase 8.
+- Phase 7.4 Members Tab: Verified, including deployed invite/accept flow.
+- Phase 7.5 API Keys Tab: Verified, including Supabase persistence/hash/revoke checks.
+- Phase 7.6 Organization Settings: Verified, including Supabase persistence and `updatedAt`.
+- Phase 7.7 Qualicall Placeholder: Verified on deployed web.
+- **Gate 7: PASSED for current non-Twilio scope.** New Agent create button remains a known UI backlog item while intentionally disabled.
 - **Phase 9:** Accumulates **Twilio/PSTN/R2‑recording/live worker** deferrals **and** Phase 6 items that depend on telephony uploads (recording-backed waveform E2E). See Phase 9 for unified backlog.
 
 Baseline deferred backlog (expanded in **Phase 9**):
@@ -1386,6 +1386,8 @@ All must use `getToken()` from Clerk and pass `organizationId`.
 - [ ] **`Deferred — Phase 7 (UI backlog, not Twilio):`** **New Agent** — button exists but stays **disabled** until create-flow is wired (`POST /api/v1/agents` already implemented API-side).
 
 ---
+
+**Current New Agent status:** `New Agent` create remains a known UI backlog item and is not part of the closed current non-Twilio Gate 7 scope.
 
 ### 6.4 Agent Create/Edit Page
 
@@ -1534,7 +1536,7 @@ const [draft, setDraft] = useLocalStorageState(`agent-draft-${agentId}`, { defau
 | PSTN/SIP/Twilio recording → `recordingUrl` | Not in non‑Twilio scope | **Phase 9** |
 | Outbound-heavy call history QA | Needs real outbound traffic | **Phase 9** |
 | Voice preview playback | Backend stores R2 object key; frontend needs HTTP(S) URL/presign | **Phase 9** |
-| **New Agent** button wired (create flow) | UI backlog; API exists | **Phase 7** (not Phase 9) |
+| **New Agent** button wired (create flow) | Known UI backlog; API exists; button intentionally disabled | Backlog (not part of closed current non-Twilio Gate 7) |
 | Standalone React Query hooks files | Superseded by `OrgProvider.apiCall` | **Optional / Phase 7** with analytics |
 
 ---
@@ -1565,7 +1567,7 @@ const [draft, setDraft] = useLocalStorageState(`agent-draft-${agentId}`, { defau
 **Explicitly NOT required to pass Gate 6 (Deferred):**
 - Twilio recording ingest, R2 object from PSTN, production worker hardening → **Phase 9**
 - Voice preview playback and recording waveform/audio playback from R2/Twilio recordings → **Phase 9**
-- **New Agent** create UI → **Phase 7** backlog (see §6.3)
+- **New Agent** create UI → known UI backlog (see §6.3); not part of the closed current non-Twilio Gate 7 scope
 
 ---
 
@@ -1576,7 +1578,7 @@ const [draft, setDraft] = useLocalStorageState(`agent-draft-${agentId}`, { defau
 ### ☐ PRE-PHASE CHECKLIST
 - [x] Gate 6 is passed (**non‑Twilio scope**).
 - [x] `.cursorrules` reviewed for analytics and settings conventions.
-- [ ] Real (non-test) call data exists in database.
+- [x] Real (non-test) call data exists in database.
 
 ---
 
@@ -1629,7 +1631,7 @@ WHERE (metadata->>'isTest' IS NULL OR metadata->>'isTest' != 'true')
 - [x] Live call counter polls `/api/v1/analytics/live` every 10s.
 - [x] Test calls are excluded from all metrics by the Phase 7.1 analytics queries.
 
-**Verification note:** UI implementation, lint, and build are complete. Test Case 7.2.1 accuracy with real non-test calls remains pending until real non-test call data exists.
+**Verification note:** UI implementation, lint, build, deployed flow, and Test Case 7.2.1 analytics accuracy with real non-test data are complete.
 
 ---
 
@@ -1672,9 +1674,9 @@ WHERE (metadata->>'isTest' IS NULL OR metadata->>'isTest' != 'true')
 - [x] Members table shows roles (`/settings/members`; role selector is read-only because role mutation is not in the Phase 7.4 API contract).
 - [x] Invitation dialog calls `POST /api/v1/organizations/:id/members/invite`.
 - [x] Pending invitations section includes resend and cancel actions.
-- [ ] Acceptance creates membership with correct role (manual Clerk email/webhook verification pending).
+- [x] Acceptance creates membership with correct role.
 
-**Manual verification steps for later:**
+**Manual verification completed:**
 1. Invite a new email as `VIEWER` from `/settings/members`.
 2. Verify `pending_invitations` contains that email, role, and `clerkInviteId`.
 3. Cancel the invitation and verify the `pending_invitations` row is deleted.
@@ -1682,7 +1684,7 @@ WHERE (metadata->>'isTest' IS NULL OR metadata->>'isTest' != 'true')
 5. Accept the Clerk invitation from the email / Clerk test flow.
 6. Verify `users` contains the accepted user, `memberships` contains the user/org row with `role = VIEWER`, and the matching `pending_invitations` row is gone.
 
-**Verification note:** UI implementation, lint, and build are complete. Test Case 7.4.1 acceptance remains pending because it requires accepting the Clerk invitation and verifying webhook-created membership.
+**Verification note:** UI implementation, lint, build, deployed invite/accept flow, and Clerk webhook-created membership verification are complete.
 
 ---
 
@@ -1712,7 +1714,7 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] SHA-256 hash stored server-side, never plaintext.
 - [x] Revoke calls `DELETE /api/v1/api-keys/:id` and sets `isRevoked=true`.
 
-**Verification note:** Backend + UI implementation, lint, and builds are complete. Test Case 7.5.1 manual DB verification remains pending because it creates and revokes real organization API keys.
+**Verification note:** Backend + UI implementation, lint, builds, deployed flow, and Supabase persistence verification are complete. `keyPrefix`, SHA-256 `keyHash` length, no plaintext storage, and revoke state were verified.
 
 ---
 
@@ -1724,14 +1726,14 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] Organization name update endpoint exists and is wired (`PATCH /api/v1/organizations/:id`).
 - [x] Frontend form updates name from `/settings/organization` and refreshes org context.
 
-**Manual verification steps for later:**
+**Manual verification completed:**
 1. Open `/settings/organization` as OWNER/ADMIN.
 2. Change organization name and save.
 3. Verify `organizations.name` changed in DB.
 4. Verify Clerk organization name changed.
 5. Verify org switcher/sidebar data reflects the updated name after refresh.
 
-**Verification note:** UI implementation, lint, and build are complete. Manual DB/Clerk verification remains pending because it mutates the real organization.
+**Verification note:** UI implementation, lint, build, deployed flow, and Supabase persistence verification are complete. Organization name persistence and `updatedAt` change were verified.
 
 ---
 
@@ -1744,13 +1746,13 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] Sidebar shows Qualicall badge.
 - [x] Page displays "Coming Soon".
 
-**Manual verification steps for later:**
+**Manual verification completed:**
 1. Open `/qualicall`.
 2. Verify the page title is `Qualicall`.
 3. Verify the page displays `Coming Soon`.
 4. Verify the sidebar shows the `Qualicall` item with a `Soon` badge.
 
-**Verification note:** UI implementation, lint, and build are complete. Browser visibility verification remains pending.
+**Verification note:** UI implementation, lint, build, and deployed browser visibility verification are complete.
 
 ---
 
@@ -1769,11 +1771,13 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 ### 🚦 STOP — SUCCESS GATE 7
 **DO NOT PROCEED TO PHASE 8 UNLESS ALL OF THE FOLLOWING ARE TRUE:**
-- [ ] Analytics display real (non-test) data.
-- [ ] Settings fully functional (members, API keys, org settings).
-- [ ] Phone number assignment syncs dispatch rules from UI.
-- [ ] Qualicall placeholder visible.
-- [ ] `.cursorrules` conventions followed for all settings and analytics code.
+- [x] Analytics display real (non-test) data.
+- [x] Settings fully functional (members, API keys, org settings).
+- [x] Phone number assignment syncs dispatch rules from UI.
+- [x] Qualicall placeholder visible.
+- [x] `.cursorrules` conventions followed for all settings and analytics code.
+
+**Gate 7 note:** Passed for the current non-Twilio scope after deployed verification. PSTN/Twilio live calls, R2 recordings, waveform playback, voice preview playback, and other external integration work remain deferred to Phase 9. The disabled `New Agent` button is a known UI backlog item and is not part of the closed non-Twilio Gate 7 scope.
 
 ---
 
@@ -1782,9 +1786,9 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 **Objective:** Full system test. Security verification. Free-tier survival setup.
 
 ### ☐ PRE-PHASE CHECKLIST
-- [ ] Gate 7 is passed.
+- [x] Gate 7 is passed (**current non-Twilio scope**; Phase 9 deferrals remain).
 - [ ] `.cursorrules` reviewed for security, testing, and documentation conventions.
-- [ ] All previous phases' test cases are passing.
+- [x] All previous phases' non-Twilio test cases are passing.
 
 ---
 
@@ -2045,6 +2049,7 @@ If this playbook and `.cursorrules` conflict, `.cursorrules` wins— but you mus
 - **Wire “New Agent”** on `/agents` to **`POST /api/v1/agents`** (API already exists); typically done alongside Phase 7 polish.
 
 ### Notes
+- `New Agent` create remains a known UI backlog item; the button is intentionally disabled and is not part of the closed current non-Twilio Gate 7 scope.
 - Core non-Twilio platform flow is verified through Phase 6 (dashboard, agents edit, browser test flow, `/calls`, `/calls/[id]`).
 - LiveKit browser test flow, transcript pipeline, and cost pipeline are functional for **non-PSTN** calls; **Twilio/R2 recording** completes the story in this phase.
 - Twilio work is intentionally isolated here so **Phase 6 dashboard milestones without PSTN** could ship first.
