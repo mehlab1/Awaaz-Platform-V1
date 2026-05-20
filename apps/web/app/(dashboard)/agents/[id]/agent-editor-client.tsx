@@ -103,6 +103,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [saveBusy, setSaveBusy] = useState<'version' | 'publish' | 'phone' | null>(
     null,
   );
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -214,6 +216,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    return () => {
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+      }
+    };
+  }, [previewObjectUrl]);
 
   const versionPanelBusy = versionMutating !== null;
 
@@ -367,29 +377,43 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
-  const selectedPreviewUrl = selectedVoice?.previewAudioUrl;
-  const canPlayVoicePreview =
-    typeof selectedPreviewUrl === 'string' &&
-    /^https?:\/\//.test(selectedPreviewUrl);
 
-  const playVoicePreview = () => {
-    const url = selectedPreviewUrl;
-    if (!url || !/^https?:\/\//.test(url)) {
-      setToast(
-        selectedVoice
-          ? 'No playable preview URL for this voice yet (sync voices with storage configured).'
-          : 'Pick a voice to preview.',
-      );
+  const playVoicePreview = async () => {
+    if (!selectedVoice) {
+      setToast('Pick a voice to preview.');
       return;
     }
+
     const el = previewAudioRef.current;
     if (!el) {
       return;
     }
-    el.src = url;
-    void el.play().catch(() => {
-      setToast('Could not play preview.');
-    });
+
+    setPreviewBusy(true);
+    try {
+      const res = await apiCall('/api/v1/voices/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId: selectedVoice.rimeVoiceId }),
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res));
+      }
+
+      const audioBlob = await res.blob();
+      const nextUrl = URL.createObjectURL(audioBlob);
+      if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+      }
+      setPreviewObjectUrl(nextUrl);
+      el.src = nextUrl;
+      await el.play();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setToast(message || 'Could not play preview.');
+    } finally {
+      setPreviewBusy(false);
+    }
   };
 
   const attachedPhones = phones.filter(
@@ -586,7 +610,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             <CardHeader className="pb-2">
               <CardTitle>Voice</CardTitle>
               <CardDescription>
-                Playback uses <code className="text-xs">previewAudioUrl</code> when synced.
+                Preview uses live Rime audio without storing files.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -610,15 +634,15 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   type="button"
                   size="sm"
                   variant="secondary"
-                  onClick={playVoicePreview}
-                  disabled={!selectedVoiceId || !canPlayVoicePreview}
+                  onClick={() => void playVoicePreview()}
+                  disabled={!selectedVoiceId || previewBusy}
                   title={
-                    canPlayVoicePreview
+                    selectedVoiceId
                       ? 'Play this voice preview.'
-                      : 'Voice preview playback is deferred until preview URLs are playable.'
+                      : 'Select a voice first.'
                   }
                 >
-                  Play preview
+                  {previewBusy ? 'Loading preview...' : 'Play preview'}
                 </Button>
                 <audio ref={previewAudioRef} className="hidden" preload="none" />
               </div>
@@ -854,4 +878,29 @@ function safeFormatDt(iso: string): string {
     return iso;
   }
   return format(d, 'MMM d yyyy HH:mm');
+}
+
+async function readApiError(res: Response): Promise<string> {
+  const fallback = res.statusText || 'Preview generation failed.';
+  const raw = await res.text();
+  if (!raw.trim()) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { message?: unknown; error?: unknown };
+    if (typeof parsed.message === 'string') {
+      return parsed.message;
+    }
+    if (Array.isArray(parsed.message)) {
+      return parsed.message.join(', ');
+    }
+    if (typeof parsed.error === 'string') {
+      return parsed.error;
+    }
+  } catch {
+    return raw;
+  }
+
+  return fallback;
 }

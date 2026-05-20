@@ -1,8 +1,18 @@
-import { Controller, Get, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Post,
+  Req,
+  Res,
+  StreamableFile,
+} from '@nestjs/common';
 import { Role } from '@prisma/client';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import { Roles } from '../common/roles.decorator';
+import { VoicePreviewDto } from './dto/voice-preview.dto';
 import { VoicesService } from './voices.service';
 
 @Controller('api/v1/voices')
@@ -21,5 +31,23 @@ export class VoicesController {
   sync(@Req() req: Request) {
     void req.organizationId;
     return this.voices.sync();
+  }
+
+  @Post('preview')
+  @HttpCode(200)
+  @Roles(Role.VIEWER)
+  async preview(
+    @Req() req: Request,
+    @Body() dto: VoicePreviewDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    void req.organizationId;
+    const audio = await this.voices.preview(dto.voiceId);
+    res.set({
+      'Cache-Control': 'no-store',
+      'Content-Length': audio.byteLength.toString(),
+      'Content-Type': 'audio/wav',
+    });
+    return new StreamableFile(Buffer.from(audio));
   }
 }

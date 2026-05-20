@@ -32,7 +32,10 @@ export class MembersService {
 
   async listMembers(organizationId: string) {
     const memberships = await this.prisma.membership.findMany({
-      where: { organizationId },
+      where: {
+        organizationId,
+        user: { email: { not: null } },
+      },
       include: { user: true },
       orderBy: { createdAt: 'asc' },
     });

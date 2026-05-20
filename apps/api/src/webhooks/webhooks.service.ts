@@ -99,6 +99,9 @@ export class WebhooksService {
       case 'organizationMembership.updated':
         await this.onOrganizationMembershipUpserted(evt.data);
         return;
+      case 'organizationMembership.deleted':
+        await this.onOrganizationMembershipDeleted(evt.data);
+        return;
       default:
         return;
     }
@@ -189,14 +192,23 @@ export class WebhooksService {
     if (typeof id !== 'string' || id.length === 0) {
       return;
     }
-    await this.prisma.user.updateMany({
-      where: { id },
-      data: {
-        email: null,
-        firstName: null,
-        lastName: null,
-        imageUrl: null,
-      },
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.membership.deleteMany({
+        where: {
+          userId: id,
+          role: { not: Role.OWNER },
+        },
+      });
+      await tx.user.updateMany({
+        where: { id },
+        data: {
+          email: null,
+          firstName: null,
+          lastName: null,
+          imageUrl: null,
+        },
+      });
     });
   }
 
@@ -353,5 +365,39 @@ export class WebhooksService {
         email,
       },
     });
+  }
+
+  private async onOrganizationMembershipDeleted(
+    data: OrganizationMembershipJSON,
+  ): Promise<void> {
+    const org = await this.prisma.organization.findUnique({
+      where: { clerkOrganizationId: data.organization.id },
+      select: { id: true },
+    });
+    if (!org) {
+      this.logger.warn(
+        `No DB organization for Clerk org ${data.organization.id}`,
+      );
+      return;
+    }
+
+    const userId = data.public_user_data.user_id;
+    if (!userId) {
+      return;
+    }
+
+    const deleted = await this.prisma.membership.deleteMany({
+      where: {
+        userId,
+        organizationId: org.id,
+        role: { not: Role.OWNER },
+      },
+    });
+
+    if (deleted.count === 0) {
+      this.logger.warn(
+        `Skipped deleting Clerk membership ${data.id}; membership missing or OWNER-protected`,
+      );
+    }
   }
 }

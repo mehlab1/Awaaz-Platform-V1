@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
@@ -18,6 +18,23 @@ export class VoicesService {
     return this.prisma.voice.findMany({
       where: { isActive: true },
       orderBy: { name: 'asc' },
+    });
+  }
+
+  async preview(voiceId: string): Promise<Uint8Array> {
+    const voice = await this.prisma.voice.findUnique({
+      where: { rimeVoiceId: voiceId },
+    });
+    if (!voice?.isActive) {
+      throw new NotFoundException('Voice not found');
+    }
+
+    return this.rime.synthesizePreview({
+      rimeVoiceId: voice.rimeVoiceId,
+      name: voice.name,
+      description: voice.description ?? undefined,
+      language: voice.language,
+      gender: voice.gender ?? undefined,
     });
   }
 
