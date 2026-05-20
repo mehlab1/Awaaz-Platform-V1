@@ -9,5 +9,6 @@ import { VoicesService } from './voices.service';
   imports: [StorageModule],
   controllers: [VoicesController],
   providers: [RimeService, VoicesService],
+  exports: [RimeService],
 })
 export class VoicesModule {}

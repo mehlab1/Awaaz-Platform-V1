@@ -1,6 +1,7 @@
 'use client';
 
 import { useOrgContext } from '@/components/org-context';
+import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
 
 export function OrgSwitcher() {
   const {
@@ -34,6 +35,12 @@ export function OrgSwitcher() {
           ))}
         </select>
       ) : null}
+      <div className="mt-3">
+        <CreateOrganizationDialog
+          variant="outline"
+          buttonLabel={orgs.length > 0 ? 'Create another organization' : 'Create organization'}
+        />
+      </div>
     </div>
   );
 }

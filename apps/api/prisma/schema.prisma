@@ -309,6 +309,8 @@ model Voice {
   name           String
   description    String?
   language       String   @default("en")
+  lang           String?
+  modelId        String?
   gender         String?
   previewAudioUrl String?  // R2 presigned-compatible key
   isActive       Boolean  @default(true)

@@ -10,6 +10,7 @@ import {
 } from 'react';
 
 import { useAuth } from '@clerk/nextjs';
+import { z } from 'zod';
 import useLocalStorageState from 'use-local-storage-state';
 
 import { apiFetch } from '@/lib/api';
@@ -27,8 +28,19 @@ interface OrgContextValue {
   setActiveOrgId: (value: string | undefined) => void;
   loadingOrgs: boolean;
   refreshOrgs: () => Promise<void>;
+  createOrganization: (input: {
+    name: string;
+    slug?: string;
+  }) => Promise<OrgSummary>;
   apiCall: (path: string, init?: RequestInit) => Promise<Response>;
 }
+
+const organizationSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  role: z.string(),
+});
 
 const OrgContext = createContext<OrgContextValue | null>(null);
 
@@ -58,6 +70,39 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
       setLoadingOrgs(false);
     }
   }, [getToken, isLoaded]);
+
+  const createOrganization = useCallback(
+    async (input: { name: string; slug?: string }) => {
+      const response = await apiFetch('/api/v1/organizations', {
+        method: 'POST',
+        getToken,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: input.name.trim(),
+          ...(input.slug?.trim() ? { slug: input.slug.trim() } : {}),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await responseMessage(response));
+      }
+
+      const data: unknown = await response.json();
+      const created = organizationSchema.parse(data);
+      const normalized: OrgSummary = {
+        id: created.id,
+        name: created.name,
+        slug: created.slug,
+        role: created.role,
+      };
+
+      await refreshOrgs();
+      setActiveOrgId(normalized.id);
+
+      return normalized;
+    },
+    [getToken, refreshOrgs, setActiveOrgId],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -103,9 +148,18 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
       setActiveOrgId,
       loadingOrgs,
       refreshOrgs,
+      createOrganization,
       apiCall,
     }),
-    [orgs, activeOrgId, setActiveOrgId, loadingOrgs, refreshOrgs, apiCall],
+    [
+      orgs,
+      activeOrgId,
+      setActiveOrgId,
+      loadingOrgs,
+      refreshOrgs,
+      createOrganization,
+      apiCall,
+    ],
   );
 
   return (
@@ -119,4 +173,9 @@ export function useOrgContext(): OrgContextValue {
     throw new Error('useOrgContext must be used within OrgProvider');
   }
   return ctx;
+}
+
+async function responseMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  return text.trim() || `Request failed (${response.status})`;
 }

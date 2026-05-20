@@ -39,20 +39,26 @@ export function InviteMemberDialog({
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<InviteMemberInput['role']>('VIEWER');
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (open) {
       return;
     }
     setError(null);
+    setSubmitting(false);
   }, [open]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (submitting || isBusy) {
+      return;
+    }
     if (!isEmail(email)) {
       setError('Enter a valid email address.');
       return;
     }
+    setSubmitting(true);
     try {
       await onSubmit({ email, role });
       setEmail('');
@@ -60,8 +66,12 @@ export function InviteMemberDialog({
       setOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
     }
   };
+
+  const busy = isBusy || submitting;
 
   return (
     <>
@@ -73,7 +83,7 @@ export function InviteMemberDialog({
         <UserPlus />
         Invite Member
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(nextOpen) => !busy && setOpen(nextOpen)}>
         <DialogContent className="sm:max-w-md">
           <form onSubmit={submit} className="space-y-4">
             <DialogHeader>
@@ -88,6 +98,7 @@ export function InviteMemberDialog({
                 className={FIELD_CLASS}
                 type="email"
                 value={email}
+                disabled={busy}
                 onChange={(event) => setEmail(event.target.value)}
               />
             </label>
@@ -96,6 +107,7 @@ export function InviteMemberDialog({
               <select
                 className={FIELD_CLASS}
                 value={role}
+                disabled={busy}
                 onChange={(event) =>
                   setRole(event.target.value as InviteMemberInput['role'])
                 }
@@ -112,13 +124,13 @@ export function InviteMemberDialog({
               <Button
                 type="button"
                 variant="outline"
-                disabled={isBusy}
+                disabled={busy}
                 onClick={() => setOpen(false)}
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={isBusy}>
-                {isBusy ? 'Sending...' : 'Send Invite'}
+              <Button type="submit" disabled={busy}>
+                {busy ? 'Sending...' : 'Send Invite'}
               </Button>
             </DialogFooter>
           </form>

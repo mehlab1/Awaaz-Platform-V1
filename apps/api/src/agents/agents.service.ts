@@ -4,7 +4,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { AuditAction, Prisma } from '@prisma/client';
+import { AuditAction, Prisma, CallStatus } from '@prisma/client';
 
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
@@ -349,10 +349,38 @@ export class AgentsService {
     }
 
     try {
-      return await this.liveKitBrowserTest.issueBrowserParticipantSession({
+      const session = await this.liveKitBrowserTest.issueBrowserParticipantSession({
         agentId,
         organizationId,
       });
+
+      // Persist an initial call row so the Calls UI can show the test call immediately.
+      try {
+        await this.prisma.call.create({
+          data: {
+            organizationId,
+            agentId,
+            agentVersionId: agent.currentVersion?.id ?? null,
+            liveKitRoomId: session.roomName,
+            direction: 'INBOUND',
+            status: CallStatus.INITIATED,
+            fromNumber: 'browser-preview',
+            toNumber: null,
+            metadata: {
+              source: 'awaaz_browser_test_call',
+              isTest: true,
+              isTestCall: true,
+            },
+          },
+        });
+      } catch (error) {
+        // Non-fatal: log and continue. Worker startCall upsert will reconcile.
+        /* eslint-disable no-console */
+        console.warn('Could not persist initial test call row:', error instanceof Error ? error.message : String(error));
+        /* eslint-enable no-console */
+      }
+
+      return session;
     } catch (error: unknown) {
       if (error instanceof ServiceUnavailableException) {
         throw error;

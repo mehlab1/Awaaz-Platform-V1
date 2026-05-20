@@ -130,7 +130,7 @@ export function useAnalytics(): AnalyticsQueries {
     callsTrendSchema,
     apiCall,
     enabled,
-    300_000,
+    60_000,
   );
   const costs = useAnalyticsQuery(
     activeOrgId,
@@ -138,7 +138,7 @@ export function useAnalytics(): AnalyticsQueries {
     costsSchema,
     apiCall,
     enabled,
-    300_000,
+    60_000,
   );
   const latency = useAnalyticsQuery(
     activeOrgId,
@@ -187,6 +187,7 @@ function useAnalyticsQuery<T extends z.ZodType>(
   return useQuery({
     queryKey: ['analytics', endpoint, organizationId],
     enabled,
+    refetchInterval: enabled ? staleTime : false,
     staleTime,
     queryFn: () => fetchAnalytics(endpoint, schema, apiCall),
   });

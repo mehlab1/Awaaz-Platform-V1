@@ -4,17 +4,29 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import Redis from 'ioredis';
 import type { RedisOptions } from 'ioredis';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { createRedisConnection } from '../queues/redis-connection';
 
+const ANALYTICS_CACHE_VERSION = 'v2';
 const OVERVIEW_TTL_SECONDS = 60;
 const ONE_MINUTE_TTL_SECONDS = 60;
-const FIVE_MINUTES_TTL_SECONDS = 5 * 60;
 const TREND_DAYS = 30;
 const COST_MONTHS = 12;
+
+const ANALYTICS_CALL_SCOPE = Prisma.sql`
+  AND (
+    c."fromNumber" = 'browser-preview'
+    OR c."metadata"->>'source' = 'awaaz_browser_test_call'
+    OR (
+      (c."metadata"->>'isTest' IS NULL OR c."metadata"->>'isTest' != 'true')
+      AND (c."metadata"->>'isTestCall' IS NULL OR c."metadata"->>'isTestCall' != 'true')
+    )
+  )
+`;
 
 type OverviewWindowKey = 'today' | 'last7Days' | 'last30Days';
 
@@ -128,8 +140,7 @@ export class AnalyticsService implements OnModuleDestroy {
               FROM "calls" c
               WHERE c."organizationId" = ${organizationId}
                 AND c."createdAt" >= ${from}
-                AND (c."metadata"->>'isTest' IS NULL OR c."metadata"->>'isTest' != 'true')
-                AND (c."metadata"->>'isTestCall' IS NULL OR c."metadata"->>'isTestCall' != 'true')
+                ${ANALYTICS_CALL_SCOPE}
             `;
             return [key, summaryFromRow(rows[0])] as const;
           }),
@@ -150,7 +161,7 @@ export class AnalyticsService implements OnModuleDestroy {
     return this.cached(
       organizationId,
       'calls-trend',
-      FIVE_MINUTES_TTL_SECONDS,
+      ONE_MINUTE_TTL_SECONDS,
       async () => {
         const start = daysAgoUtcStart(new Date(), TREND_DAYS - 1);
         const rows = await this.prisma.$queryRaw<TrendRow[]>`
@@ -171,8 +182,7 @@ export class AnalyticsService implements OnModuleDestroy {
             FROM "calls" c
             WHERE c."organizationId" = ${organizationId}
               AND c."createdAt" >= ${start}
-              AND (c."metadata"->>'isTest' IS NULL OR c."metadata"->>'isTest' != 'true')
-              AND (c."metadata"->>'isTestCall' IS NULL OR c."metadata"->>'isTestCall' != 'true')
+              ${ANALYTICS_CALL_SCOPE}
             GROUP BY 1
           )
           SELECT
@@ -206,7 +216,7 @@ export class AnalyticsService implements OnModuleDestroy {
     return this.cached(
       organizationId,
       'costs',
-      FIVE_MINUTES_TTL_SECONDS,
+      ONE_MINUTE_TTL_SECONDS,
       async () => {
         const start = utcStartOfMonth(new Date(), COST_MONTHS - 1);
         const rows = await this.prisma.$queryRaw<CostRow[]>`
@@ -228,8 +238,7 @@ export class AnalyticsService implements OnModuleDestroy {
             FROM "calls" c
             WHERE c."organizationId" = ${organizationId}
               AND c."createdAt" >= ${start}
-              AND (c."metadata"->>'isTest' IS NULL OR c."metadata"->>'isTest' != 'true')
-              AND (c."metadata"->>'isTestCall' IS NULL OR c."metadata"->>'isTestCall' != 'true')
+              ${ANALYTICS_CALL_SCOPE}
             GROUP BY 1
           )
           SELECT
@@ -279,8 +288,7 @@ export class AnalyticsService implements OnModuleDestroy {
           WHERE c."organizationId" = ${organizationId}
             AND ce."eventType" = 'AGENT_SPEECH'::"EventType"
             AND ce."latencyMs" IS NOT NULL
-            AND (c."metadata"->>'isTest' IS NULL OR c."metadata"->>'isTest' != 'true')
-            AND (c."metadata"->>'isTestCall' IS NULL OR c."metadata"->>'isTestCall' != 'true')
+            ${ANALYTICS_CALL_SCOPE}
         `;
 
         const row = rows[0];
@@ -314,8 +322,7 @@ export class AnalyticsService implements OnModuleDestroy {
           FROM "calls" c
           INNER JOIN "agents" a ON a."id" = c."agentId"
           WHERE c."organizationId" = ${organizationId}
-            AND (c."metadata"->>'isTest' IS NULL OR c."metadata"->>'isTest' != 'true')
-            AND (c."metadata"->>'isTestCall' IS NULL OR c."metadata"->>'isTestCall' != 'true')
+            ${ANALYTICS_CALL_SCOPE}
           GROUP BY a."id", a."name"
           ORDER BY COUNT(c."id") DESC, a."name" ASC
           LIMIT 5
@@ -343,8 +350,7 @@ export class AnalyticsService implements OnModuleDestroy {
       FROM "calls" c
       WHERE c."organizationId" = ${organizationId}
         AND c."status" = 'IN_PROGRESS'::"CallStatus"
-        AND (c."metadata"->>'isTest' IS NULL OR c."metadata"->>'isTest' != 'true')
-        AND (c."metadata"->>'isTestCall' IS NULL OR c."metadata"->>'isTestCall' != 'true')
+        ${ANALYTICS_CALL_SCOPE}
     `;
     return {
       generatedAt: new Date().toISOString(),
@@ -362,7 +368,7 @@ export class AnalyticsService implements OnModuleDestroy {
       return compute();
     }
 
-    const key = `analytics:v1:${organizationId}:${name}`;
+    const key = `analytics:${ANALYTICS_CACHE_VERSION}:${organizationId}:${name}`;
     try {
       const cached = await this.redis.get(key);
       if (cached) {

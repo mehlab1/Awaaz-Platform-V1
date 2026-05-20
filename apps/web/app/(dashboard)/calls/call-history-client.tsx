@@ -91,6 +91,7 @@ export function CallHistoryClient() {
   const [phoneQuery, setPhoneQuery] = useState('');
 
   const [page, setPage] = useState(1);
+  const [reloadKey, setReloadKey] = useState(0);
   const [payload, setPayload] = useState<CallsListPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -194,7 +195,17 @@ export function CallHistoryClient() {
     return () => {
       cancelled = true;
     };
-  }, [activeOrgId, apiCall, queryPath, page]);
+  }, [activeOrgId, apiCall, queryPath, page, reloadKey]);
+
+  useEffect(() => {
+    const handler = () => setReloadKey((k) => k + 1);
+    window.addEventListener('awaaz:call-started', handler as EventListener);
+    window.addEventListener('awaaz:call-ended', handler as EventListener);
+    return () => {
+      window.removeEventListener('awaaz:call-started', handler as EventListener);
+      window.removeEventListener('awaaz:call-ended', handler as EventListener);
+    };
+  }, []);
 
   const filterActive = useMemo(() => {
     return (
@@ -245,10 +256,7 @@ export function CallHistoryClient() {
       <header>
         <h1 className="font-semibold text-2xl tracking-tight">Calls</h1>
         <p className="mt-1 max-w-2xl text-muted-foreground text-sm">
-          Call history (spec §13). Browser previews use synthetic From/To
-          values (`browser-preview`) and surface a{' '}
-          <span className="font-medium text-foreground">Test</span> badge when
-          `metadata.isTestCall` / `metadata.isTest` is set.
+          Review recent calls, test sessions, transcripts, and call outcomes.
         </p>
       </header>
 

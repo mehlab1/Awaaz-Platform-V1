@@ -49,6 +49,7 @@ export class LiveKitBrowserTestService {
     );
     const participantIdentity = `browser-test-${suffix}`;
     const roomMetadata = JSON.stringify({
+      source: 'awaaz_browser_test_call',
       agentId: params.agentId,
       organizationId: params.organizationId,
       direction: 'INBOUND',

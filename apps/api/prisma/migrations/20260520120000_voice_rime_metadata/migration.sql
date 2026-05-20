@@ -1,0 +1,2 @@
+ALTER TABLE "voices" ADD COLUMN "lang" TEXT;
+ALTER TABLE "voices" ADD COLUMN "modelId" TEXT;

@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -22,24 +23,31 @@ export interface RimeVoice {
 
 @Injectable()
 export class RimeService {
+  private readonly logger = new Logger(RimeService.name);
+
   constructor(private readonly config: ConfigService) {}
 
   async listVoices(): Promise<RimeVoice[]> {
-    const response = await fetch(RIME_VOICES_URL, {
-      headers: {
-        Authorization: `Bearer ${this.apiKey()}`,
-      },
+    const response = await this.fetchRime(RIME_VOICES_URL, {
+      headers: { Authorization: `Bearer ${this.apiKey()}` },
     });
     if (!response.ok) {
+      const detail = await this.responseErrorText(response);
+      this.logger.warn(`Rime voices request failed: ${response.status} ${detail}`);
       throw new ServiceUnavailableException(
-        `Rime voices request failed with ${response.status}`,
+        `Rime voices request failed with ${response.status}: ${detail}`,
       );
     }
-    return this.normalizeVoices(await response.json());
+    const voices = this.normalizeVoices(await response.json());
+    this.logger.log(`Rime voices loaded: ${voices.length}`);
+    return voices;
   }
 
   async synthesizePreview(voice: RimeVoice): Promise<Uint8Array> {
-    const response = await fetch(RIME_TTS_URL, {
+    const modelId = voice.modelId ?? 'mistv2';
+    const lang = voice.lang ?? 'eng';
+
+    const response = await this.fetchRime(RIME_TTS_URL, {
       method: 'POST',
       headers: {
         Accept: 'audio/pcm',
@@ -48,26 +56,53 @@ export class RimeService {
       },
       body: JSON.stringify({
         text: 'Hello, this is an Awaaz voice preview.',
-        modelId: voice.modelId ?? 'mistv2',
+        modelId,
         speaker: voice.rimeVoiceId,
-        lang: voice.lang ?? 'eng',
+        lang,
         samplingRate: SAMPLE_RATE,
         speedAlpha: 1,
       }),
     });
     if (!response.ok) {
+      const detail = await this.responseErrorText(response);
+      this.logger.warn(
+        `Rime preview failed for speaker=${voice.rimeVoiceId} modelId=${modelId} lang=${lang}: ${response.status} ${detail}`,
+      );
       throw new ServiceUnavailableException(
-        `Rime preview request failed with ${response.status}`,
+        `Rime preview request failed with ${response.status}: ${detail}`,
       );
     }
 
     const pcm = new Uint8Array(await response.arrayBuffer());
+    const contentType = response.headers.get('content-type') ?? 'unknown';
+    if (pcm.byteLength === 0) {
+      this.logger.warn(
+        `Rime preview returned empty audio speaker=${voice.rimeVoiceId} modelId=${modelId} lang=${lang} contentType=${contentType}`,
+      );
+      throw new ServiceUnavailableException('Rime preview returned empty audio');
+    }
+    if (
+      !contentType.includes('audio') &&
+      !contentType.includes('octet-stream') &&
+      !contentType.includes('wav')
+    ) {
+      this.logger.warn(
+        `Rime preview returned unexpected content type speaker=${voice.rimeVoiceId} modelId=${modelId} lang=${lang} contentType=${contentType} bytes=${pcm.byteLength}`,
+      );
+      throw new ServiceUnavailableException(
+        `Rime preview returned unexpected content type: ${contentType}`,
+      );
+    }
+    this.logger.log(
+      `Rime preview succeeded speaker=${voice.rimeVoiceId} modelId=${modelId} lang=${lang} bytes=${pcm.byteLength} contentType=${contentType}`,
+    );
     return this.wavFromPcm(pcm);
   }
 
   private apiKey(): string {
-    const apiKey = this.config.get<string>('RIME_API_KEY');
+    const apiKey = this.config.get<string>('RIME_API_KEY')?.trim();
     if (!apiKey) {
+      this.logger.error('RIME_API_KEY is not configured for backend Rime calls');
       throw new ServiceUnavailableException('RIME_API_KEY is not configured');
     }
     return apiKey;
@@ -165,5 +200,42 @@ export class RimeService {
     for (let index = 0; index < value.length; index += 1) {
       view.setUint8(offset + index, value.charCodeAt(index));
     }
+  }
+
+  private async fetchRime(
+    url: string,
+    init: RequestInit,
+  ): Promise<Response> {
+    try {
+      return await fetch(url, init);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Rime network request failed: ${message}`);
+      throw new ServiceUnavailableException(
+        `Rime network request failed: ${message}`,
+      );
+    }
+  }
+
+  private async responseErrorText(response: Response): Promise<string> {
+    const fallback = response.statusText || 'Unknown Rime error';
+    const raw = await response.text();
+    if (!raw.trim()) {
+      return fallback;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as { error?: unknown; message?: unknown };
+      if (typeof parsed.error === 'string') {
+        return parsed.error;
+      }
+      if (typeof parsed.message === 'string') {
+        return parsed.message;
+      }
+    } catch {
+      return raw.slice(0, 500);
+    }
+
+    return raw.slice(0, 500);
   }
 }

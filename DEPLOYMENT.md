@@ -49,6 +49,13 @@ Required Render variables:
 - `DEEPGRAM_API_KEY`
 - `RIME_API_KEY`
 
+Service ownership notes:
+
+- Render API owns `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `LIVEKIT_*`, `WORKER_SECRET`, `REDIS_URL`, `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, and `RIME_API_KEY`.
+- Vercel frontend only needs `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`; it should never receive secret Clerk or Rime keys.
+- The local Python worker must also load the LiveKit, Deepgram, Groq, and Rime keys if you want the browser/local voice path to work end to end.
+- Any Render env change requires a redeploy or restart before the API sees the new value.
+
 R2 variables are optional until Phase 9 recording/preview verification:
 
 - `CLOUDFLARE_R2_ACCOUNT_ID`
@@ -103,6 +110,7 @@ Configure:
 - Clerk webhook endpoint: `https://YOUR_RENDER_API/webhooks/clerk`.
 - Webhook signing secret in Render as `CLERK_WEBHOOK_SECRET`.
 - Organization invitations enabled for the app.
+- Invitation creation logs now distinguish Clerk creation, Clerk preflight, and DB persistence so a successful API response can still be separated from delayed mail delivery in Clerk.
 
 Security smoke check:
 

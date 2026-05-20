@@ -10,6 +10,7 @@ import type { Queue } from 'bullmq';
 import { PrismaService } from '../prisma/prisma.service';
 import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
 import type { TranscriptJobData } from '../queues/transcript.processor';
+import { RimeService } from '../voices/rime.service';
 import type { CallEventDto } from './dto/call-event.dto';
 import type { EndCallDto } from './dto/end-call.dto';
 import type { StartCallDto } from './dto/start-call.dto';
@@ -22,6 +23,7 @@ export class InternalService {
     private readonly prisma: PrismaService,
     @InjectQueue(TRANSCRIPT_QUEUE)
     private readonly transcriptQueue: Queue<TranscriptJobData>,
+    private readonly rime: RimeService,
   ) {}
 
   async getAgentConfig(agentId: string) {
@@ -34,11 +36,14 @@ export class InternalService {
     }
 
     const version = agent.currentVersion;
+    const voice = await this.resolveVoiceMetadata(version.voiceId);
     return {
       agentId: agent.id,
       organizationId: agent.organizationId,
       systemPrompt: version.systemPrompt,
       voiceId: version.voiceId,
+      voiceModelId: voice?.modelId,
+      voiceLang: voice?.lang,
       model: version.model,
       temperature: version.temperature,
       maxTokens: version.maxTokens,
@@ -175,5 +180,41 @@ export class InternalService {
 
   private toJson(value: Record<string, unknown> | undefined): Prisma.InputJsonValue | undefined {
     return value === undefined ? undefined : (value as Prisma.InputJsonObject);
+  }
+
+  private async resolveVoiceMetadata(
+    voiceId: string,
+  ): Promise<{ modelId: string | null; lang: string | null } | null> {
+    const cached = await this.prisma.voice.findUnique({
+      where: { rimeVoiceId: voiceId },
+      select: { modelId: true, lang: true },
+    });
+    if (cached?.modelId && cached.lang) {
+      return cached;
+    }
+
+    try {
+      const voices = await this.rime.listVoices();
+      const fresh = voices.find((voice) => voice.rimeVoiceId === voiceId);
+      if (!fresh) {
+        return cached;
+      }
+      await this.prisma.voice.updateMany({
+        where: { rimeVoiceId: voiceId },
+        data: {
+          modelId: fresh.modelId,
+          lang: fresh.lang,
+          language: fresh.language,
+        },
+      });
+      return {
+        modelId: fresh.modelId ?? null,
+        lang: fresh.lang ?? null,
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to resolve Rime metadata for ${voiceId}: ${message}`);
+      return cached;
+    }
   }
 }

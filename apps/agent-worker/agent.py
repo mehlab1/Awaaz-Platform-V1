@@ -49,7 +49,11 @@ class AwaazAgent:
         )
         call_id = string_value(call, "id")
 
-        rime = RimeTTS(voice_id=required_string(config, "voiceId", "mist-default"))
+        rime = RimeTTS(
+            voice_id=required_string(config, "voiceId", "mist-default"),
+            model_id=required_string(config, "voiceModelId", "mistv2"),
+            language=required_string(config, "voiceLang", "eng"),
+        )
         assistant = create_assistant(config, rime, AwaazTools(ctx))
         register_events(assistant, api, call_id)
 

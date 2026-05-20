@@ -182,7 +182,16 @@ export function TestCallModal(props: TestCallModalProps) {
           );
         }
         const dto = await res.json();
-        setSession(readSessionDto(dto));
+          const sessionDto = readSessionDto(dto);
+          setSession(sessionDto);
+          try {
+            // notify other UI components that a call has started so calls list can refresh
+            window.dispatchEvent(
+              new CustomEvent('awaaz:call-started', { detail: { roomName: sessionDto.roomName } }),
+            );
+          } catch {
+            /* ignore */
+          }
         setRtcPhase('connecting');
       } catch (e) {
         if (aborted) {
@@ -218,6 +227,16 @@ export function TestCallModal(props: TestCallModalProps) {
         return 'connecting';
     }
   }, [fetchFailed, rtcPhase, session]);
+
+  useEffect(() => {
+    if (rtcPhase === 'ended') {
+      try {
+        window.dispatchEvent(new CustomEvent('awaaz:call-ended'));
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [rtcPhase]);
 
   const badgeVariant =
     badgePhase === 'active'
@@ -342,6 +361,7 @@ export function TestCallModal(props: TestCallModalProps) {
           </Button>
         </footer>
       ) : null}
+      {/* rtcPhase changes are observed via effect to dispatch call-ended events */}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
 import { useOrganizationSettings } from '@/hooks/use-organization-settings';
 
 const FIELD_CLASS =
@@ -42,10 +43,15 @@ export function OrganizationSettingsClient() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Organization</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Update the active organization name.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Organization</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Update the active organization name or create another workspace.
+            </p>
+          </div>
+          <CreateOrganizationDialog variant="outline" />
+        </div>
       </header>
 
       <StatusLine
