@@ -2,7 +2,7 @@
 
 Awaaz V1 is a multi-tenant AI voice agent platform for configuring agents, running browser-based LiveKit test calls, reviewing call history, and monitoring analytics/settings for organizations.
 
-Current verified scope: non-Twilio dashboard and browser test-call flow through Phase 8.7, with Phase 8.3 free-tier survival setup prepared for manual UptimeRobot configuration. Twilio/PSTN calls, R2 recording upload/download, voice preview playback, and real recording waveform/audio playback are deferred to Phase 9.
+Current verified scope: non-Twilio dashboard and browser test-call flow through Phase 8.7, with Phase 8.3 free-tier survival setup prepared for manual UptimeRobot configuration. Cloudflare R2 storage, presigned playback URLs, CORS/range requests, and WaveSurfer browser playback readiness are verified. Twilio/PSTN calls, Twilio recording ingestion into R2, real call recording lifecycle, and production worker deployment remain deferred to Phase 9.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ flowchart LR
   Worker -->|internal calls + WORKER_SECRET| API
   API --> Clerk[Clerk users/orgs/webhooks]
   API -. Phase 9 .-> Twilio[Twilio/PSTN]
-  API -. Phase 9 .-> R2[Cloudflare R2 recordings/previews]
+  API --> R2[Verified Cloudflare R2 storage/playback]
 ```
 
 ## Apps
@@ -38,6 +38,7 @@ flowchart LR
 - API key prefix/hash/one-time reveal/revoke lifecycle.
 - Organization name persistence.
 - Qualicall placeholder.
+- Cloudflare R2 bucket `awaaz-recordings`, upload/download, HeadObject, presigned HEAD/GET/range, CORS headers, bytes-matched WAV retrieval, WaveSurfer readiness, and recording endpoint compatibility.
 - Phase 8.2 non-Twilio security audit and 8.6 database verification.
 
 ## Known Backlog
@@ -48,9 +49,8 @@ flowchart LR
 
 - Twilio/PSTN inbound and outbound real calls.
 - Twilio webhook production flow.
-- R2 recording upload/download.
-- Voice preview playback from playable/presigned URLs.
-- Real recording waveform/audio playback from Twilio/R2 recordings.
+- Twilio/PSTN recording ingestion into the verified R2 bucket.
+- Real call recording lifecycle and playback for actual PSTN recordings.
 - Live PSTN worker hardening and production recording verification.
 
 ## Local Development

@@ -1,6 +1,6 @@
 # Awaaz V1 — Agent Execution Playbook
 **Version:** 1.5-Agent | **Target:** Verified non-Twilio platform handoff plus Phase 9 external launch blockers
-**Changelog (1.5):** TTS is explicitly in-scope for the non-Twilio platform. Browser/local agent speech response remains required, and voice selector preview playback now has a non-R2 backend Rime preview path. Phase 9 still owns only Twilio/PSTN, R2 storage-backed playback/recordings verification, and Render agent-worker cloud verification.
+**Changelog (1.5):** TTS is explicitly in-scope for the non-Twilio platform. Browser/local agent speech response remains required, and voice selector preview playback now has a non-R2 backend Rime preview path. Cloudflare R2 storage, presigned playback, CORS, range requests, and WaveSurfer readiness are now verified. Phase 9 still owns Twilio/PSTN, Twilio recording ingestion into R2, real call recording lifecycle, and Render agent-worker cloud verification.
 
 **Agent Directive:** You are an autonomous implementation agent. You do not improvise. You do not skip steps. You do not assume. You execute exactly what is written below and nothing else.
 
@@ -21,11 +21,11 @@
 - Phase 7: Closed for current non-Twilio scope.
 - Phase 8: Closed for current non-Twilio hardening/handoff scope.
 - Audit logs: Implemented for the current non-Twilio app actions: agent create/update/version save/publish, phone number assign/unassign, member invite/cancel invite, API key create/revoke, and organization name update.
-- Phase 9: Only three external categories remain deferred: **Twilio/PSTN**, **Cloudflare R2 recordings/storage-backed playback verification**, and **Render agent-worker deployment/cloud verification**.
+- Phase 9: Remaining external categories deferred: **Twilio/PSTN** including Twilio recording ingestion into the verified R2 bucket, real call recording lifecycle, and **Render agent-worker deployment/cloud verification**.
 
 Baseline deferred backlog (expanded in **Phase 9**):
 - **Status: DEFERRED** - Twilio/PSTN integration and verification.
-- **Status: DEFERRED** - Cloudflare R2 verification for recordings and R2-backed preview/storage playback.
+- **Status: COMPLETE** - Cloudflare R2 bucket setup, credentials/env configuration, upload/download smoke test, presigned playback URLs, browser CORS, range requests, and WaveSurfer readiness.
 - **Status: DEFERRED** - Render `agent-worker` deployment and cloud verification.
 
 ---
@@ -1030,17 +1030,17 @@ const rule = await sipClient.createSIPDispatchRule({
 
 ---
 
-### 4.4 Voices Module *(R2 preview upload verification deferred to Phase 9)*
+### 4.4 Voices Module *(R2 storage/playback readiness verified; stored preview generation remains optional)*
 
 - `GET /api/v1/voices` → returns cached Rime voices.
-- `POST /api/v1/voices/sync` → fetches from Rime `/voices` and stores voice metadata in DB; R2 preview-object upload is only used when storage is configured and remains Phase 9 for production verification.
+- `POST /api/v1/voices/sync` → fetches from Rime `/voices` and stores voice metadata in DB; when storage is configured, preview-object upload uses the verified R2 storage/presigned playback path.
 - `POST /api/v1/voices/preview` → authenticated/org-scoped non-R2 preview path; generates a short Rime TTS preview on demand and returns playable `audio/wav` without exposing the Rime API key.
 
 **Test Case 4.4.1: Voice Sync**
 
 1. Call `POST /api/v1/voices/sync`.
 2. Verify `Voice` table populated with Rime voices.
-3. Deferred to Phase 9: verify preview audio files exist in R2 bucket when validating R2-backed storage.
+3. R2 storage readiness is verified; if stored preview assets are desired, run sync with storage configured and confirm preview objects are created.
 
 **Test Case 4.4.2: Non-R2 Voice Preview**
 
@@ -1054,7 +1054,7 @@ const rule = await sipClient.createSIPDispatchRule({
 - [x] `GET /api/v1/voices` returns cached voices.
 - [x] `POST /api/v1/voices/sync` endpoint exists and populates DB voice metadata for current scope.
 - [x] `POST /api/v1/voices/preview` generates playable non-R2 Rime preview audio on demand.
-- [ ] **Deferred → Phase 9 Cloudflare R2:** R2 preview object upload and playable HTTP(S)/presigned R2-backed preview verification.
+- [x] **Cloudflare R2 readiness:** R2 upload/download, presigned HEAD/GET/range playback, CORS headers, and browser playback compatibility are verified.
 
 ---
 
@@ -1120,13 +1120,13 @@ curl -H "x-worker-secret: $WORKER_SECRET" \
 
 ## Phase 5: Call Lifecycle & Media Processing (Day 3–4)
 
-**Objective:** Current non-Twilio calls are tracked, transcripts are built, and costs are calculated. Twilio/PSTN callbacks, outbound PSTN, and R2-backed recordings remain Phase 9.
+**Objective:** Current non-Twilio calls are tracked, transcripts are built, and costs are calculated. R2 storage/playback is verified. Twilio/PSTN callbacks, outbound PSTN, and Twilio-ingested recording lifecycle into R2 remain Phase 9.
 
 ### ☐ PRE-PHASE CHECKLIST
 - [x] Gate 4 is passed for non-Twilio scope.
 - [x] `.cursorrules` reviewed for webhook, queue, and storage conventions.
 - [ ] **Deferred → Phase 9 Twilio/PSTN:** Twilio recording settings enabled.
-- [x] R2 bucket "awaaz-recordings" exists.
+- [x] R2 bucket "awaaz-recordings" exists, credentials/env are configured, and storage/presigned browser playback verification passed.
 
 ---
 
@@ -1147,7 +1147,7 @@ curl -H "x-worker-secret: $WORKER_SECRET" \
 **☐ Checklist for 5.1:**
 - [ ] **Deferred → Phase 9 Twilio/PSTN:** Twilio signature verification implemented against real callbacks.
 - [ ] **Deferred → Phase 9 Twilio/PSTN:** All status callbacks handled with correct state transitions.
-- [ ] **Deferred → Phase 9 Twilio/PSTN + Cloudflare R2:** `recording-completed` enqueues job to BullMQ.
+- [ ] **Deferred → Phase 9 Twilio/PSTN recording lifecycle:** `recording-completed` enqueues job to BullMQ.
 
 ---
 
@@ -1247,9 +1247,9 @@ Register queues: `transcript`, `recording`.
 
 **☐ Checklist for 5.5:**
 - [ ] **Deferred → Phase 9 Twilio/PSTN:** Recording worker downloads from Twilio.
-- [ ] **Deferred → Phase 9 Cloudflare R2:** Uploads to R2 under correct path.
-- [ ] **Deferred → Phase 9 Cloudflare R2:** `Call.recordingUrl` updated with playable R2 object key.
-- [ ] **Deferred → Phase 9 Cloudflare R2:** Presigned URL returns valid audio.
+- [ ] **Deferred → Phase 9 Twilio/PSTN recording lifecycle:** Worker uploads real Twilio recordings to R2 under `recordings/{callId}.mp3`.
+- [ ] **Deferred → Phase 9 Twilio/PSTN recording lifecycle:** `Call.recordingUrl` is updated from the real Twilio recording flow with a playable R2 object key.
+- [x] **Cloudflare R2 readiness:** Presigned URLs return valid audio for verified R2 objects; browser CORS/range playback is ready.
 
 ---
 
@@ -1312,7 +1312,8 @@ const response = await fetch(url);
 
 **☐ Checklist for 5.8:**
 - [x] `StorageService` uses S3 SDK configured for R2.
-- [ ] **Deferred → Phase 9 Cloudflare R2:** upload and presigned URL test passes with production R2 credentials/CORS.
+- [x] R2 upload/download smoke test passes with production credentials and bucket `awaaz-recordings`.
+- [x] Presigned HEAD returns `200`, full GET returns `200`, range GET returns `206`, bytes match uploaded WAV, and CORS/range headers support browser playback.
 
 ---
 
@@ -1331,7 +1332,7 @@ const response = await fetch(url);
 
 ### 🚦 STOP — SUCCESS GATE 5
 **Gate 5 is passed for non-Twilio transcript/cost scope. The unchecked items below remain Phase 9 external launch blockers, not blockers for Phase 6 dashboard work.**
-- [ ] **Deferred → Phase 9 Twilio/PSTN + Cloudflare R2:** Call is made → Twilio records → webhook fires → job downloads → file in R2.
+- [ ] **Deferred → Phase 9 Twilio/PSTN recording lifecycle:** Call is made → Twilio records → webhook fires → job downloads → file is stored in the verified R2 bucket.
 - [x] Transcript is assembled with speech events.
 - [x] Cost is calculated and stored for current non-Twilio/browser calls.
 - [ ] **Deferred → Phase 9 Twilio/PSTN:** TwiML tokens are secure (404 on invalid, 400 on wrong domain).
@@ -1342,7 +1343,7 @@ const response = await fetch(url);
 ## Phase 6: Frontend Core Features (Day 4–5)
 
 **STATUS: ✅ Verified & closed — non‑Twilio / non‑PSTN scope** (dashboard + agents + browser LiveKit test flow + call list/detail without Twilio recording ingest).
-Only three external categories remain **Deferred → Phase 9**: **Twilio/PSTN**, **Cloudflare R2 recordings/storage-backed playback**, and **Render agent-worker cloud deployment/verification**.
+Remaining external categories **Deferred → Phase 9**: **Twilio/PSTN** including real recording ingestion into the verified R2 bucket, and **Render agent-worker cloud deployment/verification**.
 
 **Objective:** Dashboard usable. Agents editable. Test calls from browser work. Call history viewable.
 
@@ -1449,7 +1450,7 @@ const [draft, setDraft] = useLocalStorageState(`agent-draft-${agentId}`, { defau
 - [x] Preview failures, including missing `RIME_API_KEY` or Rime generation errors, show graceful UI feedback.
 - [x] Current voice sync evidence: 404 active DB voices match 404 normalized Rime voices; dropdown maps directly over `GET /api/v1/voices`.
 - [x] Selected `voiceId` is saved on agent versions and returned to the worker through the live agent config.
-- [ ] **Deferred → Phase 9 Cloudflare R2:** stored/R2-backed voice preview objects become playable through presigned/static HTTP(S) URLs.
+- [x] **Cloudflare R2 readiness:** stored media can be served through backend-minted presigned URLs with browser-compatible CORS/range headers. Stored preview object generation remains optional via voice sync.
 - [x] Phone number assignment dropdown (API `PATCH`; **carrier/SIP Deferred Phase 9**).
 - [x] "Save Version" and "Save & Publish" wired to Nest endpoints.
 
@@ -1556,7 +1557,7 @@ Expected:
 
 **Test Case 6.8.1: Call Detail**
 
-> **Note:** Step 2–3 require a **`recordingUrl`** mintable via R2 — uncommon until Twilio ingest (**Deferred Phase 9**). Without audio, verify graceful **Recording unavailable** plus transcript/cost/latency.
+> **Note:** Step 2–3 require a **`recordingUrl`** pointing at an object in the verified R2 bucket. This is uncommon until Twilio recording ingestion lands (**Deferred Phase 9**). Without audio, verify graceful **Recording unavailable** plus transcript/cost/latency.
 
 1. Open completed call.
 2. Click play on audio → verify waveform renders.
@@ -1578,7 +1579,7 @@ Expected:
 | Item | Reason | Target |
 |------|--------|--------|
 | Twilio/PSTN verification | Real phone traffic, SIP/Twilio callback security, TwiML security, PSTN cost/latency, and outbound-heavy QA need production telephony | **Phase 9** |
-| Cloudflare R2 recordings/storage-backed playback | Recording playback and R2-stored preview playback need R2-backed HTTP(S)/presigned URLs | **Phase 9** |
+| Cloudflare R2 storage/presigned/browser playback | Bucket, env, upload/download, presigned HEAD/GET/range, CORS, and WaveSurfer readiness are verified | Done |
 | Render agent-worker cloud verification | Production worker deployment, health, LiveKit connected status, and cloud logs need Render worker ownership | **Phase 9** |
 | **New Agent** button wired (create flow) | Implemented after Gate 8 cleanup using existing create/version/publish APIs | Done |
 | Standalone React Query hooks files | Superseded by `OrgProvider.apiCall` and Phase 7 analytics API usage | Not remaining |
@@ -1591,7 +1592,7 @@ Expected:
 |---|---|---|
 | Monaco Editor fails to load | SSR import | Ensure `dynamic(() => import(...), { ssr: false })`. Do not import statically at top level. |
 | Draft not persisting | Wrong localStorage key or SSR | Verify key is `agent-draft-${agentId}`. Ensure hook runs client-side. |
-| Voice preview no audio | Rime preview generation failed, `RIME_API_KEY` missing, browser autoplay blocked, or selected voice not synced | Verify `POST /api/v1/voices/preview` returns `audio/wav`; check the UI error toast and API logs. R2-backed stored previews remain Phase 9. |
+| Voice preview no audio | Rime preview generation failed, `RIME_API_KEY` missing, browser autoplay blocked, or selected voice not synced | Verify `POST /api/v1/voices/preview` returns `audio/wav`; check the UI error toast and API logs. R2 storage/presigned playback readiness is verified for any stored media generated later. |
 | Test call modal stuck "Connecting" | LiveKit token issue or room creation failure | Check `POST /api/v1/agents/:id/test-call` response. Verify LiveKit credentials. |
 | Waveform not rendering | `wavesurfer.js` SSR or missing audio | Ensure dynamic import. Verify presigned URL returns valid audio blob. |
 | Transcript click doesn't seek | Timestamp / epoch mismatch | Seek uses **seconds from `call.startedAt` (fallback `createdAt`)** → `WaveSurfer.setTime`. |
@@ -1610,7 +1611,7 @@ Expected:
 
 **Explicitly NOT required to pass Gate 6 (Deferred):**
 - Twilio/PSTN integration and verification → **Phase 9**
-- Cloudflare R2 recordings/R2-backed preview playback verification → **Phase 9**
+- Cloudflare R2 storage/presigned/browser playback verification → **Done**
 - Render agent-worker deployment/cloud verification → **Phase 9**
 - **New Agent** create UI → implemented after Gate 8 cleanup; not a Twilio/R2/worker dependency
 
@@ -1822,17 +1823,17 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] Qualicall placeholder visible.
 - [x] `.cursorrules` conventions followed for all settings and analytics code.
 
-**Gate 7 note:** Passed for the current non-Twilio scope after deployed verification. PSTN/Twilio live calls, R2 recordings, waveform playback, R2-backed preview storage/playback, and other external integration work remain deferred to Phase 9. Non-R2 voice preview playback is in-scope and implemented via backend Rime generation. `New Agent` create was a non-blocking UI backlog item during Gate 7 and is now implemented after Gate 8 cleanup.
+**Gate 7 note:** Passed for the current non-Twilio scope after deployed verification. PSTN/Twilio live calls, Twilio recording ingestion into R2, real call recording lifecycle, and Render worker deployment remain deferred to Phase 9. R2 storage/presigned/browser playback readiness is verified. Non-R2 voice preview playback is in-scope and implemented via backend Rime generation. `New Agent` create was a non-blocking UI backlog item during Gate 7 and is now implemented after Gate 8 cleanup.
 
 ---
 
 ## Phase 8: Non-Twilio Hardening & Handoff Prep (Day 5–6)
 
-**Objective:** Harden the verified non-Twilio platform, run security/database checks, prepare handoff docs, and configure free-tier survival. Do **not** implement or verify Twilio/PSTN live calls, R2 recording upload/download, R2-backed preview storage/playback, or real recording waveform playback in Phase 8; those remain Phase 9. Direct non-R2 Rime TTS preview playback is part of the completed non-Twilio scope.
+**Objective:** Harden the verified non-Twilio platform, run security/database checks, prepare handoff docs, and configure free-tier survival. Do **not** implement or verify Twilio/PSTN live calls, Twilio recording ingestion, real call recording lifecycle, or Render agent-worker deployment in Phase 8; those remain Phase 9. Direct non-R2 Rime TTS preview playback and R2 storage/presigned/browser playback readiness are verified.
 
 **Phase 8 scope split:**
 - **Do now:** `.cursorrules` review, non-Twilio security audit, final Supabase verification, README/DEPLOYMENT/TROUBLESHOOTING docs, and free-tier/UptimeRobot setup.
-- **Deferred to Phase 9:** Twilio/PSTN integration and verification; Cloudflare R2 recordings/R2-backed preview playback verification; Render agent-worker deployment/cloud verification.
+- **Deferred to Phase 9:** Twilio/PSTN integration and verification; Twilio recording ingestion into the verified R2 bucket and real call recording lifecycle; Render agent-worker deployment/cloud verification.
 - **Post-Gate 8 cleanup:** `New Agent` create UI is implemented and remains separate from Twilio/PSTN/R2/worker Phase 9 deferrals.
 
 **Recommended Phase 8 order:**
@@ -1867,9 +1868,9 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 | 8 | Admin opens `/analytics` | Non-test analytics remain correct; test calls remain excluded |
 | 9 | Viewer logs in | Viewer can read allowed pages and cannot perform admin/builder mutations |
 
-**Out of scope for 8.1:** Real inbound PSTN calls, Twilio recording ingest, R2 recording playback, and waveform/audio verification from real recordings. These remain Phase 9 as noted above. `New Agent` creation was implemented later as non-Twilio backlog cleanup.
+**Out of scope for 8.1:** Real inbound PSTN calls, Twilio recording ingest, and real call recording lifecycle from PSTN calls. These remain Phase 9 as noted above. R2 storage/presigned/browser playback readiness is verified independently with synthetic audio. `New Agent` creation was implemented later as non-Twilio backlog cleanup.
 
-**Status:** COMPLETE - verified for the existing Sirius Agent non-Twilio regression path using previously captured Phase 8.2, 8.4, and 8.6 evidence. This does not mark Twilio inbound calling, R2 recording playback, or waveform playback complete.
+**Status:** COMPLETE - verified for the existing Sirius Agent non-Twilio regression path using previously captured Phase 8.2, 8.4, and 8.6 evidence. This does not mark Twilio inbound calling or real PSTN recording lifecycle complete. R2 storage/presigned/browser playback readiness is verified separately.
 
 **☐ Checklist for 8.1:**
 - [x] Step 1: Existing seeded agent list visible; `New Agent` is now enabled for OWNER/ADMIN/BUILDER and permission-gated for VIEWER.
@@ -1883,13 +1884,13 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] Step 8: Analytics still exclude test calls and reflect real non-test data.
 - [x] Step 9: Viewer role restricted to read-only behavior.
 
-**Verification note:** Existing-agent non-Twilio regression is complete for Sirius Agent. Evidence reused from completed checks confirms Sirius exists and is live, versioning works, phone assignment works, 5 deployed browser test calls completed, LiveKit audio worked, transcripts persisted, `/calls` showed Test badges, call detail pages rendered, analytics excluded browser test calls from production metrics, and VIEWER role restrictions returned the expected `403` behavior. Recording unavailable state is expected in this scope because Twilio/R2 recording ingestion and waveform playback remain Phase 9. `New Agent` creation is implemented after Gate 8 cleanup and remains independent from Phase 9 external integrations.
+**Verification note:** Existing-agent non-Twilio regression is complete for Sirius Agent. Evidence reused from completed checks confirms Sirius exists and is live, versioning works, phone assignment works, 5 deployed browser test calls completed, LiveKit audio worked, transcripts persisted, `/calls` showed Test badges, call detail pages rendered, analytics excluded browser test calls from production metrics, and VIEWER role restrictions returned the expected `403` behavior. Recording unavailable state is expected for browser calls because Twilio recording ingestion and real call recording lifecycle remain Phase 9. R2 storage/presigned/browser playback readiness is verified. `New Agent` creation is implemented after Gate 8 cleanup and remains independent from Phase 9 external integrations.
 
 ---
 
 ### 8.2 Security Audit
 
-**Agent Instruction:** Verify current non-Twilio security requirements. Do not execute Twilio/PSTN/R2 production verification here; keep those checks in Phase 9.
+**Agent Instruction:** Verify current non-Twilio security requirements. Twilio/PSTN production verification remains Phase 9. R2 storage/presigned/browser playback verification is now complete.
 
 | Check | Test | Expected |
 |---|---|---|
@@ -1903,7 +1904,7 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 **Deferred security checks for Phase 9:**
 - Twilio/PSTN production security verification, including TwiML token/domain behavior and real Twilio callback signatures.
-- Cloudflare R2 production playback security for recordings and voice previews.
+- Twilio-ingested recording security and real call recording lifecycle into the verified R2 bucket.
 - Render agent-worker cloud verification, including private heartbeat/health behavior.
 
 **☐ Checklist for 8.2:**
@@ -1973,7 +1974,7 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] Latency query executed. Current browser pipeline does not instrument `latencyMs`, so samples were `0` and average/P50 were `NULL`; this is accepted for the current non-instrumented Phase 8.4 scope.
 - [x] PSTN/live-call latency benchmark remains deferred to Phase 9.
 
-**Verification note:** Manual deployed browser verification completed 5 Sirius Agent test calls. LiveKit connection succeeded, assistant audio worked, transcript UI worked, disconnect cleanup succeeded, no frontend crashes occurred, no red console errors were observed, no stuck live-call entries remained afterward, `/calls` showed the new rows with the Test badge, and call detail pages rendered correctly. Recording unavailable state is expected because R2/recordings remain Phase 9 scope. Supabase read-only verification confirmed recent calls persisted, calls were marked with test metadata, transcript rows persisted, call events existed, there were 0 stuck `INITIATED` / `IN_PROGRESS` calls, and analytics exclusion still returned clean production metrics. `latencyMs` is not currently instrumented in the browser pipeline, so latency samples were `0` and average/P50 latency were `NULL`; average observed latency is unavailable until latency instrumentation is emitted.
+**Verification note:** Manual deployed browser verification completed 5 Sirius Agent test calls. LiveKit connection succeeded, assistant audio worked, transcript UI worked, disconnect cleanup succeeded, no frontend crashes occurred, no red console errors were observed, no stuck live-call entries remained afterward, `/calls` showed the new rows with the Test badge, and call detail pages rendered correctly. Recording unavailable state is expected for browser calls because Twilio recording ingestion and real call recording lifecycle remain Phase 9. Supabase read-only verification confirmed recent calls persisted, calls were marked with test metadata, transcript rows persisted, call events existed, there were 0 stuck `INITIATED` / `IN_PROGRESS` calls, and analytics exclusion still returned clean production metrics. R2 storage/presigned/browser playback readiness is verified separately. `latencyMs` is not currently instrumented in the browser pipeline, so latency samples were `0` and average/P50 latency were `NULL`; average observed latency is unavailable until latency instrumentation is emitted.
 
 ---
 
@@ -1986,7 +1987,7 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - Current deployed Render/Vercel logs show no Phase 7 regression errors during non-Twilio verification.
 - Live PSTN worker observability remains Phase 9 unless the worker is already deployed and safe to verify.
 
-**Status:** COMPLETE - current non-Twilio error-handling and observability behavior is acceptable for Phase 8 hardening. No new telemetry system, Twilio observability, or R2 observability was added.
+**Status:** COMPLETE - current non-Twilio error-handling and observability behavior is acceptable for Phase 8 hardening. No new telemetry system or Twilio observability was added. R2 storage/presigned playback verification is complete; long-term R2 operational observability remains future hardening.
 
 **☐ Checklist for 8.5:**
 - [x] Critical non-Twilio async/error paths reviewed: Clerk auth, internal worker auth, tenant/role guards, Clerk webhook verification, browser test-call setup, recording fallback, transcript assembly, analytics cache fallback, and worker event emission.
@@ -1996,7 +1997,7 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] LiveKit/browser logs and existing UI/DB observability are sufficient for current Phase 8 non-Twilio scope.
 - [x] Non-Twilio audit logging implemented for user-facing mutations: agent create/update/version save/publish, phone number assign/unassign, member invite/cancel invite, API key create/revoke, and organization name update. Audit metadata excludes raw API keys, tokens, secrets, and full prompt text.
 - [x] Member role update audit remains not applicable because there is no member role-update endpoint in the current API surface.
-- [x] Twilio/PSTN/R2 observability remains deferred to Phase 9.
+- [x] Twilio/PSTN recording-lifecycle observability remains deferred to Phase 9; R2 storage/presigned playback verification is complete.
 
 **Verification note:** Phase 8.5 began as documentation/review only, then post-Gate cleanup added the missing non-Twilio `AuditLog` writers using the existing Prisma model. The platform already surfaces the important non-Twilio failure modes with acceptable API status codes and graceful UI states. Browser test-call observability is covered by persisted `calls`, `call_events`, `transcripts`, status transitions, cost fields, Test badges, call detail rendering, analytics exclusion queries, and now audit rows for the listed non-Twilio mutations. Missing `latencyMs` remains an accepted current limitation: latency cards and analytics show no samples rather than polluting production metrics.
 
@@ -2035,7 +2036,7 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
   - No audio → check Twilio SIP trunk origination URI.
   - Transcript missing → check BullMQ Redis TLS config.
   - Analytics empty → check test call exclusion logic.
-- [x] Documentation clearly separates current non-Twilio scope from Phase 9 Twilio/R2/PSTN deferrals.
+- [x] Documentation clearly separates current non-Twilio scope and completed R2 storage verification from Phase 9 Twilio/PSTN recording-lifecycle and Render worker deferrals.
 - [x] Documentation notes `New Agent` create UI was backlog during Phase 8 and is now implemented after Gate 8 cleanup.
 
 **☐ Checklist for 8.7:**
@@ -2070,8 +2071,8 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 - [x] Database verification checklist is all green.
 - [x] All four documentation files exist and are complete.
 - [x] `.cursorrules` was adhered to in every single file created during all phases.
-- [x] Phase 9 Twilio/R2/PSTN deferrals are still clearly documented.
-- [x] `New Agent` create UI backlog is implemented after Gate 8 cleanup; Phase 9 Twilio/R2/worker deferrals remain unchanged.
+- [x] Phase 9 Twilio/PSTN recording-lifecycle and Render worker deferrals are still clearly documented.
+- [x] `New Agent` create UI backlog is implemented after Gate 8 cleanup; R2 storage verification is complete and Phase 9 Twilio/worker deferrals remain unchanged.
 - [x] Non-Twilio audit logging is implemented for the current mutation scope.
 
 ---
@@ -2082,11 +2083,11 @@ const keyHash = crypto.createHash('sha256').update(fullKey).digest('hex');
 
 **Scope note:** This final launch checklist now separates the completed non-Twilio platform from the only remaining external Phase 9 categories.
 
-- [ ] **Deferred — Twilio/PSTN:** Sirius Agent inbound/outbound calls work on the real Twilio number, including SIP dispatch, TwiML security, Twilio callback verification, and real PSTN cost/latency checks.
-- [ ] **Deferred — Cloudflare R2:** recording upload/download, recording waveform/audio playback, and R2-backed voice preview storage/playback are verified with HTTP(S)/presigned URLs.
+- [ ] **Deferred — Twilio/PSTN:** Sirius Agent inbound/outbound calls work on the real Twilio number, including SIP dispatch, TwiML security, Twilio callback verification, real PSTN cost/latency checks, and Twilio recording ingestion into R2.
+- [x] **Cloudflare R2:** bucket `awaaz-recordings`, env/credentials, upload/download, HeadObject, presigned HEAD/GET/range, CORS headers, `Accept-Ranges`/`Content-Range`, bytes-matched WAV retrieval, WaveSurfer readiness, and `GET /api/v1/calls/:id/recording` compatibility are verified.
 - [ ] **Deferred — Render agent-worker:** production `agent-worker` is deployed on Render, shows connected in LiveKit, exposes worker health, and has clean cloud logs.
 - [x] Prompt versioning — save creates V2/V3-style versions; publish sets live transactionally.
-- [x] Voice selection — dropdown works; non-R2 `Play preview` generates and plays Rime audio through the backend. R2-backed stored preview playback remains in the deferred category above.
+- [x] Voice selection — dropdown works; non-R2 `Play preview` generates and plays Rime audio through the backend. R2 storage/presigned playback readiness is verified for stored media; stored preview object generation remains optional via voice sync.
 - [x] Test call — browser test connects and speaks.
 - [x] Transcripts — browser/non-Twilio post-call assembly persists transcript rows.
 - [x] Call History — filters, pagination, Test badge, and detail view are functional.
@@ -2142,14 +2143,15 @@ If this playbook and `.cursorrules` conflict, `.cursorrules` wins— but you mus
 
 **Objective:** Complete the only remaining external integration categories after core platform completion.
 
-**Phase 9 ownership/status:** Everything in this section is **Status: DEFERRED** from Phases 1-8 and is not part of the completed non-Twilio handoff. These items are intended for a separate Phase 9/external integration owner, not as remaining work for the current app/core-platform pass.
+**Phase 9 ownership/status:** This section now separates remaining deferred external launch blockers from completed R2 storage verification. Twilio/PSTN, real recording ingestion/lifecycle, and Render agent-worker cloud deployment remain Phase 9 work. Cloudflare R2 storage/presigned/browser playback verification is complete.
 
 ### Deferred Inventory
 
 | Deferred category | Status | Phase 9 verification target |
 |---|---|---|
 | Twilio/PSTN integration and verification | DEFERRED | SIP trunk/origination, real inbound/outbound PSTN calls, Twilio callback signatures, TwiML security, real PSTN cost/latency, and outbound-heavy analytics QA verified in production |
-| Cloudflare R2 verification, recordings, and storage-backed playback | DEFERRED | R2 credentials/CORS verified, recording upload/download works, presigned playback works for recordings and R2-stored voice previews, and call-detail waveform/audio playback works on R2-backed objects |
+| Cloudflare R2 storage/presigned/browser playback verification | COMPLETE | Bucket `awaaz-recordings`, Render env, upload/download, HeadObject, presigned HEAD/GET/range, CORS headers, bytes-matched WAV retrieval, WaveSurfer readiness, and `GET /api/v1/calls/:id/recording` compatibility verified |
+| Twilio/PSTN recording ingestion into R2 and real call recording lifecycle | DEFERRED | Real Twilio recording webhook/download worker writes PSTN recordings into verified R2 storage, updates `Call.recordingUrl`, and records become playable in call detail |
 | Render `agent-worker` deployment and cloud verification | DEFERRED | Render worker deployed with env vars, LiveKit dashboard shows worker connected, worker health/heartbeat behavior verified, and Render logs are clean |
 
 ### Detailed Deferred Line-Item Map
@@ -2162,15 +2164,15 @@ This map preserves the granular blockers while keeping the current plan grouped 
 | Phase 3.9 | Render background `agent-worker` creation, env vars, LiveKit "Connected" status, clean Render logs | Render `agent-worker` |
 | Phase 3.10 | Real mobile/PSTN call reaches Sirius, two-way audio works, sub-2-second live response, no Render/API errors | Twilio/PSTN plus Render `agent-worker` |
 | Phase 4.3 / 8.6 | LiveKit dispatch rule exists and is stored on `PhoneNumber.liveKitDispatchRuleId` for production phone routing | Twilio/PSTN |
-| Phase 4.4 / 6.4 | R2-stored voice preview objects become playable through HTTP(S) or presigned URLs | Cloudflare R2 |
+| Phase 4.4 / 6.4 | R2 storage/presigned/browser playback readiness for stored media | Complete |
 | Phase 5.1 | Real Twilio webhook signatures and callback state transitions, including `recording-completed` enqueue | Twilio/PSTN |
 | Phase 5.2 | Dashboard outbound PSTN call, signed TwiML token, Redis TTL, XML/domain validation, invalid token handling | Twilio/PSTN |
-| Phase 5.5 | Twilio recording download, R2 upload, `Call.recordingUrl` update, presigned recording URL returns audio | Twilio/PSTN plus Cloudflare R2 |
+| Phase 5.5 | Twilio recording download, upload real PSTN recording into verified R2 storage, and update `Call.recordingUrl` | Twilio/PSTN recording lifecycle |
 | Phase 5.7 | Cost verification with real PSTN duration/telephony charges | Twilio/PSTN |
-| Phase 5.8 | R2 upload/download and presigned GET verification against production credentials/CORS | Cloudflare R2 |
+| Phase 5.8 | R2 upload/download and presigned HEAD/GET/range verification against production credentials/CORS | Complete |
 | Phase 6.7 / 7.2 | Direction filters and analytics tested with meaningful real OUTBOUND PSTN volume | Twilio/PSTN |
-| Phase 6.8 | Call-detail waveform/audio playback on Twilio-ingested R2 recordings | Cloudflare R2 |
-| Phase 8.1 | Inbound-call journey: call connects, recording appears in R2, audio plays, analytics reflects real call/cost | Twilio/PSTN plus Cloudflare R2 |
+| Phase 6.8 | Call-detail waveform/audio playback readiness for valid presigned R2 audio | Complete; real Twilio-ingested recording QA remains under Twilio/PSTN recording lifecycle |
+| Phase 8.1 | Inbound-call journey: call connects, real PSTN recording appears in R2, audio plays, analytics reflects real call/cost | Twilio/PSTN recording lifecycle |
 | Phase 8.2 | TwiML token/domain checks and Twilio wrong-signature check against real production callbacks | Twilio/PSTN |
 | Phase 8.3 / Final checklist | Production worker heartbeat/health behavior after Render worker deployment | Render `agent-worker` |
 | Phase 8.4 | PSTN/live-call latency benchmark with real `latencyMs` samples | Twilio/PSTN |
@@ -2181,6 +2183,7 @@ This map preserves the granular blockers while keeping the current plan grouped 
 - Prompt versioning, agent edit/publish, browser LiveKit test calls, transcripts, call history, analytics, settings, API keys, Qualicall, BigInt serialization, Clerk middleware, and React Query provider are closed for current non-Twilio scope.
 - Clerk and LiveKit webhook verification are closed for current scope; only Twilio callback verification remains under Twilio/PSTN.
 - Non-Twilio audit logging is implemented for current user-facing mutations. Member role update audit is not applicable because there is no member role-update endpoint in the current API surface.
+- Cloudflare R2 storage/presigned/browser playback verification is complete for bucket `awaaz-recordings`: upload/download, HeadObject, presigned HEAD/GET/range, CORS, range headers, bytes-matched WAV retrieval, WaveSurfer readiness, and recording endpoint compatibility.
 - Standalone React Query hook files from earlier Phase 6 wording are not remaining work because the implemented `OrgProvider.apiCall` and Phase 7 analytics consumers cover the required auth/org behavior.
 - Supabase keepalive is an accepted documented deviation: no public Supabase ping is configured unless a safe credential-free endpoint is intentionally added later.
 
@@ -2191,11 +2194,12 @@ This map preserves the granular blockers while keeping the current plan grouped 
 - **Status: DEFERRED** - Render `agent-worker` deployment and cloud verification.
 
 #### From Phase 4 / 5 / 6
-- **Status: DEFERRED** - Cloudflare R2 verification, recordings, and R2-backed preview/storage playback.
+- **Status: COMPLETE** - Cloudflare R2 storage verification, presigned playback URLs, browser CORS/range behavior, and WaveSurfer readiness.
+- **Status: DEFERRED** - Twilio/PSTN recording ingestion into the verified R2 bucket and real call recording lifecycle.
 
 ### Notes
 - `New Agent` create UI is implemented after Gate 8 cleanup. It is no longer a remaining backlog or Phase 9 deferred item.
 - Non-Twilio audit logging is implemented for the current mutation scope. Member role update audit is not applicable because no member role-update endpoint currently exists.
 - Core non-Twilio platform flow is verified through Phase 8 and post-Gate cleanup: dashboard, agents edit/create, browser test flow, `/calls`, `/calls/[id]`, analytics, settings, UptimeRobot, and audit logs.
-- LiveKit browser test flow, Rime TTS speech response, non-R2 voice previews, transcript pipeline, and cost pipeline are functional for **non-PSTN** calls. The three deferred categories above complete the external integration story.
+- LiveKit browser test flow, Rime TTS speech response, non-R2 voice previews, transcript pipeline, cost pipeline, and R2 storage/presigned/browser playback readiness are functional for **non-PSTN** scope. The remaining deferred categories above complete the external integration story.
 

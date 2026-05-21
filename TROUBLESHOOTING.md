@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Use this guide for the current non-Twilio deployment. Phase 9 covers Twilio/PSTN/R2 recording work.
+Use this guide for the current non-Twilio deployment. Cloudflare R2 storage/presigned/browser playback readiness is verified. Phase 9 covers Twilio/PSTN, Twilio recording ingestion into R2, real call recording lifecycle, and production worker deployment.
 
 ## Worker Not Connecting
 
@@ -30,7 +30,7 @@ Current scope:
 
 - Browser test-call audio should work through LiveKit browser flow.
 - Real PSTN audio through Twilio SIP is Phase 9.
-- Recording playback and real waveform/audio playback from R2 are Phase 9.
+- R2 playback is verified for valid presigned audio objects; real PSTN recording ingestion into R2 remains Phase 9.
 
 Checks:
 
@@ -189,7 +189,6 @@ The following are not Phase 8 blockers:
 
 - Twilio/PSTN inbound/outbound calls.
 - Twilio webhook production flow.
-- R2 recording upload/download.
-- Voice preview playback.
-- Real recording waveform/audio playback.
+- Twilio/PSTN recording ingestion into the verified R2 bucket.
+- Real PSTN call recording lifecycle and playback from actual Twilio recordings.
 - Live PSTN worker hardening.

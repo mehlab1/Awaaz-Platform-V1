@@ -1,6 +1,6 @@
 # Deployment
 
-This guide covers the current verified non-Twilio deployment path: Vercel web, Render API, Supabase Postgres, Clerk, LiveKit, and Redis. Twilio/PSTN/R2 recording work remains Phase 9.
+This guide covers the current verified non-Twilio deployment path: Vercel web, Render API, Supabase Postgres, Clerk, LiveKit, Redis, and Cloudflare R2 storage/playback readiness. Twilio/PSTN recording ingestion, real call recording lifecycle, and production agent-worker deployment remain Phase 9.
 
 ## 1. Prepare Environment
 
@@ -56,12 +56,14 @@ Service ownership notes:
 - The local Python worker must also load the LiveKit, Deepgram, Groq, and Rime keys if you want the browser/local voice path to work end to end.
 - Any Render env change requires a redeploy or restart before the API sees the new value.
 
-R2 variables are optional until Phase 9 recording/preview verification:
+R2 variables are configured and verified for storage-backed playback readiness:
 
 - `CLOUDFLARE_R2_ACCOUNT_ID`
 - `CLOUDFLARE_R2_ACCESS_KEY`
 - `CLOUDFLARE_R2_SECRET_KEY`
 - `CLOUDFLARE_R2_BUCKET_NAME`
+
+R2 verification completed for bucket `awaaz-recordings`: upload/download, HeadObject, presigned HEAD/GET/range, CORS headers, bytes-matched WAV retrieval, WaveSurfer readiness, and `GET /api/v1/calls/:id/recording` compatibility. Twilio/PSTN recording ingestion into this bucket remains Phase 9.
 
 Health check:
 
@@ -217,7 +219,7 @@ Expected heartbeat status without a secret: `403`.
 Cold-start mitigation:
 
 - After a long idle period, open the deployed web app and run one browser test call before demoing critical non-Twilio flows.
-- Real PSTN warm-up and recording-path validation are Phase 9.
+- Real PSTN warm-up and Twilio recording ingestion/lifecycle validation are Phase 9. R2 storage/presigned/browser playback readiness is already verified.
 
 ## 8. Out of Scope Until Phase 9
 
@@ -225,7 +227,6 @@ Do not block Phase 8 on:
 
 - Twilio/PSTN live calls.
 - Twilio recording webhook.
-- R2 recording upload/download.
-- Voice preview playback.
-- Real recording waveform/audio playback.
+- Twilio/PSTN recording ingestion into the verified R2 bucket.
+- Real PSTN call recording lifecycle and playback from actual Twilio recordings.
 - Live PSTN worker hardening.
