@@ -241,6 +241,14 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
                     )
                 frame_count += 1
                 self._event_ch.send_nowait(audio)
+        except asyncio.CancelledError:
+            logger.info(
+                "rime_tts_chunk_cancelled_ms=%s chars=%s frames=%s",
+                round((time.monotonic() - start) * 1000),
+                len(text),
+                frame_count,
+            )
+            raise
         finally:
             await stream.aclose()
 
@@ -288,38 +296,48 @@ class RimeStream(tts.ChunkedStream):
         first_chunk = True
         bytes_received = 0
 
-        async with self._client.stream(
-            "POST",
-            self._base_url,
-            headers={
-                "Accept": "audio/pcm",
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "text": self._text,
-                "modelId": self._model_id,
-                "speaker": self._voice_id,
-                "lang": self._language,
-                "samplingRate": self._sample_rate,
-                "speedAlpha": self._speed_alpha,
-            },
-        ) as response:
-            response.raise_for_status()
-            async for chunk in response.aiter_bytes():
-                if first_chunk:
-                    first_chunk = False
-                    logger.info(
-                        "rime_http_first_byte_ms=%s chars=%s voice=%s",
-                        round((time.monotonic() - start) * 1000),
-                        len(self._text),
-                        self._voice_id,
-                    )
-                bytes_received += len(chunk)
-                pending.extend(chunk)
-                audio = self._take_complete_pcm_frames(pending)
-                if audio:
-                    self._send_audio(audio, request_id, segment_id)
+        try:
+            async with self._client.stream(
+                "POST",
+                self._base_url,
+                headers={
+                    "Accept": "audio/pcm",
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "text": self._text,
+                    "modelId": self._model_id,
+                    "speaker": self._voice_id,
+                    "lang": self._language,
+                    "samplingRate": self._sample_rate,
+                    "speedAlpha": self._speed_alpha,
+                },
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if first_chunk:
+                        first_chunk = False
+                        logger.info(
+                            "rime_http_first_byte_ms=%s chars=%s voice=%s",
+                            round((time.monotonic() - start) * 1000),
+                            len(self._text),
+                            self._voice_id,
+                        )
+                    bytes_received += len(chunk)
+                    pending.extend(chunk)
+                    audio = self._take_complete_pcm_frames(pending)
+                    if audio:
+                        self._send_audio(audio, request_id, segment_id)
+        except asyncio.CancelledError:
+            logger.info(
+                "rime_http_cancelled_ms=%s chars=%s bytes=%s voice=%s",
+                round((time.monotonic() - start) * 1000),
+                len(self._text),
+                bytes_received,
+                self._voice_id,
+            )
+            raise
 
         if pending:
             self._send_audio(bytes(pending), request_id, segment_id)

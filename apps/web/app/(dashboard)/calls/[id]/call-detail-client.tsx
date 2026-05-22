@@ -66,10 +66,11 @@ interface CostParts {
 
 type RecordingState =
   | { phase: 'idle' | 'loading' }
+  | { phase: 'processing'; attempt: number; detail?: string }
   | { phase: 'ready'; audioUrl: string }
   | {
       phase: 'unavailable';
-      reason: 'none' | 'storage' | 'error' | 'broken';
+      reason: 'none' | 'storage' | 'error' | 'broken' | 'not_ready';
       detail?: string;
     };
 
@@ -179,28 +180,59 @@ export function CallDetailClient({ callId }: { callId: string }) {
     };
   }, [activeOrgId, apiCall, callId, detail]);
 
+  const recordingCandidate =
+    detail?.recordingUrl?.trim() || recordingObjectKeyFromMeta(detail?.metadata);
+
   useEffect(() => {
     if (!activeOrgId || !detailId) {
       setRecordingState({ phase: 'idle' });
       setIsWaveformReady(false);
       return undefined;
     }
-    let cancelled = false;
+    if (!recordingCandidate) {
+      setRecordingState({ phase: 'unavailable', reason: 'none' });
+      setIsWaveformReady(false);
+      return undefined;
+    }
 
-    async function probeRecording(): Promise<void> {
-      setRecordingState({ phase: 'loading' });
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    const maxAttempts = 6;
+
+    async function probeRecording(attempt: number): Promise<void> {
+      setRecordingState(
+        attempt === 0
+          ? { phase: 'loading' }
+          : { phase: 'processing', attempt },
+      );
       setIsWaveformReady(false);
       try {
         const res = await apiCall(`/api/v1/calls/${detailId}/recording`, {
           method: 'GET',
         });
 
-        const textFallback = async (): Promise<void> => {
+        const retryOrFallback = async (): Promise<void> => {
           if (cancelled) {
             return;
           }
           if (res.status === 404 || res.status === 400) {
-            setRecordingState({ phase: 'unavailable', reason: 'none' });
+            const detail = await res.text();
+            if (attempt < maxAttempts) {
+              setRecordingState({
+                phase: 'processing',
+                attempt: attempt + 1,
+                detail: detail || 'Recording not ready yet.',
+              });
+              retryTimer = window.setTimeout(() => {
+                void probeRecording(attempt + 1);
+              }, 2000);
+              return;
+            }
+            setRecordingState({
+              phase: 'unavailable',
+              reason: 'not_ready',
+              detail: detail || 'Recording was not available in storage yet.',
+            });
             return;
           }
           if (res.status === 503) {
@@ -231,7 +263,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
           }
           return;
         }
-        await textFallback();
+        await retryOrFallback();
       } catch (e: unknown) {
         if (cancelled) {
           return;
@@ -244,12 +276,15 @@ export function CallDetailClient({ callId }: { callId: string }) {
       }
     }
 
-    void probeRecording();
+    void probeRecording(0);
 
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) {
+        window.clearTimeout(retryTimer);
+      }
     };
-  }, [activeOrgId, apiCall, detail?.recordingUrl, detailId]);
+  }, [activeOrgId, apiCall, detailId, recordingCandidate]);
 
   const transcriptTurns = collectTranscriptTurns(detail?.transcript?.content);
   const callEpoch = parseEpoch(detail?.startedAt ?? detail?.createdAt);
@@ -287,6 +322,8 @@ export function CallDetailClient({ callId }: { callId: string }) {
   );
 
   const testBadge = detail ? testCallFromMeta(detail.metadata) : false;
+  const recordingDisplayKey =
+    detail?.recordingUrl?.trim() || recordingObjectKeyFromMeta(detail?.metadata);
 
   if (!activeOrgId && !loading) {
     return (
@@ -391,7 +428,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
               Recording stored
             </h3>
             <p className="break-words font-mono text-xs">
-              {detail.recordingUrl ? detail.recordingUrl : 'None (Phase 9 for PSTN + R2)'}
+              {recordingDisplayKey ?? 'None'}
             </p>
           </div>
         </CardContent>
@@ -407,6 +444,11 @@ export function CallDetailClient({ callId }: { callId: string }) {
         <CardContent className="space-y-4">
           {recordingState.phase === 'loading' || recordingState.phase === 'idle' ? (
             <p className="text-muted-foreground text-sm">Checking recording availability…</p>
+          ) : null}
+          {recordingState.phase === 'processing' ? (
+            <p className="text-muted-foreground text-sm">
+              Recording processing. Retrying playback URL...
+            </p>
           ) : null}
           {recordingState.phase === 'ready' ? (
             <CallWaveformPlayer
@@ -598,6 +640,26 @@ function testCallFromMeta(meta: unknown): boolean {
   }
   const rec = meta as Record<string, unknown>;
   return rec.isTest === true || rec.isTestCall === true;
+}
+
+function recordingObjectKeyFromMeta(meta: unknown): string | null {
+  if (!meta || typeof meta !== 'object') {
+    return null;
+  }
+  const record = meta as Record<string, unknown>;
+  const nested = record.recording;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const nestedRecord = nested as Record<string, unknown>;
+    const objectKey = nestedRecord.objectKey;
+    if (typeof objectKey === 'string' && objectKey.trim()) {
+      return objectKey.trim();
+    }
+  }
+  const topLevel = record.recordingObjectKey;
+  if (typeof topLevel === 'string' && topLevel.trim()) {
+    return topLevel.trim();
+  }
+  return null;
 }
 
 function formatWhen(iso: string | null): string {
@@ -812,7 +874,11 @@ function LatencyCard(props: {
   );
 }
 
-function UnavailableRecording({ state }: { state: Exclude<RecordingState, { phase: 'idle' | 'loading' | 'ready' }> }) {
+function UnavailableRecording({
+  state,
+}: {
+  state: Extract<RecordingState, { phase: 'unavailable' }>;
+}) {
   const title =
     state.reason === 'none'
       ? 'Recording unavailable'
@@ -820,7 +886,9 @@ function UnavailableRecording({ state }: { state: Exclude<RecordingState, { phas
         ? 'Recording storage not ready'
         : state.reason === 'broken'
           ? 'Recording response was invalid'
-          : 'Playback could not initialize';
+          : state.reason === 'not_ready'
+            ? 'Recording not ready yet'
+            : 'Playback could not initialize';
 
   return (
     <div className="rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-8 text-center text-sm space-y-2">

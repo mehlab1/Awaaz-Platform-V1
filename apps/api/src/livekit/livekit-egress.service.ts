@@ -113,8 +113,7 @@ export class LiveKitEgressService {
       return false;
     }
 
-    const objectKey =
-      this.extractObjectKey(info) ?? this.recordingObjectKeyFromMetadata(call.metadata);
+    const objectKey = this.extractObjectKey(info);
     if (!objectKey) {
       this.logger.warn(
         `LiveKit egress ${info.egressId || '(unknown)'} ended without a file key`,
@@ -122,11 +121,47 @@ export class LiveKitEgressService {
       return false;
     }
 
+    let objectExists = false;
+    try {
+      objectExists = await this.storage.objectExists(objectKey);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Could not verify browser test recording ${objectKey} in R2: ${message}`,
+      );
+      await this.prisma.call.update({
+        where: { id: call.id },
+        data: {
+          metadata: this.withRecordingMetadata(call.metadata, info, objectKey, {
+            status: 'processing',
+          }),
+        },
+      });
+      return false;
+    }
+
+    if (!objectExists) {
+      this.logger.warn(
+        `LiveKit egress ${info.egressId || '(unknown)'} reported ${objectKey}, but the R2 object is not visible yet`,
+      );
+      await this.prisma.call.update({
+        where: { id: call.id },
+        data: {
+          metadata: this.withRecordingMetadata(call.metadata, info, objectKey, {
+            status: 'processing',
+          }),
+        },
+      });
+      return false;
+    }
+
     await this.prisma.call.update({
       where: { id: call.id },
       data: {
         recordingUrl: objectKey,
-        metadata: this.withRecordingMetadata(call.metadata, info, objectKey),
+        metadata: this.withRecordingMetadata(call.metadata, info, objectKey, {
+          status: 'ready',
+        }),
       },
     });
     this.logger.log(
@@ -165,72 +200,15 @@ export class LiveKitEgressService {
       return null;
     }
 
-    const fromFilename = this.normalizeObjectKey(file.filename);
-    if (fromFilename) {
-      return fromFilename;
+    const fromLocation = this.normalizeObjectKey(file.location);
+    if (fromLocation) {
+      return fromLocation;
     }
-    return this.normalizeObjectKey(file.location);
+    return this.normalizeObjectKey(file.filename);
   }
 
   private normalizeObjectKey(value: string | undefined): string | null {
-    const raw = value?.trim();
-    if (!raw) {
-      return null;
-    }
-
-    const bucketName = this.r2BucketName();
-    if (raw.startsWith(`s3://${bucketName}/`)) {
-      return raw.slice(`s3://${bucketName}/`.length);
-    }
-    if (raw.startsWith('s3://')) {
-      const withoutScheme = raw.slice('s3://'.length);
-      const slash = withoutScheme.indexOf('/');
-      return slash >= 0 ? withoutScheme.slice(slash + 1) : null;
-    }
-
-    try {
-      const url = new URL(raw);
-      const path = url.pathname.replace(/^\/+/, '');
-      if (path.startsWith(`${bucketName}/`)) {
-        return path.slice(bucketName.length + 1);
-      }
-      return path || null;
-    } catch {
-      return raw.replace(/^\/+/, '') || null;
-    }
-  }
-
-  private recordingObjectKeyFromMetadata(
-    metadata: Prisma.JsonValue | null,
-  ): string | null {
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
-      return null;
-    }
-    const record = metadata as Record<string, unknown>;
-
-    const nested = record.recording;
-    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
-      const nestedRecord = nested as Record<string, unknown>;
-      const objectKey = nestedRecord.objectKey;
-      if (typeof objectKey === 'string' && objectKey.trim()) {
-        return objectKey.trim();
-      }
-    }
-
-    const topLevel = record.recordingObjectKey;
-    if (typeof topLevel === 'string' && topLevel.trim()) {
-      return topLevel.trim();
-    }
-
-    return null;
-  }
-
-  private r2BucketName(): string {
-    try {
-      return this.storage.getS3UploadConfig().bucketName;
-    } catch {
-      return '';
-    }
+    return this.storage.normalizeObjectKey(value);
   }
 
   private isBrowserPreviewCall(call: {
@@ -259,6 +237,7 @@ export class LiveKitEgressService {
     metadata: Prisma.JsonValue | null,
     info: EgressInfo,
     objectKey: string,
+    options: { status: 'processing' | 'ready' },
   ): Prisma.InputJsonValue {
     const file = this.firstFileResult(info);
     const base =
@@ -269,6 +248,7 @@ export class LiveKitEgressService {
       ...base,
       recording: {
         provider: 'livekit-egress',
+        status: options.status,
         objectKey,
         egressId: info.egressId || null,
         roomId: info.roomId || null,

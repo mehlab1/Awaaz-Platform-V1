@@ -107,7 +107,7 @@ export class CallsService {
   }
 
   async getDetailWithRelations(organizationId: string, callId: string) {
-    let call = await this.prisma.call.findFirst({
+    const call = await this.prisma.call.findFirst({
       where: { id: callId, organizationId },
       include: {
         transcript: true,
@@ -116,17 +116,6 @@ export class CallsService {
     });
     if (!call) {
       throw new NotFoundException('Call not found');
-    }
-    const recordingObjectKey = this.recordingObjectKeyFromMetadata(call.metadata);
-    if (!call.recordingUrl?.trim() && recordingObjectKey) {
-      call = await this.prisma.call.update({
-        where: { id: call.id },
-        data: { recordingUrl: recordingObjectKey },
-        include: {
-          transcript: true,
-          agent: { select: { id: true, name: true } },
-        },
-      });
     }
     return call;
   }
@@ -142,9 +131,9 @@ export class CallsService {
     if (!call) {
       throw new NotFoundException('Call not found');
     }
-    const recordingUrl =
+    const recordingKey =
       call.recordingUrl?.trim() || this.recordingObjectKeyFromMetadata(call.metadata);
-    if (!recordingUrl) {
+    if (!recordingKey) {
       throw new NotFoundException('NO_RECORDING');
     }
     if (!this.storage.isConfigured()) {
@@ -152,21 +141,33 @@ export class CallsService {
         'Playback URL cannot be minted until object storage is configured.',
       );
     }
+    const objectKey = this.storage.normalizeObjectKey(recordingKey);
+    if (!objectKey) {
+      throw new NotFoundException('RECORDING_NOT_READY');
+    }
     try {
+      const objectExists = await this.storage.objectExists(objectKey);
+      if (!objectExists) {
+        throw new NotFoundException('RECORDING_NOT_READY');
+      }
+
       const expiresInSeconds = 300;
       const url = await this.storage.getPresignedUrl(
-        recordingUrl,
+        objectKey,
         expiresInSeconds,
-        this.recordingContentType(recordingUrl),
+        this.recordingContentType(objectKey),
       );
-      if (!call.recordingUrl?.trim()) {
+      if (call.recordingUrl?.trim() !== objectKey) {
         await this.prisma.call.update({
           where: { id: callId },
-          data: { recordingUrl },
+          data: { recordingUrl: objectKey },
         });
       }
       return { url, expiresInSeconds };
     } catch (error: unknown) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
       throw new ServiceUnavailableException(
         `Could not mint a playback URL: ${message}`,

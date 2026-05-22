@@ -92,12 +92,33 @@ def create_assistant(
 ) -> VoiceAssistant:
     chat_ctx = ChatContext()
     chat_ctx.append(text=string_value(config, "systemPrompt", ""), role="system")
+    vad_min_speech = float_env("LIVEKIT_VAD_MIN_SPEECH_SECONDS", 0.04)
+    vad_min_silence = float_env("LIVEKIT_VAD_MIN_SILENCE_SECONDS", 0.15)
+    vad_padding = float_env("LIVEKIT_VAD_PADDING_SECONDS", 0.05)
+    vad_activation = float_env("LIVEKIT_VAD_ACTIVATION_THRESHOLD", 0.45)
+    interrupt_speech_duration = float_env(
+        "LIVEKIT_INTERRUPT_SPEECH_SECONDS",
+        0.35,
+    )
+    interrupt_min_words = int_env("LIVEKIT_INTERRUPT_MIN_WORDS", 1)
+    logger.info(
+        "voice_interruption_config interrupt_speech_seconds=%s interrupt_min_words=%s "
+        "vad_min_speech=%s vad_min_silence=%s vad_padding=%s vad_activation=%s "
+        "deepgram_endpointing_ms=%s",
+        interrupt_speech_duration,
+        interrupt_min_words,
+        vad_min_speech,
+        vad_min_silence,
+        vad_padding,
+        vad_activation,
+        int_env("DEEPGRAM_ENDPOINTING_MS", 25),
+    )
     return VoiceAssistant(
         vad=silero.VAD.load(
-            min_speech_duration=float_env("LIVEKIT_VAD_MIN_SPEECH_SECONDS", 0.04),
-            min_silence_duration=float_env("LIVEKIT_VAD_MIN_SILENCE_SECONDS", 0.15),
-            padding_duration=float_env("LIVEKIT_VAD_PADDING_SECONDS", 0.05),
-            activation_threshold=float_env("LIVEKIT_VAD_ACTIVATION_THRESHOLD", 0.45),
+            min_speech_duration=vad_min_speech,
+            min_silence_duration=vad_min_silence,
+            padding_duration=vad_padding,
+            activation_threshold=vad_activation,
         ),
         stt=deepgram.STT(
             model=os.getenv("DEEPGRAM_MODEL", "nova-2-conversationalai"),
@@ -113,11 +134,8 @@ def create_assistant(
         chat_ctx=chat_ctx,
         fnc_ctx=tools,
         allow_interruptions=True,
-        interrupt_speech_duration=float_env(
-            "LIVEKIT_INTERRUPT_SPEECH_SECONDS",
-            0.45,
-        ),
-        interrupt_min_words=int_env("LIVEKIT_INTERRUPT_MIN_WORDS", 2),
+        interrupt_speech_duration=interrupt_speech_duration,
+        interrupt_min_words=interrupt_min_words,
         preemptive_synthesis=True,
         before_llm_cb=timing.before_llm,
         before_tts_cb=timing.before_tts,
@@ -226,6 +244,8 @@ class PipelineTiming:
         self.playback_stopped_at: float | None = None
         self.playback_started_at_iso: str | None = None
         self.playback_stopped_at_iso: str | None = None
+        self.barge_in_requested_at: float | None = None
+        self.barge_in_reason: str | None = None
 
     def mark_user_started(self) -> None:
         self.turn_id += 1
@@ -380,6 +400,10 @@ class PipelineTiming:
             elapsed_ms(self.playback_started_at, time.monotonic()),
             elapsed_ms(self.user_started_at, time.monotonic()),
         )
+
+    def mark_barge_in_requested(self, reason: str) -> None:
+        self.barge_in_requested_at = time.monotonic()
+        self.barge_in_reason = reason
 
     def response_latency_ms(self) -> int | None:
         response_started = (
@@ -554,6 +578,183 @@ def register_timing_events(
 
     human_input.on("final_transcript", on_final_transcript)
     human_input.on("interim_transcript", on_interim_transcript)
+    register_barge_in_events(assistant, human_input, timing)
+
+
+def register_barge_in_events(
+    assistant: VoiceAssistant,
+    human_input: object,
+    timing: PipelineTiming,
+) -> None:
+    opts = getattr(assistant, "_opts", None)
+    interrupt_seconds = float(getattr(opts, "int_speech_duration", 0.35) or 0.35)
+    min_words = int(getattr(opts, "int_min_words", 1) or 0)
+    last_interim_text = ""
+    user_started_at: float | None = None
+    last_threshold_log_at = 0.0
+
+    logger.info(
+        "barge_in_monitor_attached interrupt_speech_seconds=%s interrupt_min_words=%s",
+        interrupt_seconds,
+        min_words,
+    )
+
+    def current_speech_duration() -> float:
+        if user_started_at is None:
+            return interrupt_seconds
+        return max(0.0, time.monotonic() - user_started_at)
+
+    def playing_speech() -> object | None:
+        speech = getattr(assistant, "_playing_speech", None)
+        if speech is None:
+            return None
+        if getattr(speech, "interrupted", False):
+            return None
+        if not getattr(speech, "allow_interruptions", False):
+            return None
+        return speech
+
+    def transcript_text(event: object) -> str:
+        alternatives = getattr(event, "alternatives", [])
+        if not alternatives:
+            return ""
+        return getattr(alternatives[0], "text", "") or ""
+
+    def count_words(text: str) -> int:
+        tokenizer = getattr(getattr(opts, "transcription", None), "word_tokenizer", None)
+        if tokenizer is not None:
+            try:
+                return len(tokenizer.tokenize(text=text))
+            except Exception:
+                logger.debug("barge_in_word_tokenizer_failed", exc_info=True)
+        return len([word for word in text.strip().split() if word])
+
+    def log_threshold_not_met(
+        reason: str,
+        text: str,
+        words: int,
+        speech_duration: float,
+    ) -> None:
+        nonlocal last_threshold_log_at
+        now = time.monotonic()
+        if now - last_threshold_log_at < 0.75:
+            return
+        last_threshold_log_at = now
+        logger.info(
+            "barge_in_threshold_not_met reason=%s words=%s min_words=%s "
+            "speech_ms=%s required_speech_ms=%s text=%r",
+            reason,
+            words,
+            min_words,
+            round(speech_duration * 1000),
+            round(interrupt_seconds * 1000),
+            text[:100],
+        )
+
+    def request_interrupt(reason: str, text: str, speech_duration: float) -> None:
+        speech = playing_speech()
+        if speech is None:
+            return
+
+        words = count_words(text)
+        if speech_duration < interrupt_seconds:
+            log_threshold_not_met(reason, text, words, speech_duration)
+            return
+        if min_words > 0 and words < min_words:
+            log_threshold_not_met(reason, text, words, speech_duration)
+            return
+
+        if text:
+            setattr(assistant, "_transcribed_interim_text", text)
+
+        timing.mark_barge_in_requested(reason)
+        logger.warning(
+            "barge_in_tts_cancellation_requested reason=%s words=%s speech_ms=%s "
+            "turn=%s text=%r",
+            reason,
+            words,
+            round(speech_duration * 1000),
+            timing.turn_id,
+            text[:120],
+        )
+
+        interrupt_if_possible = getattr(assistant, "_interrupt_if_possible", None)
+        if callable(interrupt_if_possible):
+            interrupt_if_possible()
+
+        interrupted = bool(getattr(speech, "interrupted", False))
+        if not interrupted:
+            interrupt = getattr(speech, "interrupt", None)
+            if callable(interrupt):
+                interrupt()
+                interrupted = bool(getattr(speech, "interrupted", False))
+
+        logger.warning(
+            "barge_in_agent_speech_interrupt_result interrupted=%s reason=%s turn=%s",
+            interrupted,
+            reason,
+            timing.turn_id,
+        )
+
+    def on_start_of_speech(event: object) -> None:
+        nonlocal user_started_at, last_interim_text
+        user_started_at = time.monotonic()
+        last_interim_text = ""
+        if playing_speech() is not None:
+            logger.info(
+                "barge_in_user_speech_detected_during_agent_playback turn=%s",
+                timing.turn_id,
+            )
+
+    def on_vad_updated(event: object) -> None:
+        if playing_speech() is None:
+            return
+        speech_duration = float(
+            getattr(event, "speech_duration", current_speech_duration()) or 0.0,
+        )
+        request_interrupt("vad_speech_duration", last_interim_text, speech_duration)
+
+    def on_interim_transcript(event: object) -> None:
+        nonlocal last_interim_text
+        text = transcript_text(event).strip()
+        if not text:
+            return
+        last_interim_text = text
+        if playing_speech() is None:
+            return
+        logger.info(
+            "barge_in_interim_transcript_during_agent_playback turn=%s words=%s text=%r",
+            timing.turn_id,
+            count_words(text),
+            text[:120],
+        )
+        request_interrupt("interim_transcript", text, current_speech_duration())
+
+    def on_final_transcript(event: object) -> None:
+        text = transcript_text(event).strip()
+        if not text or playing_speech() is None:
+            return
+        logger.info(
+            "barge_in_final_transcript_during_agent_playback turn=%s words=%s text=%r",
+            timing.turn_id,
+            count_words(text),
+            text[:120],
+        )
+        request_interrupt(
+            "final_transcript",
+            text,
+            max(current_speech_duration(), interrupt_seconds),
+        )
+
+    def on_end_of_speech(_event: object) -> None:
+        nonlocal user_started_at
+        user_started_at = None
+
+    human_input.on("start_of_speech", on_start_of_speech)
+    human_input.on("vad_inference_done", on_vad_updated)
+    human_input.on("interim_transcript", on_interim_transcript)
+    human_input.on("final_transcript", on_final_transcript)
+    human_input.on("end_of_speech", on_end_of_speech)
 
 
 def register_events(
@@ -572,6 +773,16 @@ def register_events(
     def on_user_speech(message: llm.ChatMessage) -> None:
         nonlocal last_user_speech_at
         last_user_speech_at = time.monotonic()
+        if (
+            timing.barge_in_requested_at is not None
+            and time.monotonic() - timing.barge_in_requested_at < 20
+        ):
+            logger.info(
+                "barge_in_new_user_turn_accepted turn=%s reason=%s chars=%s",
+                timing.turn_id,
+                timing.barge_in_reason,
+                len(message_text(message)),
+            )
         sink.emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
 
     def on_agent_speech(message: llm.ChatMessage) -> None:
