@@ -62,8 +62,22 @@ class RimeTTS(tts.TTS):
             idle_flush_seconds,
         )
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0))
+        logger.info(
+            "rime_tts_initialized voice=%s model=%s lang=%s sample_rate=%s",
+            self._voice_id,
+            self._model_id,
+            self._language,
+            self.sample_rate,
+        )
 
     def synthesize(self, text: str) -> "RimeStream":
+        logger.info(
+            "rime_tts_synthesize_requested voice=%s model=%s lang=%s chars=%s",
+            self._voice_id,
+            self._model_id,
+            self._language,
+            len(text),
+        )
         return RimeStream(
             client=self._client,
             api_key=self._api_key,
@@ -78,6 +92,12 @@ class RimeTTS(tts.TTS):
         )
 
     def stream(self) -> "RimeSynthesizeStream":
+        logger.info(
+            "rime_tts_stream_created voice=%s model=%s lang=%s",
+            self._voice_id,
+            self._model_id,
+            self._language,
+        )
         return RimeSynthesizeStream(
             client=self._client,
             api_key=self._api_key,

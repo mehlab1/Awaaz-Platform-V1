@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 from collections.abc import AsyncIterable, Mapping
@@ -42,6 +43,7 @@ class CallLifecycle:
         self._end_requested = False
         self._end_requested_at: float | None = None
         self._playback_active = False
+        self._playbacks_after_end_request = 0
         self._shutdown_started = False
         self._finish_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
@@ -66,6 +68,7 @@ class CallLifecycle:
         if not self._end_requested:
             self._end_requested = True
             self._end_requested_at = time.monotonic()
+            self._playbacks_after_end_request = 0
             logger.info(
                 "call_end_requested call_id=%s reason=%s playback_active=%s timeout_seconds=%s",
                 self._call_id,
@@ -85,10 +88,14 @@ class CallLifecycle:
 
     def mark_playback_started(self) -> None:
         self._playback_active = True
+        if self._end_requested:
+            self._playbacks_after_end_request += 1
         logger.info(
-            "playback_confirmed_started call_id=%s end_requested=%s",
+            "playback_confirmed_started call_id=%s end_requested=%s "
+            "playbacks_after_end_request=%s",
             self._call_id,
             self._end_requested,
+            self._playbacks_after_end_request,
         )
 
     def mark_playback_stopped(self, interrupted: bool) -> None:
@@ -100,8 +107,17 @@ class CallLifecycle:
             self._end_requested,
             elapsed_ms(self._end_requested_at, time.monotonic()),
         )
-        if self._end_requested and not interrupted:
+        if (
+            self._end_requested
+            and not interrupted
+            and self._playbacks_after_end_request > 0
+        ):
             self._schedule_finish("final response playback completed")
+        elif self._end_requested and not interrupted:
+            logger.info(
+                "call_end_waiting_for_final_response_playback call_id=%s",
+                self._call_id,
+            )
 
     def _schedule_finish(self, reason: str) -> None:
         if self._shutdown_started:
@@ -179,16 +195,36 @@ class AwaazAgent:
             await start_call_payload(ctx, config, room_metadata),
         )
         call_id = string_value(call, "id")
+        voice_id = required_string(config, "voiceId", "mist-default")
+        voice_model_id = required_string(config, "voiceModelId", "mistv2")
+        voice_lang = required_string(config, "voiceLang", "eng")
+        logger.info(
+            "voice_config_loaded agent_id=%s call_id=%s agent_version_id=%s "
+            "voice=%s model=%s lang=%s",
+            agent_id,
+            call_id,
+            string_value(config, "agentVersionId"),
+            voice_id,
+            voice_model_id,
+            voice_lang,
+        )
 
         rime = RimeTTS(
-            voice_id=required_string(config, "voiceId", "mist-default"),
-            model_id=required_string(config, "voiceModelId", "mistv2"),
-            language=required_string(config, "voiceLang", "eng"),
+            voice_id=voice_id,
+            model_id=voice_model_id,
+            language=voice_lang,
         )
         timing = PipelineTiming()
         lifecycle = CallLifecycle(ctx, call_id)
         assistant = create_assistant(config, rime, AwaazTools(lifecycle), timing)
-        speech_events = register_events(assistant, api, call_id, timing)
+        speech_events = register_events(
+            assistant,
+            api,
+            call_id,
+            timing,
+            lifecycle,
+            string_list(config, "endCallPhrases"),
+        )
         lifecycle.set_speech_events(speech_events)
 
         async def shutdown() -> None:
@@ -525,10 +561,13 @@ class PipelineTiming:
         self.playback_stopped_at = time.monotonic()
         self.playback_stopped_at_iso = utc_now_iso()
         logger.info(
-            "voice_playback_stopped turn=%s interrupted=%s playback_ms=%s total_turn_ms=%s",
+            "voice_playback_stopped turn=%s interrupted=%s first_audio_latency_ms=%s "
+            "playback_ms=%s total_response_ms=%s total_turn_ms=%s",
             self.turn_id,
             interrupted,
+            self.first_audio_latency_ms(),
             elapsed_ms(self.playback_started_at, time.monotonic()),
+            self.total_response_ms(),
             elapsed_ms(self.user_started_at, time.monotonic()),
         )
 
@@ -537,18 +576,32 @@ class PipelineTiming:
         self.barge_in_reason = reason
 
     def response_latency_ms(self) -> int | None:
-        response_started = (
-            self.playback_started_at
-            or self.tts_text_started_at
-            or self.first_llm_token_at
-            or self.llm_started_at
-        )
-        user_reference = (
-            self.user_stopped_at
-            or self.final_transcript_at
-            or self.user_started_at
-        )
-        return elapsed_ms(user_reference, response_started)
+        return self.first_audio_latency_ms()
+
+    def first_audio_latency_ms(self) -> int | None:
+        return elapsed_ms(self.user_response_reference_at(), self.playback_started_at)
+
+    def playback_duration_ms(self) -> int | None:
+        return elapsed_ms(self.playback_started_at, self.playback_stopped_at)
+
+    def total_response_ms(self) -> int | None:
+        return elapsed_ms(self.user_response_reference_at(), self.playback_stopped_at)
+
+    def user_response_reference_at(self) -> float | None:
+        return self.user_stopped_at or self.final_transcript_at or self.user_started_at
+
+    def agent_response_metrics(self) -> dict[str, object]:
+        metrics: dict[str, object] = {}
+        first_audio_latency_ms = self.first_audio_latency_ms()
+        playback_duration_ms = self.playback_duration_ms()
+        total_response_ms = self.total_response_ms()
+        if first_audio_latency_ms is not None:
+            metrics["firstAudioLatencyMs"] = first_audio_latency_ms
+        if playback_duration_ms is not None:
+            metrics["playbackDurationMs"] = playback_duration_ms
+        if total_response_ms is not None:
+            metrics["totalResponseMs"] = total_response_ms
+        return metrics
 
     def user_speech_payload(self) -> dict[str, object]:
         return self._payload_window(
@@ -907,17 +960,16 @@ def register_events(
     api: AwaazAPIClient,
     call_id: str | None,
     timing: PipelineTiming,
+    lifecycle: CallLifecycle,
+    end_call_phrases: list[str],
 ) -> SpeechEventSink:
     sink = SpeechEventSink(api, call_id)
     if not call_id:
         logger.warning("Call ID missing; speech events will not be emitted")
         return sink
 
-    last_user_speech_at: float | None = None
-
     def on_user_speech(message: llm.ChatMessage) -> None:
-        nonlocal last_user_speech_at
-        last_user_speech_at = time.monotonic()
+        text = message_text(message)
         if (
             timing.barge_in_requested_at is not None
             and time.monotonic() - timing.barge_in_requested_at < 20
@@ -926,37 +978,54 @@ def register_events(
                 "barge_in_new_user_turn_accepted turn=%s reason=%s chars=%s",
                 timing.turn_id,
                 timing.barge_in_reason,
-                len(message_text(message)),
+                len(text),
             )
         sink.emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
+        if is_closing_utterance(text, end_call_phrases):
+            logger.info(
+                "goodbye_intent_detected turn=%s chars=%s text=%r",
+                timing.turn_id,
+                len(text),
+                text[:120],
+            )
+            asyncio.create_task(lifecycle.request_end("user closing utterance"))
 
     def on_agent_speech(message: llm.ChatMessage) -> None:
         latency_ms = timing.response_latency_ms()
-        if latency_ms is None and last_user_speech_at is not None:
-            latency_ms = max(0, round((time.monotonic() - last_user_speech_at) * 1000))
+        metrics = timing.agent_response_metrics()
+        logger.info(
+            "voice_agent_response_metrics turn=%s latency_ms=%s metrics=%s",
+            timing.turn_id,
+            latency_ms,
+            metrics,
+        )
         sink.emit(
             "AGENT_SPEECH",
             message,
             latency_ms,
             timing.agent_speech_payload(),
+            {"metrics": metrics} if metrics else None,
         )
 
     def on_agent_speech_interrupted(message: llm.ChatMessage) -> None:
         latency_ms = timing.response_latency_ms()
-        if latency_ms is None and last_user_speech_at is not None:
-            latency_ms = max(0, round((time.monotonic() - last_user_speech_at) * 1000))
+        metrics = timing.agent_response_metrics()
         logger.warning(
-            "voice_agent_speech_interrupted turn=%s chars=%s latency_ms=%s",
+            "voice_agent_speech_interrupted turn=%s chars=%s latency_ms=%s metrics=%s",
             timing.turn_id,
             len(message_text(message)),
             latency_ms,
+            metrics,
         )
+        metadata: dict[str, object] = {"interrupted": True}
+        if metrics:
+            metadata["metrics"] = metrics
         sink.emit(
             "AGENT_SPEECH",
             message,
             latency_ms,
             timing.agent_speech_payload(),
-            {"interrupted": True},
+            metadata,
         )
 
     assistant.on("user_speech_committed", on_user_speech)
@@ -1017,6 +1086,13 @@ def string_value(
     return value if isinstance(value, str) else default
 
 
+def string_list(source: Mapping[str, object], key: str) -> list[str]:
+    value = source.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
 def required_string(
     source: Mapping[str, object],
     key: str,
@@ -1048,6 +1124,71 @@ def message_text(message: llm.ChatMessage) -> str:
     if isinstance(content, list):
         return " ".join(item for item in content if isinstance(item, str))
     return ""
+
+
+QUESTION_INTENT_RE = re.compile(
+    r"\b(can|could|would|what|why|when|where|who|how|tell|explain|show|another)\b",
+)
+GENERIC_THANKS = {"thank you", "thanks", "thank you very much"}
+DEFAULT_CLOSING_PHRASES = [
+    "thank you goodbye",
+    "thanks goodbye",
+    "goodbye",
+    "good bye",
+    "bye",
+    "bye bye",
+    "that's all",
+    "thats all",
+    "no that's all",
+    "no thats all",
+    "thank you so much",
+    "thanks so much",
+    "okay thanks",
+    "ok thanks",
+    "i'm done",
+    "im done",
+    "i am done",
+    "end the call",
+    "hang up",
+]
+
+
+def is_closing_utterance(text: str, configured_phrases: list[str]) -> bool:
+    normalized = normalize_utterance(text)
+    if not normalized:
+        return False
+
+    has_question_intent = bool("?" in text or QUESTION_INTENT_RE.search(normalized))
+    phrases = [*DEFAULT_CLOSING_PHRASES, *configured_phrases]
+    for phrase in phrases:
+        normalized_phrase = normalize_utterance(phrase)
+        if not normalized_phrase:
+            continue
+        if normalized_phrase in GENERIC_THANKS:
+            if normalized == normalized_phrase and not has_question_intent:
+                return True
+            continue
+        if phrase_in_utterance(normalized, normalized_phrase):
+            if has_question_intent and not is_explicit_hangup_phrase(normalized_phrase):
+                continue
+            return True
+    return False
+
+
+def normalize_utterance(text: str) -> str:
+    normalized = text.lower().replace("'", "").replace("’", "")
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def phrase_in_utterance(text: str, phrase: str) -> bool:
+    if text == phrase:
+        return True
+    return f" {phrase} " in f" {text} "
+
+
+def is_explicit_hangup_phrase(phrase: str) -> bool:
+    return phrase in {"end the call", "hang up", "goodbye", "good bye", "bye", "bye bye"}
 
 
 def elapsed_ms(start: float | None, end: float | None) -> int | None:

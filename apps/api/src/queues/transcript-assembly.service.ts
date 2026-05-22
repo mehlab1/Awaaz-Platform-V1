@@ -22,6 +22,9 @@ interface TranscriptEntry {
   endedAt: string | null;
   durationMs: number | null;
   latencyMs: number | null;
+  firstAudioLatencyMs: number | null;
+  playbackDurationMs: number | null;
+  totalResponseMs: number | null;
 }
 
 interface CostBreakdown {
@@ -78,14 +81,22 @@ export class TranscriptAssemblyService {
       })
       .map(({ event }) => event);
 
-    const transcript = orderedEvents.map((event): TranscriptEntry => ({
-      speaker: event.speaker ?? this.speakerForEvent(event.eventType),
-      text: event.content ?? '',
-      startedAt: (event.startedAt ?? event.createdAt).toISOString(),
-      endedAt: event.endedAt?.toISOString() ?? null,
-      durationMs: event.durationMs ?? null,
-      latencyMs: event.latencyMs ?? null,
-    }));
+    const transcript = orderedEvents.map((event): TranscriptEntry => {
+      const metrics = this.timingMetrics(event);
+      return {
+        speaker: event.speaker ?? this.speakerForEvent(event.eventType),
+        text: event.content ?? '',
+        startedAt: (event.startedAt ?? event.createdAt).toISOString(),
+        endedAt: event.endedAt?.toISOString() ?? null,
+        durationMs: event.durationMs ?? null,
+        latencyMs: event.latencyMs ?? null,
+        firstAudioLatencyMs: metrics.firstAudioLatencyMs ?? event.latencyMs ?? null,
+        playbackDurationMs:
+          metrics.playbackDurationMs ??
+          (event.eventType === EventType.AGENT_SPEECH ? event.durationMs : null),
+        totalResponseMs: metrics.totalResponseMs ?? null,
+      };
+    });
     const cost = this.calculateCost({
       durationSeconds: call.durationSeconds,
       events: orderedEvents,
@@ -154,6 +165,34 @@ export class TranscriptAssemblyService {
 
   private timelineTime(event: { startedAt: Date | null; createdAt: Date }) {
     return (event.startedAt ?? event.createdAt).getTime();
+  }
+
+  private timingMetrics(event: {
+    metadata: Prisma.JsonValue | null;
+  }): {
+    firstAudioLatencyMs?: number;
+    playbackDurationMs?: number;
+    totalResponseMs?: number;
+  } {
+    const metadata = this.asRecord(event.metadata);
+    const metrics = this.asRecord(metadata?.metrics);
+    return {
+      firstAudioLatencyMs: this.nonNegativeNumber(metrics?.firstAudioLatencyMs),
+      playbackDurationMs: this.nonNegativeNumber(metrics?.playbackDurationMs),
+      totalResponseMs: this.nonNegativeNumber(metrics?.totalResponseMs),
+    };
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  }
+
+  private nonNegativeNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.round(value)
+      : undefined;
   }
 
   private calculateCost(input: {

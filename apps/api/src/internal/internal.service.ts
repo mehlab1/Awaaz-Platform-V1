@@ -41,8 +41,14 @@ export class InternalService {
 
     const version = agent.currentVersion;
     const voice = await this.resolveVoiceMetadata(version.voiceId);
+    this.logger.log(
+      `Loaded agent config agent=${agent.id} version=${version.id} ` +
+        `voiceId=${version.voiceId} voiceModelId=${voice?.modelId ?? 'default'} ` +
+        `voiceLang=${voice?.lang ?? 'default'}`,
+    );
     return {
       agentId: agent.id,
+      agentVersionId: version.id,
       organizationId: agent.organizationId,
       systemPrompt: version.systemPrompt,
       voiceId: version.voiceId,

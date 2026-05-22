@@ -466,6 +466,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
+  const selectedVersionIsLive =
+    selectedVersion != null &&
+    agent?.currentVersionId != null &&
+    selectedVersion.id === agent.currentVersionId;
+  const testCallBlockedReason =
+    !agent?.isActive || !agent.currentVersion
+      ? 'Activate the agent and configure a current version first.'
+      : hasUnsavedChanges
+        ? 'Save & publish this version before testing voice changes.'
+        : !selectedVersionIsLive
+          ? 'Publish this version before testing it. Browser preview uses the live version.'
+          : null;
 
   const playVoicePreview = async () => {
     if (!selectedVoice) {
@@ -638,16 +650,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             type="button"
             variant="secondary"
             disabled={
-              !agent.isActive ||
-              !agent.currentVersion ||
+              testCallBlockedReason !== null ||
               saveBusy !== null ||
               versionPanelBusy
             }
-            title={
-              !agent.isActive || !agent.currentVersion
-                ? 'Activate the agent and configure a current version first.'
-                : 'Run a browser preview over LiveKit.'
-            }
+            title={testCallBlockedReason ?? 'Run a browser preview over LiveKit.'}
             onClick={() => setTestCallOpen(true)}
           >
             Test Agent

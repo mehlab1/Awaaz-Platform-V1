@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useOrgContext } from '@/components/org-context';
+import { cn } from '@/lib/utils';
 
 const FIELD_CLASS =
   'w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring';
@@ -21,11 +22,15 @@ const FIELD_CLASS =
 interface CreateOrganizationDialogProps {
   variant?: 'button' | 'inline' | 'outline';
   buttonLabel?: string;
+  buttonClassName?: string;
+  buttonSize?: 'default' | 'xs' | 'sm' | 'lg';
 }
 
 export function CreateOrganizationDialog({
   variant = 'button',
   buttonLabel = 'Create organization',
+  buttonClassName,
+  buttonSize = 'default',
 }: CreateOrganizationDialogProps) {
   const { createOrganization } = useOrgContext();
   const [open, setOpen] = useState(false);
@@ -71,13 +76,24 @@ export function CreateOrganizationDialog({
   return (
     <>
       {variant === 'button' ? (
-        <Button type="button" onClick={() => setOpen(true)}>
-          <PlusCircle />
+        <Button
+          type="button"
+          size={buttonSize}
+          className={buttonClassName}
+          onClick={() => setOpen(true)}
+        >
+          <PlusCircle className="size-4" />
           {buttonLabel}
         </Button>
       ) : (
-        <Button type="button" variant="outline" onClick={() => setOpen(true)}>
-          <PlusCircle />
+        <Button
+          type="button"
+          variant="outline"
+          size={buttonSize}
+          className={cn('gap-1.5', buttonClassName)}
+          onClick={() => setOpen(true)}
+        >
+          <PlusCircle className="size-4" />
           {buttonLabel}
         </Button>
       )}

@@ -28,6 +28,9 @@ type TranscriptTurn = {
   startedAt: string | null;
   endedAt: string | null;
   latencyMs: number | null;
+  firstAudioLatencyMs: number | null;
+  playbackDurationMs: number | null;
+  totalResponseMs: number | null;
 };
 
 interface CallDetailPayload {
@@ -62,6 +65,19 @@ interface CostParts {
   durationMinutes?: number;
   llmTokens?: number;
   ttsCharacters?: number;
+}
+
+interface MetricSummary {
+  values: number[];
+  avg: number | null;
+  max: number | null;
+}
+
+interface LatencyStats {
+  firstAudio: MetricSummary;
+  playback: MetricSummary;
+  total: MetricSummary;
+  usedLegacyLatency: boolean;
 }
 
 type RecordingState =
@@ -519,11 +535,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
                             Timestamp n/a
                           </span>
                         )}
-                        {typeof row.latencyMs === 'number' ? (
-                          <span className="text-muted-foreground text-[11px]">
-                            Δ {row.latencyMs} ms
-                          </span>
-                        ) : null}
+                        <TurnTimingChips turn={row} />
                       </div>
                     </div>
                     <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
@@ -568,24 +580,57 @@ function collectTranscriptTurns(content: unknown): TranscriptTurn[] {
       typeof e.latencyMs === 'number' && !Number.isNaN(e.latencyMs)
         ? e.latencyMs
         : null;
-    out.push({ speaker, text, startedAt, endedAt, latencyMs });
+    const firstAudioLatencyMs = numericField(e.firstAudioLatencyMs);
+    const playbackDurationMs = numericField(e.playbackDurationMs);
+    const totalResponseMs = numericField(e.totalResponseMs);
+    out.push({
+      speaker,
+      text,
+      startedAt,
+      endedAt,
+      latencyMs,
+      firstAudioLatencyMs,
+      playbackDurationMs,
+      totalResponseMs,
+    });
   }
   return out;
 }
 
-function summarizeLatencies(entries: TranscriptTurn[]) {
-  const values = entries
-    .map((e) => e.latencyMs)
-    .filter((n): n is number => typeof n === 'number' && !Number.isNaN(n));
-  if (values.length === 0) {
-    return { values: [] as number[], avg: null as number | null, max: null as number | null };
-  }
-  const sum = values.reduce((acc, v) => acc + v, 0);
+function numericField(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function summarizeLatencies(entries: TranscriptTurn[]): LatencyStats {
+  const firstAudioValues = entries
+    .map((entry) => entry.firstAudioLatencyMs ?? entry.latencyMs)
+    .filter(isNumber);
+  const playbackValues = entries
+    .map((entry) => entry.playbackDurationMs)
+    .filter(isNumber);
+  const totalValues = entries
+    .map((entry) => entry.totalResponseMs)
+    .filter(isNumber);
   return {
-    values,
-    avg: sum / values.length,
-    max: Math.max(...values),
+    firstAudio: summarizeNumbers(firstAudioValues),
+    playback: summarizeNumbers(playbackValues),
+    total: summarizeNumbers(totalValues),
+    usedLegacyLatency: entries.some(
+      (entry) => entry.firstAudioLatencyMs == null && entry.latencyMs != null,
+    ),
   };
+}
+
+function summarizeNumbers(values: number[]): MetricSummary {
+  if (values.length === 0) {
+    return { values, avg: null, max: null };
+  }
+  const sum = values.reduce((acc, value) => acc + value, 0);
+  return { values, avg: sum / values.length, max: Math.max(...values) };
+}
+
+function isNumber(value: number | null): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 function coerceCostParts(cb: unknown): CostParts {
@@ -696,6 +741,13 @@ function formatMmSs(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function formatMs(ms: number): string {
+  if (ms >= 1000) {
+    return `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s`;
+  }
+  return `${Math.round(ms)} ms`;
+}
+
 function DirectionBadge({ dir }: { dir: string }) {
   if (dir === 'INBOUND') {
     return <Badge variant="default">INBOUND</Badge>;
@@ -716,6 +768,46 @@ function StatusBadge({ status }: { status: string }) {
     default:
       return <Badge variant="secondary">{status}</Badge>;
   }
+}
+
+function TurnTimingChips({ turn }: { turn: TranscriptTurn }) {
+  if ((turn.speaker ?? '').toLowerCase() !== 'agent') {
+    return null;
+  }
+
+  const firstAudio = turn.firstAudioLatencyMs ?? turn.latencyMs;
+  const chips = [
+    firstAudio != null
+      ? { label: 'First audio', value: formatMs(firstAudio) }
+      : null,
+    turn.playbackDurationMs != null
+      ? { label: 'Playback', value: formatMs(turn.playbackDurationMs) }
+      : null,
+    turn.totalResponseMs != null
+      ? { label: 'Turn total', value: formatMs(turn.totalResponseMs) }
+      : null,
+  ].filter((chip): chip is { label: string; value: string } => chip !== null);
+
+  if (chips.length === 0) {
+    return (
+      <span className="text-muted-foreground text-[11px]">
+        Timing unavailable
+      </span>
+    );
+  }
+
+  return (
+    <>
+      {chips.map((chip) => (
+        <span
+          key={chip.label}
+          className="rounded bg-muted px-2 py-0.5 text-muted-foreground text-[11px]"
+        >
+          {chip.label}: <span className="tabular-nums">{chip.value}</span>
+        </span>
+      ))}
+    </>
+  );
 }
 
 function CostCard(props: {
@@ -808,70 +900,94 @@ function CostCard(props: {
   );
 }
 
-function LatencyCard(props: {
-  stats: { values: number[]; avg: number | null; max: number | null };
-}) {
-  const has = props.stats.values.length > 0;
+function LatencyCard(props: { stats: LatencyStats }) {
+  const has =
+    props.stats.firstAudio.values.length > 0 ||
+    props.stats.playback.values.length > 0 ||
+    props.stats.total.values.length > 0;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Latency</CardTitle>
+        <CardTitle>Voice responsiveness</CardTitle>
         <CardDescription>
-          Derived from transcript turn `latencyMs` when the worker attaches it from
-          call events.
+          First audio measures perceived latency. Playback and total turn time are
+          shown separately so long answers do not look like slow responses.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {!has ? (
           <p className="text-muted-foreground text-sm">
-            No per-turn latency tracked for this transcript yet — this is typical when the
-            agent pipeline emits events without instrumentation.
+            No per-turn voice timing is available for this transcript yet.
           </p>
         ) : (
           <>
-            <dl className="flex flex-wrap gap-6 text-sm">
-              <div>
-                <dt className="text-muted-foreground text-xs uppercase tracking-wide">
-                  Samples
-                </dt>
-                <dd className="font-semibold tabular-nums">
-                  {props.stats.values.length.toLocaleString()}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground text-xs uppercase tracking-wide">
-                  Average
-                </dt>
-                <dd className="font-semibold tabular-nums">
-                  {props.stats.avg != null
-                    ? `${props.stats.avg.toFixed(0)} ms`
-                    : '—'}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-muted-foreground text-xs uppercase tracking-wide">
-                  Max
-                </dt>
-                <dd className="font-semibold tabular-nums">
-                  {props.stats.max != null
-                    ? `${props.stats.max} ms`
-                    : '—'}
-                </dd>
-              </div>
-            </dl>
+            <div className="grid gap-3 text-sm sm:grid-cols-3">
+              <TimingSummary
+                label="First audio"
+                summary={props.stats.firstAudio}
+                empty="Missing"
+              />
+              <TimingSummary
+                label="Playback"
+                summary={props.stats.playback}
+                empty="Missing"
+              />
+              <TimingSummary
+                label="Turn total"
+                summary={props.stats.total}
+                empty="Missing"
+              />
+            </div>
+            {props.stats.usedLegacyLatency ? (
+              <p className="text-muted-foreground text-xs">
+                Some turns use legacy latency samples because first-audio timing was
+                not present on older events.
+              </p>
+            ) : null}
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">
-                View raw samples
+                View raw first-audio samples
               </summary>
               <pre className="mt-3 max-h-40 overflow-auto rounded bg-muted px-3 py-2 font-mono text-[11px]">
-                {props.stats.values.join(', ')}
+                {props.stats.firstAudio.values.join(', ')}
               </pre>
             </details>
           </>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function TimingSummary({
+  label,
+  summary,
+  empty,
+}: {
+  label: string;
+  summary: MetricSummary;
+  empty: string;
+}) {
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="text-muted-foreground text-xs uppercase tracking-wide">
+        {label}
+      </div>
+      {summary.values.length === 0 ? (
+        <div className="mt-1 text-muted-foreground">{empty}</div>
+      ) : (
+        <div className="mt-1 space-y-1">
+          <div className="font-semibold tabular-nums">
+            Avg {summary.avg != null ? formatMs(summary.avg) : '—'}
+          </div>
+          <div className="text-muted-foreground text-xs tabular-nums">
+            Max {summary.max != null ? formatMs(summary.max) : '—'} ·{' '}
+            {summary.values.length} sample{summary.values.length === 1 ? '' : 's'}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -10,18 +10,24 @@ export function OrgSwitcher() {
     setActiveOrgId,
     loadingOrgs,
   } = useOrgContext();
+  const activeOrg = orgs.find((org) => org.id === activeOrgId);
 
   return (
-    <div className="rounded-md border border-border bg-background p-3 text-sm">
-      <div className="text-muted-foreground">Active organization</div>
-      <div className="mt-1 font-mono text-xs break-all">
+    <div className="rounded-lg border border-border bg-background p-2.5 text-sm shadow-sm">
+      <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">
+        Organization
+      </div>
+      <div
+        className="mt-1 truncate font-medium text-xs"
+        title={activeOrg?.name ?? activeOrgId ?? undefined}
+      >
         {loadingOrgs
-          ? 'Loading…'
-          : activeOrgId ?? 'None — join or create an organization'}
+          ? 'Loading...'
+          : activeOrg?.name ?? 'None selected'}
       </div>
       {orgs.length > 0 ? (
         <select
-          className="mt-2 w-full rounded border border-input bg-background px-2 py-1 text-xs"
+          className="mt-2 h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
           value={activeOrgId ?? ''}
           onChange={(e) =>
             setActiveOrgId(e.target.value.length > 0 ? e.target.value : undefined)
@@ -38,7 +44,9 @@ export function OrgSwitcher() {
       <div className="mt-3">
         <CreateOrganizationDialog
           variant="outline"
-          buttonLabel={orgs.length > 0 ? 'Create another organization' : 'Create organization'}
+          buttonLabel={orgs.length > 0 ? 'New organization' : 'Create organization'}
+          buttonSize="sm"
+          buttonClassName="h-7 w-full justify-start rounded-md px-2 text-xs"
         />
       </div>
     </div>
