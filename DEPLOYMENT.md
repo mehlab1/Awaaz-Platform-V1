@@ -1,159 +1,231 @@
 # Deployment
 
-This guide covers the current verified non-Twilio deployment path: Vercel web, Render API, Supabase Postgres, Clerk, LiveKit, Redis, and Cloudflare R2 storage/playback readiness. Twilio/PSTN recording ingestion, real call recording lifecycle, and production agent-worker deployment remain Phase 9.
+Deploy guide for the **current** Awaaz stack: Vercel web, Render API + Python worker, Supabase, Clerk, LiveKit, Upstash Redis, Cloudflare R2.
 
-## 1. Prepare Environment
+**Architecture reference:** [ARCHITECTURE.md](./ARCHITECTURE.md)
 
-Use `.env.example` as the source of required variable names. Never commit `.env` or real secrets.
+**Still deferred:** Twilio/PSTN telephony and Twilio recording ingestion only.
 
-Important alignment checks:
+---
 
-- Vercel `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and Render `CLERK_SECRET_KEY` must come from the same Clerk app/environment.
-- Vercel `NEXT_PUBLIC_API_URL` must point to the deployed Render API URL.
-- Render `FRONTEND_URL` must point to the deployed Vercel web URL.
-- Render `DATABASE_URL` should use the Supabase transaction pooler with `pgbouncer=true`, `sslmode=require`, and a small connection limit.
-- Render `DATABASE_DIRECT_URL` should use a migration-safe direct/session-pooler URL with `sslmode=require`.
+## 1. Topology overview
 
-## 2. Render API
+| Service | Platform | Blueprint name |
+|---------|----------|----------------|
+| Frontend | Vercel | (manual project) |
+| API | Render web | `awaaz-api` |
+| Voice worker | Render background worker | `awaaz-agent-worker` |
+| Postgres | Supabase | — |
+| Redis | Upstash | — |
+| Recordings | Cloudflare R2 | bucket `awaaz-recordings` |
+| Realtime | LiveKit Cloud | — |
 
-The repo includes `render.yaml` for the API service.
+---
 
-Expected build command:
+## 2. Environment preparation
+
+Copy [`.env.example`](./.env.example) → `.env` locally. Never commit secrets.
+
+**Cross-service alignment (required):**
+
+- Vercel `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` + Render `CLERK_SECRET_KEY` → same Clerk app
+- Vercel `NEXT_PUBLIC_API_URL` → Render API URL
+- Render API `FRONTEND_URL` → Vercel URL
+- API + worker `WORKER_SECRET` → identical
+- API + worker `LIVEKIT_*` + `LIVEKIT_AGENT_NAME` → identical LiveKit project
+- Worker `AWAAZ_API_URL` → Render API URL (not localhost)
+- API `REDIS_URL` → Upstash `rediss://…`; **do not** set `DISABLE_REDIS` on Render
+
+**Database URLs:**
+
+- `DATABASE_URL` — Supabase transaction pooler, `?pgbouncer=true&sslmode=require&connection_limit=1`
+- `DATABASE_DIRECT_URL` — session/direct pooler for migrations, `?sslmode=require`
+
+---
+
+## 3. Render API (`awaaz-api`)
+
+Defined in [`render.yaml`](./render.yaml).
+
+**Build:**
 
 ```bash
 npm install -g pnpm@9 && pnpm install --frozen-lockfile --prod=false && pnpm --filter @awaaz/api exec prisma migrate deploy && pnpm --filter @awaaz/api exec prisma generate && pnpm --filter @awaaz/api build
 ```
 
-Expected start command:
+**Start:**
 
 ```bash
 node apps/api/dist/main.js
 ```
 
-Required Render variables:
+**Health check path:** `/health`
 
-- `NODE_ENV=production`
-- `PORT=3001`
-- `DATABASE_URL`
-- `DATABASE_DIRECT_URL`
-- `FRONTEND_URL`
-- `CLERK_SECRET_KEY`
-- `CLERK_WEBHOOK_SECRET`
-- `LIVEKIT_URL`
-- `LIVEKIT_API_KEY`
-- `LIVEKIT_API_SECRET`
-- `LIVEKIT_AGENT_NAME`
-- `WORKER_SECRET`
-- `REDIS_URL`
-- `GROQ_API_KEY`
-- `DEEPGRAM_API_KEY`
-- `RIME_API_KEY`
+### Required env vars
 
-Service ownership notes:
+| Variable | Notes |
+|----------|-------|
+| `NODE_ENV` | `production` |
+| `PORT` | `3001` |
+| `DATABASE_URL` | Supabase pooler |
+| `DATABASE_DIRECT_URL` | Migrations |
+| `FRONTEND_URL` | Vercel URL |
+| `CLERK_SECRET_KEY` | |
+| `CLERK_WEBHOOK_SECRET` | Clerk → `POST /webhooks/clerk` |
+| `LIVEKIT_URL` | `wss://…` |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | |
+| `LIVEKIT_AGENT_NAME` | e.g. `awaaz-agent` |
+| `WORKER_SECRET` | Shared with worker |
+| `REDIS_URL` | Upstash `rediss://…` |
+| `GROQ_API_KEY` / `DEEPGRAM_API_KEY` / `RIME_API_KEY` | Voice preview + worker config source |
+| `CLOUDFLARE_R2_ACCOUNT_ID` | Browser recordings |
+| `CLOUDFLARE_R2_ACCESS_KEY` / `CLOUDFLARE_R2_SECRET_KEY` | |
+| `CLOUDFLARE_R2_BUCKET_NAME` | `awaaz-recordings` |
 
-- Render API owns `CLERK_SECRET_KEY`, `CLERK_WEBHOOK_SECRET`, `LIVEKIT_*`, `WORKER_SECRET`, `REDIS_URL`, `GROQ_API_KEY`, `DEEPGRAM_API_KEY`, and `RIME_API_KEY`.
-- Vercel frontend only needs `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`; it should never receive secret Clerk or Rime keys.
-- The local Python worker must also load the LiveKit, Deepgram, Groq, and Rime keys if you want the browser/local voice path to work end to end.
-- Any Render env change requires a redeploy or restart before the API sees the new value.
+### Optional env vars
 
-R2 variables are configured and verified for storage-backed playback readiness:
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `LIVEKIT_BROWSER_RECORDING_ENABLED` | `true` | Room composite egress to R2 |
+| `DISABLE_REDIS` | unset | **Leave unset** in production |
 
-- `CLOUDFLARE_R2_ACCOUNT_ID`
-- `CLOUDFLARE_R2_ACCESS_KEY`
-- `CLOUDFLARE_R2_SECRET_KEY`
-- `CLOUDFLARE_R2_BUCKET_NAME`
+### LiveKit webhooks (API)
 
-R2 verification completed for bucket `awaaz-recordings`: upload/download, HeadObject, presigned HEAD/GET/range, CORS headers, bytes-matched WAV retrieval, WaveSurfer readiness, and `GET /api/v1/calls/:id/recording` compatibility. Twilio/PSTN recording ingestion into this bucket remains Phase 9.
+Configure in LiveKit Cloud → Webhooks:
 
-Health check:
+- URL: `https://YOUR_RENDER_API/webhooks/livekit`
+- Events: `room_finished`, `egress_ended` (at minimum for transcripts + recordings)
+
+### Redis on Render
+
+1. Create Upstash Redis database; copy **TLS** URL (`rediss://…`)
+2. Set `REDIS_URL` on Render API
+3. Remove `DISABLE_REDIS` if previously set during quota outage
+4. Redeploy; confirm log: `BullMQ queues enabled after Redis preflight`
+
+If preflight fails, API still starts — transcripts use **sync fallback**; analytics skip cache.
+
+### Health check
 
 ```powershell
 Invoke-RestMethod https://YOUR_RENDER_API/health
 ```
 
-Current deployed API health URL:
+Current API: `https://awaaz-api-nxae.onrender.com/health`
 
-```text
-https://awaaz-api-nxae.onrender.com/health
-```
+---
 
-## 3. Vercel Web
+## 4. Render worker (`awaaz-agent-worker`)
 
-Configure the project from the repo root.
+**Type:** Background Worker (Python)
 
-Build command:
+**Root directory:** `apps/agent-worker`
 
-```bash
-pnpm --filter web build
-```
-
-Install command:
+**Build:**
 
 ```bash
-pnpm install --frozen-lockfile
+pip install -r requirements.txt
 ```
 
-Required Vercel variables:
+**Start:**
 
-- `NEXT_PUBLIC_API_URL`
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+```bash
+python main.py start
+```
 
-Optional/supabase client variables if used by future frontend flows:
+**Runtime:** `runtime.txt` pins `python-3.11.9`. Set `PYTHON_VERSION=3.11.9` in Render if needed.
 
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `ANON_KEY`
+### Required env vars
 
-## 4. Clerk
+| Variable | Notes |
+|----------|-------|
+| `LIVEKIT_URL` | Same as API |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | |
+| `LIVEKIT_AGENT_NAME` | Must match API dispatches |
+| `AWAAZ_API_URL` | `https://YOUR_RENDER_API` |
+| `WORKER_SECRET` | Same as API |
+| `DEEPGRAM_API_KEY` / `GROQ_API_KEY` / `RIME_API_KEY` | Voice pipeline |
 
-Configure:
+**Do not set:** `REDIS_URL`, `DISABLE_REDIS` — worker has no Redis dependency.
 
-- Web app publishable key in Vercel.
-- Secret key in Render.
-- Clerk webhook endpoint: `https://YOUR_RENDER_API/webhooks/clerk`.
-- Webhook signing secret in Render as `CLERK_WEBHOOK_SECRET`.
-- Organization invitations enabled for the app.
-- Invitation creation logs now distinguish Clerk creation, Clerk preflight, and DB persistence so a successful API response can still be separated from delayed mail delivery in Clerk.
+### Verification
 
-Security smoke check:
+1. LiveKit Cloud → Agents → worker shows **Connected**
+2. Run browser Test Agent from dashboard
+3. Worker logs: agent config loaded, call events, graceful end
+
+See [`apps/agent-worker/README.md`](./apps/agent-worker/README.md).
+
+---
+
+## 5. Vercel web
+
+**Root:** repo root
+
+**Install:** `pnpm install --frozen-lockfile`
+
+**Build:** `pnpm --filter web build`
+
+### Required env vars
+
+| Variable | Notes |
+|----------|-------|
+| `NEXT_PUBLIC_API_URL` | Render API URL |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk publishable key |
+
+No Redis, LiveKit secrets, or worker keys on Vercel.
+
+---
+
+## 6. Clerk
+
+- Publishable key → Vercel
+- Secret key → Render API
+- Webhook: `https://YOUR_RENDER_API/webhooks/clerk`
+- Signing secret → `CLERK_WEBHOOK_SECRET`
+- Enable organization invitations
+
+Fake signature smoke test should return **401**:
 
 ```powershell
 $api = "https://YOUR_RENDER_API"
-$headers = @{
-  "Content-Type" = "application/json"
-  "svix-id" = "msg_fake_phase8"
-  "svix-timestamp" = [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-  "svix-signature" = "v1,fake_signature"
-}
-$body = '{"type":"user.created","data":{"id":"user_fake"}}'
-try {
-  Invoke-WebRequest -Uri "$api/webhooks/clerk" -Method POST -Headers $headers -Body $body -ErrorAction Stop
-} catch {
-  Write-Host "StatusCode:" ([int]$_.Exception.Response.StatusCode)
-}
+# … see ARCHITECTURE.md or prior DEPLOYMENT examples
 ```
 
-Expected: `401`.
+---
 
-## 5. Database
+## 7. Cloudflare R2
 
-Run migrations during Render deploy or manually:
+Required for **browser** call recordings (not Twilio).
+
+1. Create bucket `awaaz-recordings`
+2. Create R2 API token with read/write
+3. Set `CLOUDFLARE_R2_*` on Render API
+4. Configure CORS for browser playback (GET, Range headers)
+5. Verify: `GET /api/v1/calls/:id/recording` returns presigned URL after test call
+
+Object key pattern: `recordings/browser-preview/{orgId}/{agentId}/{roomName}.mp3`
+
+---
+
+## 8. Database migrations
+
+Runs in Render API build. Manual:
 
 ```powershell
 pnpm --filter @awaaz/api prisma:deploy
 pnpm --filter @awaaz/api prisma:validate
 ```
 
-Seed only when intentionally creating the baseline org/agent state:
+Seed (optional baseline org/agent):
 
 ```powershell
 pnpm --filter @awaaz/api prisma:seed
 ```
 
-Seed variables can override defaults; see `.env.example`.
+---
 
-## 6. Post-Deploy Verification
-
-Run:
+## 9. Post-deploy verification
 
 ```powershell
 pnpm --filter web lint
@@ -162,71 +234,43 @@ pnpm --filter @awaaz/api build
 pnpm --filter @awaaz/api prisma:validate
 ```
 
-Verify deployed pages:
+**Functional checks:**
 
-- `/agents`
-- `/calls`
-- `/analytics`
-- `/phone-numbers`
-- `/settings/members`
-- `/settings/api-keys`
-- `/settings/organization`
-- `/qualicall`
+1. Sign in → `/agents` → open agent → **Test Agent** (live version, no unsaved edits)
+2. Complete browser call → `/calls/:id` → transcript, cost, latency within ~10s
+3. Recording appears after egress (may take 5–30s)
+4. `/analytics` loads (non-test calls only)
+5. API log: `BullMQ queues enabled after Redis preflight`
+6. LiveKit worker **Connected**
 
-Verify non-Twilio security:
+**Security checks:**
 
-- Clerk fake signature returns `401`.
-- Internal endpoint without `x-worker-secret` returns `403`.
-- Cross-org wrong `x-organization-id` returns `403`.
-- VIEWER mutation returns `403`.
-- Organization route/header mismatch returns `403`.
+- Clerk fake webhook → 401
+- `/internal/*` without `x-worker-secret` → 403
+- Cross-org `x-organization-id` → 403
 
-## 7. Free-Tier Survival
+---
 
-Use UptimeRobot or an equivalent free monitor as the primary keep-alive. Do not add monitors that require Clerk user tokens or private worker secrets.
+## 10. Free-tier survival
 
-Recommended monitors:
+| Monitor | URL | Interval |
+|---------|-----|----------|
+| Render API | `https://YOUR_API/health` | 10 min |
+| Vercel web | `https://YOUR_APP/` | 10 min |
 
-- Render API: `GET https://awaaz-api-nxae.onrender.com/health` every 10 minutes. Expected response: HTTP `200` with JSON containing `status: "ok"`.
-- Vercel web: `GET https://YOUR_VERCEL_APP/` every 10 minutes. Expected response: HTTP `200` or a normal Vercel redirect.
+- `/internal/worker/heartbeat` is **private** (`x-worker-secret` required)
+- After cold start, run one Test Agent call before demos
+- Render free tier workers/API sleep after idle — expect 30–90s first request delay
 
-Optional Supabase keepalive decision:
+---
 
-- Skip public Supabase keepalive for the current Phase 8 scope. A direct Supabase ping either needs credentials or a deliberately public endpoint, so the safer current posture is API/web monitoring plus normal app traffic.
+## 11. Local vs production env summary
 
-Worker heartbeat:
+| Setting | Local `.env` | Render API | Render worker | Vercel |
+|---------|--------------|------------|---------------|--------|
+| `DISABLE_REDIS` | `true` | omit | N/A | N/A |
+| `REDIS_URL` | optional | required | **none** | N/A |
+| `AWAAZ_API_URL` | `http://localhost:3001` | N/A | Render API URL | N/A |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:3001` | N/A | N/A | Render API URL |
 
-- `/internal/worker/heartbeat` is protected by `x-worker-secret`.
-- A request without `x-worker-secret` should return `403`; this is expected and confirms the endpoint is not public.
-- If the worker is deployed with private env vars, it may call `/internal/worker/heartbeat` every 5 minutes using the shared `WORKER_SECRET`.
-- Live PSTN worker hardening remains Phase 9.
-
-Manual checks:
-
-```powershell
-$api = "https://awaaz-api-nxae.onrender.com"
-Invoke-RestMethod "$api/health"
-
-try {
-  Invoke-WebRequest "$api/internal/worker/heartbeat" -ErrorAction Stop
-} catch {
-  Write-Host "Expected protected heartbeat status:" ([int]$_.Exception.Response.StatusCode)
-}
-```
-
-Expected heartbeat status without a secret: `403`.
-
-Cold-start mitigation:
-
-- After a long idle period, open the deployed web app and run one browser test call before demoing critical non-Twilio flows.
-- Real PSTN warm-up and Twilio recording ingestion/lifecycle validation are Phase 9. R2 storage/presigned/browser playback readiness is already verified.
-
-## 8. Out of Scope Until Phase 9
-
-Do not block Phase 8 on:
-
-- Twilio/PSTN live calls.
-- Twilio recording webhook.
-- Twilio/PSTN recording ingestion into the verified R2 bucket.
-- Real PSTN call recording lifecycle and playback from actual Twilio recordings.
-- Live PSTN worker hardening.
+Full variable list: [`.env.example`](./.env.example) and [ARCHITECTURE.md](./ARCHITECTURE.md).

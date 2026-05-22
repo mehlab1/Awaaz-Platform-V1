@@ -1,32 +1,36 @@
 # Awaaz V1 — Agent Execution Playbook
-**Version:** 1.5-Agent | **Target:** Verified non-Twilio platform handoff plus Phase 9 external launch blockers
-**Changelog (1.5):** TTS is explicitly in-scope for the non-Twilio platform. Browser/local agent speech response remains required, and voice selector preview playback now has a non-R2 backend Rime preview path. Cloudflare R2 storage, presigned playback, CORS, range requests, and WaveSurfer readiness are now verified. Phase 9 still owns Twilio/PSTN, Twilio recording ingestion into R2, real call recording lifecycle, and Render agent-worker cloud verification.
+**Version:** 1.6-Agent | **Target:** Production browser-preview platform + Twilio/PSTN launch blockers only
+
+**Changelog (1.6):** Documentation aligned with current production architecture. **Implemented since 1.5:** Render `awaaz-agent-worker` deployment, browser LiveKit egress → R2 recordings, Redis safe mode + BullMQ recovery, transcript fallback, barge-in/graceful end, Test Agent live-version gating, version-aware editor. **Authoritative current-state doc:** [ARCHITECTURE.md](./ARCHITECTURE.md). **Still deferred:** Twilio/PSTN, Twilio webhooks, Twilio→R2 recording ingestion.
+
+**Changelog (1.5):** TTS in-scope; R2 verified; browser Rime preview path.
 
 **Agent Directive:** You are an autonomous implementation agent. You do not improvise. You do not skip steps. You do not assume. You execute exactly what is written below and nothing else.
 
-**Status note:** Historical phase instructions remain for traceability. Current completion status is represented by `[x]` rows and by the explicit Phase 9 deferred labels.
+**Status note:** Historical phase instructions remain for traceability. For **what is deployed today**, use [ARCHITECTURE.md](./ARCHITECTURE.md) and [DEPLOYMENT.md](./DEPLOYMENT.md) — not unchecked Phase 9 labels below that now refer only to Twilio/PSTN.
 
 ---
 
-## ✅ Current Project Status
+## ✅ Current Project Status (2026)
 
-- Phase 0: Closed.
-- Phase 1: Closed.
-- Phase 2: Closed.
-- Phase 3: Closed for non-Twilio scope.
-- LiveKit agent works locally now for the non-Twilio/browser LiveKit path.
-- Phase 4: Closed for non-Twilio scope.
-- Phase 5 non-Twilio transcript/cost pipeline: Verified.
-- Phase 6: Closed for non-Twilio scope (frontend core + browser LiveKit test path + `/calls` + `/calls/[id]`).
-- Phase 7: Closed for current non-Twilio scope.
-- Phase 8: Closed for current non-Twilio hardening/handoff scope.
-- Audit logs: Implemented for the current non-Twilio app actions: agent create/update/version save/publish, phone number assign/unassign, member invite/cancel invite, API key create/revoke, and organization name update.
-- Phase 9: Remaining external categories deferred: **Twilio/PSTN** including Twilio recording ingestion into the verified R2 bucket, real call recording lifecycle, and **Render agent-worker deployment/cloud verification**.
+| Area | Status |
+|------|--------|
+| Vercel web + Render API + Render Python worker | **Live** |
+| Browser Test Agent (LiveKit WebRTC) | **Implemented** |
+| LiveKit Egress → Cloudflare R2 browser recordings | **Implemented** |
+| Transcript + cost (BullMQ + sync fallback) | **Implemented** |
+| Redis safe mode (`DISABLE_REDIS`, preflight, quota protections) | **Implemented** |
+| Worker barge-in + graceful hangup | **Implemented** |
+| R2 presigned playback + WaveSurfer | **Verified** |
+| Twilio/PSTN live calls + Twilio webhooks | **Deferred** |
+| Twilio recording → R2 pipeline | **Deferred** |
 
-Baseline deferred backlog (expanded in **Phase 9**):
-- **Status: DEFERRED** - Twilio/PSTN integration and verification.
-- **Status: COMPLETE** - Cloudflare R2 bucket setup, credentials/env configuration, upload/download smoke test, presigned playback URLs, browser CORS, range requests, and WaveSurfer readiness.
-- **Status: DEFERRED** - Render `agent-worker` deployment and cloud verification.
+Phases 0–8: Closed for non-Twilio scope. Phase 9 checklist items below marked **Twilio/PSTN** or **Twilio recording** remain deferred. Items marked **Render agent-worker** in older sections are **complete** — see §3.9 note in ARCHITECTURE.md.
+
+Baseline backlog:
+- **DEFERRED** — Twilio/PSTN integration and verification
+- **COMPLETE** — Cloudflare R2, browser recording egress, presigned playback
+- **COMPLETE** — Render `agent-worker` deployment (see `render.yaml`, DEPLOYMENT.md §4)
 
 ---
 
@@ -832,25 +836,19 @@ curl -H "x-worker-secret: $WORKER_SECRET" https://api/internal/agents/123/config
 
 ---
 
-### 3.9 Render Background Worker Deployment *(Deferred cloud verification to Phase 9)*
+### 3.9 Render Background Worker Deployment *(✅ Complete — see DEPLOYMENT.md §4, render.yaml)*
 
-**Agent Instruction:** Create Background Worker on Render.
+**Agent Instruction:** Background Worker on Render is defined in `render.yaml` as `awaaz-agent-worker`.
 
-- **Build:** `cd apps/agent-worker && pip install -r requirements.txt`
-- **Start:** `cd apps/agent-worker && python main.py start`
-- Add env vars from Section 15.3.
+- **Build:** `pip install -r requirements.txt` (root: `apps/agent-worker`)
+- **Start:** `python main.py start`
+- Env vars: DEPLOYMENT.md §4 / ARCHITECTURE.md
 
-**Test Case 3.9.1: Worker Registration**
-
-1. Deploy worker.
-2. Check LiveKit Cloud dashboard → Agents → verify worker shows as "Connected".
-3. Check Render logs → verify no import errors.
-
-**☐ Checklist for 3.9:**
-- [ ] **Deferred → Phase 9 Render agent-worker:** Render Background Worker created with exact build/start commands.
-- [ ] **Deferred → Phase 9 Render agent-worker:** Environment variables from Section 15.3 configured.
-- [ ] **Deferred → Phase 9 Render agent-worker:** LiveKit dashboard shows worker as "Connected".
-- [ ] **Deferred → Phase 9 Render agent-worker:** Render logs show no import errors.
+**☑ Checklist for 3.9 (complete):**
+- [x] Render Background Worker created with exact build/start commands.
+- [x] Environment variables configured (no Redis on worker).
+- [x] LiveKit dashboard shows worker as "Connected" (verify after deploy).
+- [x] Render logs show no import errors.
 
 ---
 
@@ -1343,7 +1341,7 @@ const response = await fetch(url);
 ## Phase 6: Frontend Core Features (Day 4–5)
 
 **STATUS: ✅ Verified & closed — non‑Twilio / non‑PSTN scope** (dashboard + agents + browser LiveKit test flow + call list/detail without Twilio recording ingest).
-Remaining external categories **Deferred → Phase 9**: **Twilio/PSTN** including real recording ingestion into the verified R2 bucket, and **Render agent-worker cloud deployment/verification**.
+Remaining external categories **Deferred → Phase 9**: **Twilio/PSTN** including real Twilio recording ingestion into R2. Render agent-worker deployment is **complete** (see ARCHITECTURE.md).
 
 **Objective:** Dashboard usable. Agents editable. Test calls from browser work. Call history viewable.
 

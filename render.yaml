@@ -1,12 +1,10 @@
-# Render blueprint — Phase 1.5 (adjust service name / branch / env in dashboard as needed)
+# Render blueprint — API + agent worker (adjust names / branch / env in dashboard)
 services:
   - type: web
     name: awaaz-api
     runtime: node
     plan: free
     rootDir: .
-    # `--prod=false`: Render sets NODE_ENV=production; without this pnpm skips devDependencies
-    # and `@nestjs/cli` is missing → `nest: not found`.
     buildCommand: npm install -g pnpm@9 && pnpm install --frozen-lockfile --prod=false && pnpm --filter @awaaz/api exec prisma migrate deploy && pnpm --filter @awaaz/api exec prisma generate && pnpm --filter @awaaz/api build
     startCommand: node apps/api/dist/main.js
     healthCheckPath: /health
@@ -15,3 +13,14 @@ services:
         value: production
       - key: PORT
         value: "3001"
+
+  - type: worker
+    name: awaaz-agent-worker
+    runtime: python
+    plan: free
+    rootDir: apps/agent-worker
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py start
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"

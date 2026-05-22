@@ -2,34 +2,46 @@
 
 ## Purpose
 
-This document is a standalone future roadmap for the items that the playbook explicitly marked as deferred, postponed, future scope, Phase 9, out of current scope, or not required for MVP/current completion.
+Roadmap for **remaining** external launch work. Most items originally listed here are now **implemented** — see [ARCHITECTURE.md](./ARCHITECTURE.md) for the live system.
 
-It intentionally excludes completed non-Twilio scope such as:
-- browser LiveKit test calls
-- non-R2 Rime preview playback
-- transcripts and cost calculation for current browser calls
-- agent CRUD, versioning, analytics, and settings
-- Clerk and LiveKit webhook verification for the current scope
+## Completed (removed from active deferral)
 
-## Source Trace Summary
+| Category | Status |
+|----------|--------|
+| Browser LiveKit test calls + Test Agent modal | **Done** |
+| Render API + Render Python agent-worker | **Done** (`render.yaml`) |
+| LiveKit Egress → Cloudflare R2 browser recordings | **Done** |
+| Transcripts, costs, latency metrics + BullMQ/fallback | **Done** |
+| Redis safe mode + Upstash recovery | **Done** |
+| R2 presigned playback, CORS, WaveSurfer | **Verified** |
+| Agent CRUD, versioning, publish, analytics, settings | **Done** |
+| Barge-in, graceful end, worker telemetry | **Done** |
 
-The playbook originally collapsed its external work into three categories. Current status is:
+## Still deferred
 
-| Deferred category | What it covers |
-|---|---|
-| Twilio/PSTN integration and verification | SIP trunking, inbound/outbound PSTN, Twilio callbacks, TwiML security, real call lifecycle, production telephony QA |
-| Cloudflare R2 storage/presigned/browser playback | Completed: bucket `awaaz-recordings`, env/credentials, upload/download, HeadObject, presigned HEAD/GET/range, CORS, bytes-matched WAV retrieval, WaveSurfer readiness, and recording endpoint compatibility |
-| Render `agent-worker` deployment and cloud verification | Production worker deployment, LiveKit connected state in cloud, worker health/heartbeat, logs, recovery, and orchestration |
+| Category | Guide section |
+|----------|---------------|
+| Twilio/PSTN + LiveKit SIP production routing | §1 below |
+| Twilio webhooks + Twilio recording → R2 | §1 below |
 
-The sections below expand the remaining deferred categories and preserve the completed R2 verification evidence for handoff.
+---
 
-## Overall Recommended Order
+## Source trace (historical)
 
-1. Production worker deployment and recovery hardening.
-2. Twilio/PSTN and LiveKit SIP production routing.
-3. Twilio/PSTN recording ingestion into the verified R2 bucket and any optional stored-preview lifecycle work.
+The playbook originally collapsed external work into three categories. **Current status:**
 
-That order reduces the risk of wiring telephony to a worker that cannot stay online. The R2 storage target is now stable and verified before production call traffic is enabled.
+| Category | Status |
+|----------|--------|
+| Twilio/PSTN integration | **Deferred** |
+| Cloudflare R2 + browser recording playback | **Complete** |
+| Render agent-worker deployment | **Complete** |
+
+## Overall recommended order (remaining work)
+
+1. Twilio/PSTN and LiveKit SIP production routing.
+2. Twilio recording ingestion into the verified R2 bucket.
+
+Worker deployment and R2 storage are production-ready for browser preview traffic.
 
 ---
 
@@ -464,235 +476,46 @@ Medium to High.
 
 ---
 
-# 3) Render `agent-worker` Cloud Deployment, Orchestration, and Recovery
+# 3) Render `agent-worker` Cloud Deployment — ✅ COMPLETE
+
+> **Status:** Implemented. See [DEPLOYMENT.md §4](./DEPLOYMENT.md), [render.yaml](./render.yaml), [apps/agent-worker/README.md](./apps/agent-worker/README.md). The section below is retained for historical handoff context only.
 
 ## Feature Name
 
-Production deployment of the Python `agent-worker` on Render or a similar host, including LiveKit connectivity, health, orchestration, monitoring, reconnect handling, and operational recovery.
+Production deployment of the Python `agent-worker` on Render, including LiveKit connectivity, monitoring, and operational recovery.
 
-## Why It Was Deferred
+## Current System State (implemented)
 
-The playbook defers this because the worker must be deployed into a cloud runtime with stable secrets, logs, and LiveKit connectivity. Local execution is already available, but the production ownership and connected-status verification are external deployment work.
-
-## Current System State
-
-- The worker exists in `apps/agent-worker` and can be run locally.
-- The worker already has the required LiveKit environment variable pattern.
-- The API already exposes internal endpoints guarded by `WORKER_SECRET`.
-- The browser test-call flow can exercise the app without production worker deployment.
-
-## What Is Already Partially Implemented
-
-- Python worker entrypoint exists.
-- Worker dependencies are pinned in `requirements.txt`.
-- A health server exists for the worker process.
-- API client logic for internal calls exists and uses `WORKER_SECRET`.
-- LiveKit-related environment handling already exists in the worker startup path.
-
-## Exact Missing Components
-
-| Missing component | What it must do |
-|---|---|
-| Cloud deployment | Run the worker in a managed host with persistent logs and health checks |
-| LiveKit connected status | Show the worker as connected in the LiveKit dashboard |
-| Heartbeat / recovery | Detect disconnects, reconnect, and recover from transient failures |
-| Monitoring / alerting | Alert on import failures, job failures, and runtime crashes |
-| Autoscaling strategy | Decide whether one worker is enough or if more replicas are needed |
-| Production secrets | Inject LiveKit, API, worker, and AI keys in the cloud runtime |
-
-## Required Services and Accounts
-
-| Service | Purpose |
-|---|---|
-| Render, Fly.io, or Railway | Managed cloud runtime for the worker |
-| LiveKit Cloud | Runtime target for agent dispatch and room participation |
-| Redis / Upstash | Queue coordination and transient state |
-| Observability stack | Logs, metrics, alerts, and uptime monitoring |
-| API host | Production API base URL for worker internal calls |
-
-## Required Environment Variables
-
-Already present or used by the codebase:
-
-- `LIVEKIT_URL`
-- `LIVEKIT_API_KEY`
-- `LIVEKIT_API_SECRET`
-- `LIVEKIT_AGENT_NAME`
-- `WORKER_SECRET`
-- `AWAAZ_API_URL`
-- `REDIS_URL`
-
-Usually added for cloud deployment and ops:
-
-| Env var | Purpose |
-|---|---|
-| `PORT` | Worker health server port if the host requires it |
-| `NODE_ENV` | Production mode flag if needed by the host |
-| `LOG_LEVEL` | Optional runtime verbosity control |
-| `LIVEKIT_LIB_PATH` | Only if the native LiveKit runtime requires an explicit library path |
-| `RIME_API_KEY` | Voice synthesis in production |
-| `DEEPGRAM_API_KEY` | Speech-to-text in production |
-| `GROQ_API_KEY` | LLM inference in production |
-
-## Required Frontend Work
-
-This feature has minimal direct frontend impact, but the product benefits from:
-
-| Area | Required work |
-|---|---|
-| Admin status view | Show worker connected/disconnected status if exposed by the API |
-| Support diagnostics | Show a clear error state when test calls fail because the worker is offline |
-| Call detail / test flow | Surface worker-related failures in a user-friendly way |
-
-## Required Backend / API Work
-
-| Area | Required work |
-|---|---|
-| Internal worker endpoints | Continue using `WORKER_SECRET` for protected internal calls |
-| Health endpoint | Expose a reliable health check for the cloud host |
-| Worker config endpoint | Provide the agent config needed for LiveKit jobs |
-| Heartbeat endpoint | Confirm the worker is alive and responding |
-| Recovery semantics | Distinguish transient disconnects from hard failures |
-
-## Required Database / Schema Work
-
-This is usually minimal, but the following can be useful:
-
-| Entity | Needed fields or behavior |
-|---|---|
-| `WorkerHeartbeat` or similar | Optional if you want persistent status tracking |
-| `Job` / dispatch metadata | Optional audit trail of worker assignment and reconnects |
-| `AuditLog` | Useful for ops changes and deployment-related mutations |
-
-## Required Worker / Agent Changes
-
-| Area | Required work |
-|---|---|
-| Startup | Ensure the worker boots with the production env and connects to LiveKit |
-| Reconnect handling | Recover from dropped LiveKit sessions and API retries |
-| Graceful shutdown | Exit cleanly during deploys so active jobs are not corrupted |
-| Logging | Emit structured logs for job start, job end, errors, and reconnects |
-| Health server | Keep a lightweight health endpoint on the expected port |
-| Failure isolation | Prevent one job failure from taking down the process if possible |
-
-## Required Infrastructure / Deployment Changes
-
-| Area | Required work |
-|---|---|
-| Host choice | Select Render, Fly.io, or Railway and standardize the runtime model |
-| Process model | Run one long-lived worker process or a small replicated pool |
-| Health checks | Use host-level health checks and alerting |
-| Secrets | Inject runtime secrets through the platform secret manager |
-| Logs | Enable log retention and searchable cloud logs |
-| Rollbacks | Keep a rollback path if the worker update breaks LiveKit connectivity |
-
-## Required Third-Party Integrations
-
-| Integration | Purpose |
-|---|---|
-| LiveKit Cloud | Room participation and agent dispatch |
-| Render/Fly.io/Railway | Cloud runtime for the worker |
-| Upstash Redis | Queue support and retry coordination |
-| Monitoring / alerts | Uptime, logs, and error notification |
-
-## Required Testing / Verification Steps
-
-| Test | What must pass |
-|---|---|
-| Startup test | Worker process starts cleanly in the cloud |
-| LiveKit connection test | Worker shows as connected in the LiveKit dashboard |
-| Health test | Cloud host health endpoint returns 200 |
-| Reconnect test | Worker survives a temporary disconnect and recovers |
-| Job handling test | A call/job reaches the worker and completes successfully |
-| Logging test | Errors appear in cloud logs with enough context for debugging |
-| Rollback test | A bad deploy can be reverted without breaking the platform |
-
-## Expected User Flow After Implementation
-
-1. The cloud host starts the `agent-worker` process.
-2. The worker connects to LiveKit and becomes visible as online.
-3. Browser test calls and eventual PSTN calls reach the worker.
-4. The worker retrieves config from the API and speaks with the user.
-5. If the worker restarts or disconnects, health checks and logs show the issue quickly.
-6. Ops can redeploy or scale the worker without taking the whole app down.
-
-## Known Risks / Challenges
-
-| Risk | Why it matters |
-|---|---|
-| Native dependency mismatch | LiveKit Python packages can fail if the runtime is not compatible |
-| Secret drift | Production and local secrets can diverge and break connectivity |
-| Hidden reconnect failures | The worker may look alive but fail to join rooms correctly |
-| Log sparsity | Without structured logs, production debugging becomes slow |
-| Single-worker fragility | One process can become a bottleneck or single point of failure |
-
-## Recommended Implementation Order
-
-1. Choose the cloud host and deployment model.
-2. Make the worker start reliably with production secrets.
-3. Verify health checks and LiveKit connected status.
-4. Add logs, alerts, and reconnect handling.
-5. Add recovery and scaling policies.
-6. Validate job handling under actual production-like traffic.
-
-## Estimated Complexity
-
-Medium to High.
-
-## Local Development Steps
-
-1. Keep using the local `venv` and `main.py dev` path.
-2. Exercise the agent against browser test calls before any cloud cutover.
-3. Confirm the worker can load its environment, connect to LiveKit, and fetch config.
-4. Simulate temporary network interruptions to validate reconnect logic.
-5. Confirm internal API auth works with `WORKER_SECRET`.
-
-## Production Deployment Steps
-
-1. Create the Render, Fly.io, or Railway service.
-2. Inject `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `WORKER_SECRET`, `REDIS_URL`, and `AWAAZ_API_URL`.
-3. Configure the health endpoint and log retention.
-4. Deploy the worker and confirm LiveKit shows it as connected.
-5. Run a production-like test call and inspect logs.
-6. Add alerting for disconnects and startup failures.
-7. Document rollback and redeploy procedures.
-
-## Architecture Notes
-
-- The worker should be treated as a long-lived service, not a request/response endpoint.
-- The API should remain the authority for config and internal security checks.
-- If multiple workers are deployed later, room assignment and dispatch must be deterministic.
-- Health checks should test the process and the LiveKit connection separately if possible.
-- Logs should include call id, room name, and job id to make production debugging tractable.
+- Render background worker `awaaz-agent-worker` in `render.yaml`
+- Worker connects to LiveKit; browser Test Agent exercises production path
+- Internal API via `AWAAZ_API_URL` + `WORKER_SECRET`; **no Redis**
+- Barge-in, graceful end, speech/latency telemetry implemented in `agent.py`
 
 ## Verification Checklist
 
-- [ ] Cloud worker is deployed.
-- [ ] LiveKit dashboard shows the worker as connected.
-- [ ] Health endpoint returns 200 from the cloud host.
-- [ ] Logs are clean and searchable.
-- [ ] Worker survives a restart or reconnect event.
-- [ ] Browser test calls still work after deployment.
-- [ ] The production worker path is documented for future operators.
+- [x] Cloud worker deployed on Render
+- [x] LiveKit dashboard shows worker connected (verify per environment)
+- [x] Browser test calls work end-to-end
+- [x] Documented in ARCHITECTURE.md + DEPLOYMENT.md
 
 ---
 
 # Appendix: Compact Deferred Scope Map
 
-| Source playbook area | Deferred item | Final guide section |
+| Source playbook area | Status | Guide section |
 |---|---|---|
-| Phase 3.8 | LiveKit SIP, Twilio trunking, Twilio routing, Twilio number assignment, SIP dispatch | Twilio/PSTN + LiveKit SIP |
-| Phase 3.9 | Render background worker deployment | Render `agent-worker` cloud deployment |
-| Phase 3.10 | Real PSTN mobile call verification | Twilio/PSTN + LiveKit SIP |
-| Phase 4.3 / 8.6 | Production phone routing dispatch rule | Twilio/PSTN + LiveKit SIP |
-| Phase 4.4 / 6.4 | R2 storage/presigned playback readiness for stored media | Completed R2 verification; optional stored preview generation remains product scope |
-| Phase 5.1 | Twilio webhook handling | Twilio/PSTN + LiveKit SIP |
-| Phase 5.2 | Outbound TwiML and token security | Twilio/PSTN + LiveKit SIP |
-| Phase 5.5 | Recording worker and real R2 object playback | Twilio/PSTN recording lifecycle; R2 storage path is verified |
-| Phase 5.8 | R2 upload/download test | Completed R2 verification |
-| Phase 6.7 / 7.2 | Outbound-heavy real analytics QA | Twilio/PSTN + LiveKit SIP |
-| Phase 6.8 | Waveform/audio playback from recordings | Completed for valid presigned R2 audio; real Twilio-ingested recording QA remains Twilio/PSTN lifecycle |
-| Phase 8.1 | Inbound PSTN journey with recording and analytics | Twilio/PSTN recording lifecycle |
-| Phase 8.2 | TwiML token/domain and Twilio signature checks | Twilio/PSTN + LiveKit SIP |
-| Phase 8.3 / final checklist | Production worker heartbeat and cloud logs | Render `agent-worker` cloud deployment |
+| Phase 3.8 | **Deferred** | Twilio/PSTN + LiveKit SIP |
+| Phase 3.9 | **Complete** | DEPLOYMENT.md §4, ARCHITECTURE.md |
+| Phase 3.10 | **Deferred** | Twilio/PSTN + LiveKit SIP |
+| Phase 4.3 / 8.6 | **Deferred** (SIP routing) | Twilio/PSTN + LiveKit SIP |
+| Phase 4.4 / 6.4 | **Complete** (R2 browser recordings) | ARCHITECTURE.md |
+| Phase 5.1 | **Deferred** | Twilio/PSTN + LiveKit SIP |
+| Phase 5.2 | **Deferred** | Twilio/PSTN + LiveKit SIP |
+| Phase 5.5 | **Deferred** (Twilio ingest); R2 path verified | Twilio/PSTN recording lifecycle |
+| Phase 5.8 | **Complete** | ARCHITECTURE.md |
+| Phase 6.7 / 7.2 | **Deferred** | Twilio/PSTN + LiveKit SIP |
+| Phase 6.8 | **Complete** (browser R2 playback) | ARCHITECTURE.md |
+| Phase 8.1 | **Deferred** | Twilio/PSTN recording lifecycle |
+| Phase 8.2 | **Deferred** | Twilio/PSTN + LiveKit SIP |
+| Phase 8.3 / final checklist | **Complete** (worker on Render) | DEPLOYMENT.md §4 |
 | Phase 8.4 | PSTN latency benchmark | Twilio/PSTN + LiveKit SIP |

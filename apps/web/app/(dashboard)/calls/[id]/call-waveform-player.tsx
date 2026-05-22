@@ -1,7 +1,7 @@
 'use client';
 
 import type WaveSurfer from 'wavesurfer.js';
-import { Pause, Play } from 'lucide-react';
+import { Download, Loader2, Pause, Play } from 'lucide-react';
 import {
   forwardRef,
   useCallback,
@@ -19,18 +19,31 @@ export interface CallWaveformHandle {
 
 type Props = {
   audioUrl: string;
+  downloadFileName?: string;
   onReady?: () => void;
   onError?: (message: string) => void;
 };
 
 export const CallWaveformPlayer = forwardRef<CallWaveformHandle, Props>(
-  function CallWaveformPlayer({ audioUrl, onReady, onError }, ref) {
+  function CallWaveformPlayer(
+    { audioUrl, downloadFileName = 'call-recording.mp3', onReady, onError },
+    ref,
+  ) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const instanceRef = useRef<WaveSurfer | null>(null);
+    const onReadyRef = useRef(onReady);
+    const onErrorRef = useRef(onError);
     const [isReady, setIsReady] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
+    const [downloadBusy, setDownloadBusy] = useState(false);
+    const [downloadError, setDownloadError] = useState<string | null>(null);
+
+    useEffect(() => {
+      onReadyRef.current = onReady;
+      onErrorRef.current = onError;
+    }, [onError, onReady]);
 
     useImperativeHandle(ref, () => ({
       seekToSeconds(seconds: number): void {
@@ -38,11 +51,11 @@ export const CallWaveformPlayer = forwardRef<CallWaveformHandle, Props>(
         if (!ws) {
           return;
         }
-        const duration = ws.getDuration();
-        if (!duration || duration <= 0) {
+        const trackDuration = ws.getDuration();
+        if (!trackDuration || trackDuration <= 0) {
           return;
         }
-        const clamped = Math.max(0, Math.min(seconds, duration - 0.01));
+        const clamped = Math.max(0, Math.min(seconds, trackDuration - 0.01));
         ws.setTime(clamped);
         setCurrentTime(clamped);
       },
@@ -55,6 +68,36 @@ export const CallWaveformPlayer = forwardRef<CallWaveformHandle, Props>(
       }
       void ws.playPause();
     }, [isReady]);
+
+    const downloadRecording = useCallback(async () => {
+      if (downloadBusy) {
+        return;
+      }
+      setDownloadBusy(true);
+      setDownloadError(null);
+      try {
+        const res = await fetch(audioUrl);
+        if (!res.ok) {
+          throw new Error('Download failed');
+        }
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = objectUrl;
+        anchor.download = downloadFileName;
+        anchor.rel = 'noopener';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(objectUrl);
+      } catch (error: unknown) {
+        setDownloadError(
+          error instanceof Error ? error.message : 'Download failed',
+        );
+      } finally {
+        setDownloadBusy(false);
+      }
+    }, [audioUrl, downloadBusy, downloadFileName]);
 
     useEffect(() => {
       const el = containerRef.current;
@@ -77,7 +120,7 @@ export const CallWaveformPlayer = forwardRef<CallWaveformHandle, Props>(
           container: containerRef.current,
           height: 88,
           url: audioUrl,
-          waveColor: 'rgba(148,163,184,0.45)',
+          waveColor: 'rgba(148,163184,0.45)',
           progressColor: 'rgb(59 130 246)',
           cursorColor: 'rgb(59 130 246)',
           cursorWidth: 2,
@@ -91,7 +134,7 @@ export const CallWaveformPlayer = forwardRef<CallWaveformHandle, Props>(
             if (!disposed) {
               setIsReady(true);
               setDuration(ws.getDuration());
-              onReady?.();
+              onReadyRef.current?.();
             }
           }),
           ws.on('timeupdate', (seconds: number) => {
@@ -122,7 +165,9 @@ export const CallWaveformPlayer = forwardRef<CallWaveformHandle, Props>(
           }),
           ws.on('error', (error: Error) => {
             if (!disposed) {
-              onError?.(error.message || 'Waveform audio could not be decoded.');
+              onErrorRef.current?.(
+                error.message || 'Waveform audio could not be decoded.',
+              );
             }
           }),
         );
@@ -135,31 +180,60 @@ export const CallWaveformPlayer = forwardRef<CallWaveformHandle, Props>(
         instanceRef.current?.destroy();
         instanceRef.current = null;
       };
-    }, [audioUrl, onError, onReady]);
+    }, [audioUrl]);
 
     return (
       <div className="space-y-3 rounded-md border border-border bg-muted/20 p-3">
-        <div ref={containerRef} className="w-full" />
+        <div className="relative">
+          <div ref={containerRef} className="w-full min-h-[88px]" />
+          {!isReady ? (
+            <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-md bg-muted/40 text-muted-foreground text-sm">
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              Loading waveform…
+            </div>
+          ) : null}
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={togglePlayback}
-            disabled={!isReady}
-            className="gap-2"
-          >
-            {isPlaying ? (
-              <Pause className="h-4 w-4" aria-hidden />
-            ) : (
-              <Play className="h-4 w-4" aria-hidden />
-            )}
-            {isPlaying ? 'Pause' : 'Play'}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={togglePlayback}
+              disabled={!isReady}
+              className="gap-2"
+              aria-label={isPlaying ? 'Pause recording' : 'Play recording'}
+            >
+              {isPlaying ? (
+                <Pause className="h-4 w-4" aria-hidden />
+              ) : (
+                <Play className="h-4 w-4" aria-hidden />
+              )}
+              {isPlaying ? 'Pause' : 'Play'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void downloadRecording()}
+              disabled={!isReady || downloadBusy}
+              className="gap-2"
+            >
+              {downloadBusy ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Download className="h-4 w-4" aria-hidden />
+              )}
+              Download Recording
+            </Button>
+          </div>
           <p className="font-mono text-muted-foreground text-xs tabular-nums">
             {formatTime(currentTime)} / {formatTime(duration)}
           </p>
         </div>
+        {downloadError ? (
+          <p className="text-destructive text-xs">{downloadError}</p>
+        ) : null}
       </div>
     );
   },

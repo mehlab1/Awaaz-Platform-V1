@@ -1,6 +1,9 @@
 # Awaaz V1 — Platform Specification
-**Version:** 1.0 | **Status:** Authoritative Source of Truth  
-**Path in repo:** `docs/spec.md`  
+**Version:** 1.1 | **Status:** Domain/API reference (schema, contracts)
+
+> **Runtime architecture (current):** See [ARCHITECTURE.md](./ARCHITECTURE.md) for deployment topology, browser preview flow, Redis safe mode, R2 recordings, and env vars. This spec remains the source of truth for **Prisma schema** and **API contracts**; some overview sections predate the completed browser-preview + Render worker stack.
+
+**Path in repo:** `spec.md`
 **Referenced by:** Playbook §1.2.1 — copy `prisma/schema.prisma` verbatim from Section 5 of this document.
 
 ---
@@ -28,11 +31,15 @@
 
 ## 1. Platform Overview
 
-Awaaz V1 is a multi-tenant AI voice agent platform built for Finova Solutions. It enables organizations to configure, deploy, and monitor AI voice agents that handle real phone calls via a Twilio → LiveKit → Python pipeline.
+Awaaz V1 is a multi-tenant AI voice agent platform. Organizations configure agents, run **browser LiveKit test calls**, review call history (transcripts, latency, R2 recordings), and monitor analytics.
+
+**Production path (implemented):** Browser → LiveKit → Python worker → Nest internal API → Postgres / Redis / R2.
+
+**Deferred path:** Twilio PSTN → LiveKit SIP → same worker pipeline.
 
 **Core services:**
 - **`apps/api`** — NestJS REST API (Node 20, TypeScript)
-- **`apps/web`** — Next.js 14 App Router frontend (TypeScript, Tailwind, shadcn/ui)
+- **`apps/web`** — Next.js 15 App Router frontend (TypeScript, Tailwind, shadcn/ui)
 - **`apps/agent-worker`** — Python 3.11 LiveKit agent (Deepgram STT → Groq LLM → Rime TTS)
 - **`apps/qualicall-worker`** — Placeholder, future QA scoring worker
 - **`packages/shared-types`** — Shared TypeScript types across apps

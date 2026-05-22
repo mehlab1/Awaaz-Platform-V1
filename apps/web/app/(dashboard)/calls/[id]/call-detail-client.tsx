@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { format } from 'date-fns';
+import { Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
 import { Badge } from '@/components/ui/badge';
@@ -161,15 +162,17 @@ export function CallDetailClient({ callId }: { callId: string }) {
     if (!activeOrgId || !detail) {
       return undefined;
     }
-    const isCompletedBrowserTest =
-      detail.status === 'COMPLETED' && testCallFromMeta(detail.metadata);
+    const recordingExpected =
+      detail.status === 'COMPLETED' &&
+      Boolean(
+        detail.recordingUrl?.trim() ||
+          recordingObjectKeyFromMeta(detail.metadata),
+      );
     const needsAsyncArtifacts =
-      !detail.transcript || detail.costBreakdown == null || !detail.recordingUrl;
-    if (
-      !isCompletedBrowserTest ||
-      !needsAsyncArtifacts ||
-      detailRefreshAttempts.current >= 6
-    ) {
+      !detail.transcript ||
+      detail.costBreakdown == null ||
+      (recordingExpected && !detail.recordingUrl?.trim());
+    if (!needsAsyncArtifacts || detailRefreshAttempts.current >= 6) {
       return undefined;
     }
 
@@ -232,12 +235,12 @@ export function CallDetailClient({ callId }: { callId: string }) {
             return;
           }
           if (res.status === 404 || res.status === 400) {
-            const detail = await res.text();
+            const responseDetail = sanitizeRecordingMessage(await res.text());
             if (attempt < maxAttempts) {
               setRecordingState({
                 phase: 'processing',
                 attempt: attempt + 1,
-                detail: detail || 'Recording not ready yet.',
+                detail: responseDetail || 'Recording not ready yet.',
               });
               retryTimer = window.setTimeout(() => {
                 void probeRecording(attempt + 1);
@@ -247,12 +250,12 @@ export function CallDetailClient({ callId }: { callId: string }) {
             setRecordingState({
               phase: 'unavailable',
               reason: 'not_ready',
-              detail: detail || 'Recording was not available in storage yet.',
+              detail: responseDetail || 'Recording was not available in storage yet.',
             });
             return;
           }
           if (res.status === 503) {
-            const txt = await res.text();
+            const txt = sanitizeRecordingMessage(await res.text());
             setRecordingState({
               phase: 'unavailable',
               reason: 'storage',
@@ -260,7 +263,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
             });
             return;
           }
-          const t = await res.text();
+          const t = sanitizeRecordingMessage(await res.text());
           throw new Error(t || res.statusText);
         };
 
@@ -287,7 +290,9 @@ export function CallDetailClient({ callId }: { callId: string }) {
         setRecordingState({
           phase: 'unavailable',
           reason: 'error',
-          detail: e instanceof Error ? e.message : String(e),
+          detail: sanitizeRecordingMessage(
+            e instanceof Error ? e.message : String(e),
+          ),
         });
       }
     }
@@ -338,11 +343,12 @@ export function CallDetailClient({ callId }: { callId: string }) {
   );
 
   const testBadge = detail ? testCallFromMeta(detail.metadata) : false;
-  const recordingDisplayKey =
-    detail?.recordingUrl?.trim() || recordingObjectKeyFromMeta(detail?.metadata);
-  const recordingStorageLabel = recordingDisplayKey
-    ? 'Recording saved to R2'
-    : 'None';
+  const hasRecordingOnFile = Boolean(recordingCandidate);
+  const recordingSavedBadge =
+    hasRecordingOnFile &&
+    (recordingState.phase === 'ready' ||
+      recordingState.phase === 'processing' ||
+      recordingState.phase === 'loading');
 
   if (!activeOrgId && !loading) {
     return (
@@ -442,35 +448,42 @@ export function CallDetailClient({ callId }: { callId: string }) {
               {formatDuration(detail.durationSeconds)}
             </p>
           </div>
-          <div>
-            <h3 className="text-muted-foreground text-xs uppercase tracking-wide">
-              Recording stored
-            </h3>
-            <p className="text-sm">{recordingStorageLabel}</p>
-          </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Recording</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            <CardTitle>Recording</CardTitle>
+            {recordingSavedBadge ? (
+              <Badge variant="secondary" className="text-xs">
+                Recording saved
+              </Badge>
+            ) : null}
+          </div>
           <CardDescription>
-            WaveSurfer renders only after a playable presigned URL is returned.
+            Play, seek, and download call audio once processing completes.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {recordingState.phase === 'loading' || recordingState.phase === 'idle' ? (
-            <p className="text-muted-foreground text-sm">Checking recording availability…</p>
+          {recordingState.phase === 'loading' ||
+          recordingState.phase === 'idle' ? (
+            <RecordingProcessingState message="Checking recording availability…" />
           ) : null}
           {recordingState.phase === 'processing' ? (
-            <p className="text-muted-foreground text-sm">
-              Recording processing. Retrying playback URL...
-            </p>
+            <RecordingProcessingState
+              message={
+                recordingState.detail ??
+                'Recording is still processing. Retrying playback URL…'
+              }
+              attempt={recordingState.attempt}
+            />
           ) : null}
           {recordingState.phase === 'ready' ? (
             <CallWaveformPlayer
               ref={waveformRef}
               audioUrl={recordingState.audioUrl}
+              downloadFileName={`call-${detail.id.slice(0, 8)}-recording.mp3`}
               onReady={handleWaveformReady}
               onError={handleWaveformError}
             />
@@ -998,29 +1011,77 @@ function UnavailableRecording({
 }) {
   const title =
     state.reason === 'none'
-      ? 'Recording unavailable'
+      ? 'No recording for this call'
       : state.reason === 'storage'
-        ? 'Recording storage not ready'
+        ? 'Recording storage unavailable'
         : state.reason === 'broken'
-          ? 'Recording response was invalid'
+          ? 'Recording could not be played'
           : state.reason === 'not_ready'
-            ? 'Recording not ready yet'
-            : 'Playback could not initialize';
+            ? 'Recording still processing'
+            : 'Playback unavailable';
+
+  const body =
+    state.reason === 'none'
+      ? 'This call does not have a stored recording. Transcript and cost data may still be available.'
+      : state.reason === 'not_ready'
+        ? 'The recording may still be uploading or finalizing. Refresh the page in a moment.'
+        : state.reason === 'storage'
+          ? 'Object storage is not configured or temporarily unavailable.'
+          : 'Try refreshing the page. If the problem persists, run another test call.';
 
   return (
-    <div className="rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-8 text-center text-sm space-y-2">
+    <div className="space-y-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-8 text-center text-sm">
       <p className="font-medium text-base">{title}</p>
-      <p className="text-muted-foreground">
-        PSTN ingestion + R2 object upload land in Phase 9. Until then most browser/LiveKit
-        calls leave `recordingUrl` empty — transcript and pricing still behave normally.
-      </p>
+      <p className="text-muted-foreground">{body}</p>
       {state.detail ? (
-        <p className="break-all font-mono text-muted-foreground text-xs">
-          {state.detail}
-        </p>
+        <p className="text-muted-foreground text-xs">{state.detail}</p>
       ) : null}
     </div>
   );
+}
+
+function RecordingProcessingState(props: {
+  message: string;
+  attempt?: number;
+}) {
+  return (
+    <div
+      className="flex items-center gap-3 rounded-md border border-dashed border-border bg-muted/30 px-4 py-6 text-sm"
+      role="status"
+      aria-live="polite"
+    >
+      <Loader2 className="h-5 w-5 shrink-0 animate-spin text-muted-foreground" />
+      <div className="space-y-1 text-left">
+        <p className="font-medium">{props.message}</p>
+        {props.attempt != null && props.attempt > 0 ? (
+          <p className="text-muted-foreground text-xs">
+            Retry {props.attempt} of 6
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function sanitizeRecordingMessage(raw: string | undefined | null): string {
+  const text = raw?.trim() ?? '';
+  if (!text) {
+    return '';
+  }
+  if (
+    text.includes('recordings/') ||
+    text.includes('browser-preview/') ||
+    /^[a-z0-9/_-]+\.(mp3|wav|m4a)$/i.test(text)
+  ) {
+    return 'Recording not ready yet.';
+  }
+  if (text === 'NO_RECORDING') {
+    return 'No recording is attached to this call yet.';
+  }
+  if (text === 'RECORDING_NOT_READY') {
+    return 'Recording not ready yet.';
+  }
+  return text;
 }
 
 function formatUsd(n: number): string {

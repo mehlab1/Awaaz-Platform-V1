@@ -1,212 +1,289 @@
 # Troubleshooting
 
-Use this guide for the current non-Twilio deployment. Cloudflare R2 storage/presigned/browser playback readiness is verified. Phase 9 covers Twilio/PSTN, Twilio recording ingestion into R2, real call recording lifecycle, and production worker deployment.
+Operational guide for the **current** browser-preview deployment: Vercel + Render API + Render worker + LiveKit + Upstash Redis + R2.
 
-## Worker Not Connecting
+**Architecture:** [ARCHITECTURE.md](./ARCHITECTURE.md) · **Deploy:** [DEPLOYMENT.md](./DEPLOYMENT.md)
 
-Symptoms:
+Twilio/PSTN issues are out of scope until telephony is implemented.
 
-- Browser test call does not connect to an agent.
-- LiveKit room is created but no worker joins.
-- Worker logs show LiveKit connection failures.
+---
 
-Checks:
+## How to inspect logs
 
-- `LIVEKIT_URL` should use the expected protocol for the worker/SDK, commonly `wss://...` for agent connection.
-- `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` must match the same LiveKit project used by the API.
-- `LIVEKIT_AGENT_NAME` should match the dispatch/worker name expected by browser test calls.
-- `AWAAZ_API_URL` should point to the deployed API for worker internal callbacks.
-- `WORKER_SECRET` must match on API and worker.
+| Component | Where |
+|-----------|--------|
+| API | Render → `awaaz-api` → Logs |
+| Worker | Render → `awaaz-agent-worker` → Logs |
+| Web | Vercel → Deployment → Functions/Runtime logs |
+| LiveKit | LiveKit Cloud → Rooms / Agents / Webhooks |
+| Redis | Upstash dashboard → Commands / usage |
+| R2 | Cloudflare dashboard → R2 → bucket metrics |
 
-Resolution:
+Filter API logs for: `BullMQ`, `Redis preflight`, `Transcript fallback`, `room_finished`, `egress_ended`, `LiveKit webhook`.
 
-- Align LiveKit env vars across API and worker.
-- Restart the worker after env changes.
-- Re-run a browser test call after Render/worker cold start.
+---
 
-## No Audio
+## Test Agent button disabled
 
-Current scope:
+**Symptoms:** "No unsaved changes" but Test Agent greyed out.
 
-- Browser test-call audio should work through LiveKit browser flow.
-- Real PSTN audio through Twilio SIP is Phase 9.
-- R2 playback is verified for valid presigned audio objects; real PSTN recording ingestion into R2 remains Phase 9.
+**Checks:**
 
-Checks:
+- Hover button — tooltip shows blocking reason
+- DevTools console: `[AgentEditor] Test Agent gate` debug object
+- Common blocks: unsaved prompt/voice edits, save/publish in progress, agent inactive, no live published version, live version missing prompt/voice
 
-- Browser microphone permission is allowed.
-- LiveKit credentials match between API and worker.
-- For future Twilio/PSTN work, verify the Twilio SIP trunk origination URI and LiveKit SIP setup.
+**Note:** Test Agent uses the **live published version**, not the version you are viewing in history. Viewing V9 while V10 is live is OK if there are no unsaved edits.
 
-Resolution:
+---
 
-- For browser tests, refresh and rerun the test call after checking mic permission.
-- For Twilio/PSTN no-audio issues, keep the fix in Phase 9 and verify SIP trunk configuration there.
+## Stuck "Connecting" in Test Agent modal
 
-## Transcript Missing
+**Symptoms:** Modal opens, spinner on Connecting, no agent audio.
 
-Symptoms:
+**Checks:**
 
-- Call row exists, but transcript is empty or not assembled.
-- Call detail shows fallback states.
+1. LiveKit worker **Connected** in LiveKit dashboard
+2. `LIVEKIT_AGENT_NAME` identical on API and worker
+3. `LIVEKIT_URL` / keys match same LiveKit project
+4. Worker `AWAAZ_API_URL` points to deployed API (not localhost)
+5. `WORKER_SECRET` matches on API and worker
+6. Render worker not sleeping — wake API + worker via health monitor or retry after 60s
+7. Browser mic permission granted
 
-Checks:
+**Resolution:**
 
-- `REDIS_URL` is configured and uses the correct TLS scheme for the provider.
-- BullMQ queues can connect.
-- LiveKit `room_finished` webhook is configured and signed correctly.
-- Transcript worker logs do not show queue or API callback failures.
+- Redeploy/restart worker after env changes
+- Run Test Agent again after cold start
+- Check worker logs for dispatch received / config fetch errors
 
-Resolution:
+---
 
-- Fix Redis TLS/config first.
-- Verify LiveKit webhook auth.
-- Re-run a browser test call.
-- If the missing transcript depends on Twilio recording ingestion, defer to Phase 9.
+## Worker not connecting (LiveKit)
 
-## Upstash Max Requests Exceeded Locally
+**Symptoms:** Room created, no agent joins; worker logs show auth/connection errors.
 
-Symptoms:
+**Checks:**
 
-- Local API logs show `ERR max requests limit exceeded`.
-- Errors mention BullMQ commands such as `auth`, `eval`, or `evalsha`.
+- `LIVEKIT_URL` uses `wss://` for WebRTC (worker SDK)
+- API uses same project keys for room create + dispatch
+- Worker build uses Python 3.11 (`runtime.txt`)
+- No `REDIS_URL` required on worker — missing Redis is **not** the cause
 
-Cause:
+**Resolution:** Align all `LIVEKIT_*` vars; restart worker; verify Connected in dashboard.
 
-- The local API is using an Upstash `REDIS_URL` from `.env`, and that database has hit its request quota.
+---
 
-Resolution:
+## No audio (browser test)
 
-- Stop the local API to avoid repeated Redis retries.
-- For a local boot without Redis, run `pnpm dev:api:no-redis`.
-- For queue-backed local testing, point `REDIS_URL` at a local Redis instance instead of Upstash.
-- Rotate the Redis credential if the password/token was pasted into logs or chat.
+**Checks:**
 
-## Analytics Empty
+- Microphone allowed in browser
+- Agent live version has valid `voiceId` (Rime)
+- `RIME_API_KEY` on worker
+- Worker logs: TTS/STT errors, not just connection
+- LiveKit participant subscribed to agent audio track
 
-Symptoms:
+**Interruption issues:**
 
-- `/analytics` loads but shows zeroes.
-- Call history has rows but analytics does not count them.
+- User speech during agent playback should barge-in (see `LIVEKIT_INTERRUPT_*` env)
+- If agent never stops talking: check `LIVEKIT_FINAL_PLAYBACK_DRAIN_SECONDS`, graceful end logs
+- If agent cuts off too aggressively: increase `LIVEKIT_INTERRUPT_SPEECH_SECONDS`
 
-Checks:
+---
 
-- Analytics intentionally excludes test calls where `metadata.isTest` or `metadata.isTestCall` is true.
-- Verify at least one real non-test call row exists for the organization.
-- Confirm frontend sends the correct `x-organization-id`.
-- Confirm API logs do not show auth/tenant errors.
+## Voice mismatch (wrong voice in test call)
 
-Resolution:
+**Cause:** Test Agent always uses **live published version** voice, not the voice selected in editor while viewing another version or before publish.
 
-- Use real non-test data for analytics verification.
-- Do not count browser test calls as analytics production volume.
-- If only test calls exist, zero analytics can be expected.
+**Resolution:**
 
-## Invalid Or Expired Token
+1. Save & Publish with desired voice
+2. Confirm badge "Live V{n}" on agent header
+3. Re-run Test Agent with no unsaved changes
 
-Symptoms:
+Editor voice dropdown preview (`Play preview`) uses **selected editor voice** — that is independent of Test Agent.
 
-- Deployed web shows API error `Invalid or expired token`.
-- API returns `401` before tenant checks.
+---
 
-Checks:
+## Transcript missing or empty
 
-- Vercel `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and Render `CLERK_SECRET_KEY` are from the same Clerk app/environment.
-- User has signed out and signed in again after env changes.
-- Render was redeployed after Clerk env changes.
+**Symptoms:** Call completes; transcript/cost empty on call detail.
 
-Resolution:
+**Checks:**
 
-- Align Clerk keys.
-- Redeploy Render and Vercel.
-- Sign out, hard refresh, and sign in again.
+1. **Redis:** API log `BullMQ queues enabled after Redis preflight` OR intentional fallback logs
+2. **LiveKit webhook:** `room_finished` configured → `POST /webhooks/livekit`
+3. **Webhook auth:** `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` on API
+4. Worker emitted speech events (`/internal/calls/:id/events`)
+5. API logs: `Transcript fallback assembled` or BullMQ worker processing
 
-## Internal Endpoint Returns 401 Or 403
+**Redis down / quota exceeded:**
 
-Expected behavior:
+- API disables BullMQ for process; sync fallback runs on `room_finished` webhook
+- If webhook also fails, browser preview gets fallback on `endCall` + late `emitEvent`
+- Re-enable Redis: fix `REDIS_URL`, remove `DISABLE_REDIS`, redeploy
 
-- Missing `x-worker-secret`: `403`.
-- Invalid `x-worker-secret`: `403`.
-- Missing `WORKER_SECRET` server config: `500`.
+**Transcript ordering / timestamps:**
 
-Checks:
+- Events sorted by `startedAt` in assembly
+- If ordering looks wrong, check worker event timestamps in DB `callEvent` rows
+- Late events after `COMPLETED` trigger browser-preview fallback re-assembly (idempotent)
 
-- Render has `WORKER_SECRET`.
-- Worker sends `x-worker-secret`.
-- API is redeployed with the latest `InternalAuthGuard`.
+---
 
-Resolution:
+## Recording 404 or "Recording unavailable"
 
-- Add/align `WORKER_SECRET`.
-- Redeploy API and worker.
+**Symptoms:** Transcript exists; recording never appears or playback 404.
 
-## Supabase P1001 Connection Error
+**Checks:**
 
-Symptoms:
+1. `CLOUDFLARE_R2_*` set on API
+2. `LIVEKIT_BROWSER_RECORDING_ENABLED` not `false`
+3. LiveKit webhook includes `egress_ended`
+4. Egress not skipped — API log on room create; if egress fails, room retries without recording
+5. Wait **5–30s** after hangup (egress finalize + webhook)
+6. Call detail polls recording — up to ~12s client-side
 
-- Prisma reports `Can't reach database server`.
-- TCP port test may pass, but Prisma still cannot connect.
+**R2 causes:**
 
-Checks:
+- Wrong bucket/credentials
+- Object not yet uploaded when webhook fires (check API egress persist logs)
+- CORS blocking browser WaveSurfer — presigned URL may still work in new tab
 
-- `DATABASE_URL` should use Supabase transaction pooler for runtime.
-- Include `sslmode=require`.
-- Include `pgbouncer=true` for the transaction pooler URL.
-- Include a conservative `connection_limit=1` on free-tier deployments.
-- For `DATABASE_DIRECT_URL`, use a Supabase direct/session-pooler URL that works from the host network.
+---
 
-Resolution:
+## Redis / Upstash quota exhaustion
 
-- Prefer Supabase pooler URLs on IPv4-only hosts.
-- Redeploy after changing Render env vars.
+**Symptoms:**
 
-## API Keys Look Wrong
+```text
+ERR max requests limit exceeded
+evalsha / auth / eval errors in loop
+```
 
-Expected behavior:
+**Cause (historical):** BullMQ + ioredis reconnect loops against exhausted Upstash free tier.
 
-- Full key appears only once at creation.
-- Table shows prefix only.
-- DB stores `keyHash` as a 64-character SHA-256 hex string.
-- Plaintext full key is never stored.
+**Current protections:**
 
-Resolution:
+- Preflight once; disable queues on failure
+- No reconnect (`retryStrategy: () => null`)
+- Stalled check every 60s; max 1 stalled recovery
+- Analytics cache disconnects on error
+- `DISABLE_REDIS=true` for local dev
 
-- If plaintext appears anywhere after dialog close, treat it as a security bug.
-- Revoke test keys after verification.
+**Resolution:**
 
-## Free-Tier Monitor Down
+1. Stop local API if burning quota
+2. Local: `pnpm dev:api:no-redis` or `DISABLE_REDIS=true`
+3. Production: new Upstash instance → update `REDIS_URL` → remove `DISABLE_REDIS` → redeploy
+4. Rotate credentials if leaked
 
-Symptoms:
+**Healthy startup log:**
 
-- UptimeRobot reports the Render API down.
-- First API request after idle is slow or times out.
-- Web monitor passes but API-backed pages briefly show loading or auth/API errors.
+```text
+BullMQ queues enabled after Redis preflight
+```
 
-Checks:
+---
 
-- API monitor URL should be `https://awaaz-api-nxae.onrender.com/health`.
-- Monitor interval should be 10 minutes.
-- Expected API health response is HTTP `200` with `status: "ok"`.
-- Web monitor should target the deployed Vercel root URL, not an authenticated dashboard route.
-- `/internal/worker/heartbeat` should not be used as a public monitor; without `x-worker-secret`, `403` is expected.
+## Webhook misconfiguration
 
-Resolution:
+| Webhook | URL | Required events |
+|---------|-----|-----------------|
+| Clerk | `/webhooks/clerk` | org/member events |
+| LiveKit | `/webhooks/livekit` | `room_finished`, `egress_ended` |
 
-- Allow 2-3 minutes after a Render cold start or redeploy.
-- Re-run `Invoke-RestMethod https://awaaz-api-nxae.onrender.com/health`.
-- If `/health` fails after warm-up, check Render logs before changing app code.
-- For demos, run one browser test call after idle to warm the current non-Twilio path.
+**Symptoms:** Transcripts never queue; recordings never persist.
 
-## Known Backlog
+**Checks:**
 
-`New Agent` create UI is intentionally disabled. The API exists, but dashboard creation is not wired yet.
+- URL uses public Render API HTTPS
+- LiveKit signing uses same API key/secret as server
+- Render deploy complete after URL change
+- API logs show webhook verify failures → fix secrets
 
-## Phase 9 Deferrals
+---
 
-The following are not Phase 8 blockers:
+## Analytics empty
 
-- Twilio/PSTN inbound/outbound calls.
-- Twilio webhook production flow.
-- Twilio/PSTN recording ingestion into the verified R2 bucket.
-- Real PSTN call recording lifecycle and playback from actual Twilio recordings.
-- Live PSTN worker hardening.
+**Expected:** Browser test calls (`metadata.isTest`, `fromNumber: browser-preview`) are **excluded** from analytics.
+
+**Checks:**
+
+- At least one non-test call exists
+- Correct `x-organization-id` header
+- Redis cache miss still hits Postgres — empty usually means no qualifying calls
+
+---
+
+## Invalid or expired token (401)
+
+**Checks:**
+
+- Vercel publishable key + Render secret key = same Clerk app
+- Redeploy after Clerk env change
+- Sign out, hard refresh, sign in
+
+---
+
+## Internal endpoint 403
+
+**Expected:** Missing/wrong `x-worker-secret` → 403.
+
+**Fix:** Align `WORKER_SECRET` on API and worker; redeploy both.
+
+---
+
+## Supabase P1001
+
+**Checks:**
+
+- `DATABASE_URL` uses pooler port 6543 + `pgbouncer=true&sslmode=require`
+- `connection_limit=1` on free tier
+- Redeploy after URL change
+
+---
+
+## Render free tier sleeping
+
+**Symptoms:** First request slow; Test Agent Connecting timeout; health monitor flapping.
+
+**Resolution:**
+
+- UptimeRobot on `/health` every 10 min
+- Allow 60–90s after idle before demo
+- Upgrade plan or accept cold-start delay
+
+---
+
+## API keys security
+
+- Full key shown once at creation
+- DB stores hash only
+- Revoke test keys after QA
+
+---
+
+## Verification checklist after incident
+
+```powershell
+Invoke-RestMethod https://YOUR_API/health
+pnpm --filter @awaaz/api exec dotenv -e ../../.env -- ts-node scripts/bullmq-smoke.ts
+```
+
+1. API health 200
+2. BullMQ preflight log (production)
+3. LiveKit worker Connected
+4. One Test Agent → transcript + cost
+5. Recording appears (if R2 configured)
+
+---
+
+## Still deferred (not bugs)
+
+- Twilio/PSTN calls and audio
+- Twilio recording → R2 pipeline
+- `POST /webhooks/twilio`
+
+See [Deferred_Features_Implementation_Guide.md](./Deferred_Features_Implementation_Guide.md).
