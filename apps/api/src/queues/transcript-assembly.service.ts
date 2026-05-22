@@ -51,20 +51,44 @@ export class TranscriptAssemblyService {
         callId: call.id,
         eventType: { in: [EventType.USER_SPEECH, EventType.AGENT_SPEECH] },
       },
-      orderBy: [{ startedAt: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
-    const transcript = events.map((event): TranscriptEntry => ({
+    const orderedEvents = events
+      .map((event, index) => ({ event, index }))
+      .sort((left, right) => {
+        const timelineDiff =
+          this.timelineTime(left.event) - this.timelineTime(right.event);
+        if (timelineDiff !== 0) {
+          return timelineDiff;
+        }
+
+        const createdAtDiff =
+          left.event.createdAt.getTime() - right.event.createdAt.getTime();
+        if (createdAtDiff !== 0) {
+          return createdAtDiff;
+        }
+
+        const idDiff = left.event.id.localeCompare(right.event.id);
+        if (idDiff !== 0) {
+          return idDiff;
+        }
+
+        return left.index - right.index;
+      })
+      .map(({ event }) => event);
+
+    const transcript = orderedEvents.map((event): TranscriptEntry => ({
       speaker: event.speaker ?? this.speakerForEvent(event.eventType),
       text: event.content ?? '',
-      startedAt: event.startedAt?.toISOString() ?? null,
+      startedAt: (event.startedAt ?? event.createdAt).toISOString(),
       endedAt: event.endedAt?.toISOString() ?? null,
       durationMs: event.durationMs ?? null,
       latencyMs: event.latencyMs ?? null,
     }));
     const cost = this.calculateCost({
       durationSeconds: call.durationSeconds,
-      events,
+      events: orderedEvents,
       direction: call.direction,
     });
 
@@ -126,6 +150,10 @@ export class TranscriptAssemblyService {
     }
 
     throw new NotFoundException('Call not found for transcript job');
+  }
+
+  private timelineTime(event: { startedAt: Date | null; createdAt: Date }) {
+    return (event.startedAt ?? event.createdAt).getTime();
   }
 
   private calculateCost(input: {
