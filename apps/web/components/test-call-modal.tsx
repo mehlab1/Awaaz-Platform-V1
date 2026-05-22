@@ -8,6 +8,7 @@ import {
   LiveKitRoom,
   RoomAudioRenderer,
   StartAudio,
+  useConnectionState,
   useDisconnectButton,
   useLocalParticipant,
   useTrackVolume,
@@ -29,7 +30,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { DisconnectReason, LocalAudioTrack } from 'livekit-client';
+import { ConnectionState, DisconnectReason, LocalAudioTrack } from 'livekit-client';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -193,6 +194,9 @@ function deriveVoiceMode(
   }
   if (agentState === 'idle') {
     return 'idle';
+  }
+  if (agentState === 'initializing' || agentState === 'pre-connect-buffering') {
+    return isMicrophoneEnabled ? 'idle' : 'muted';
   }
   return 'connecting';
 }
@@ -429,9 +433,13 @@ function TranscriptPanel({
 
 interface RoomChromeProps {
   showEndButton: boolean;
+  onSessionActive: () => void;
 }
 
-function BrowserTestRoomChrome({ showEndButton }: RoomChromeProps) {
+function BrowserTestRoomChrome({
+  showEndButton,
+  onSessionActive,
+}: RoomChromeProps) {
   const {
     localParticipant,
     microphoneTrack,
@@ -440,8 +448,10 @@ function BrowserTestRoomChrome({ showEndButton }: RoomChromeProps) {
   } = useLocalParticipant();
   const { agent, audioTrack: agentAudioTrack, state: agentState } =
     useVoiceAssistant();
+  const connectionState = useConnectionState();
   const transcriptions = useTranscriptions();
   const [muteBusy, setMuteBusy] = useState(false);
+  const autoMicRequestedRef = useRef(false);
 
   const localAudioTrack =
     microphoneTrack?.track instanceof LocalAudioTrack
@@ -492,6 +502,48 @@ function BrowserTestRoomChrome({ showEndButton }: RoomChromeProps) {
       setMuteBusy(false);
     }
   }, [isMicrophoneEnabled, localParticipant]);
+
+  useEffect(() => {
+    if (
+      connectionState === ConnectionState.Connected ||
+      agent ||
+      (agentState !== 'connecting' && agentState !== 'disconnected')
+    ) {
+      onSessionActive();
+    }
+  }, [agent, agentState, connectionState, onSessionActive]);
+
+  useEffect(() => {
+    if (
+      connectionState !== ConnectionState.Connected ||
+      autoMicRequestedRef.current ||
+      isMicrophoneEnabled ||
+      lastMicrophoneError
+    ) {
+      return undefined;
+    }
+
+    autoMicRequestedRef.current = true;
+    let cancelled = false;
+    setMuteBusy(true);
+    localParticipant
+      .setMicrophoneEnabled(true)
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) {
+          setMuteBusy(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    connectionState,
+    isMicrophoneEnabled,
+    lastMicrophoneError,
+    localParticipant,
+  ]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -596,6 +648,10 @@ export function TestCallModal(props: TestCallModalProps) {
   const [rtcPhase, setRtcPhase] = useState<
     'connecting' | 'active' | 'ended' | null
   >(null);
+
+  const markRtcActive = useCallback(() => {
+    setRtcPhase((phase) => (phase === 'ended' ? phase : 'active'));
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -769,7 +825,7 @@ export function TestCallModal(props: TestCallModalProps) {
           audio
           video={false}
           options={{ adaptiveStream: true, dynacast: true }}
-          onConnected={() => setRtcPhase('active')}
+          onConnected={markRtcActive}
           onDisconnected={(reason?: DisconnectReason) => {
             void reason;
             setRtcPhase('ended');
@@ -778,6 +834,7 @@ export function TestCallModal(props: TestCallModalProps) {
         >
           <BrowserTestRoomChrome
             showEndButton={rtcPhase === 'active'}
+            onSessionActive={markRtcActive}
           />
         </LiveKitRoom>
       ) : session && rtcPhase === 'ended' ? (

@@ -145,7 +145,7 @@ export class InternalService {
         status: CallStatus.COMPLETED,
         endedAt,
         durationSeconds: this.durationSeconds(call.startedAt, endedAt),
-        metadata: this.toJson(dto.metadata),
+        metadata: this.mergeMetadata(call.metadata, dto.metadata),
       },
       select: {
         id: true,
@@ -164,7 +164,13 @@ export class InternalService {
   async emitEvent(callId: string, dto: CallEventDto): Promise<{ ok: true }> {
     const call = await this.prisma.call.findUnique({
       where: { id: callId },
-      select: { id: true },
+      select: {
+        id: true,
+        status: true,
+        liveKitRoomId: true,
+        fromNumber: true,
+        metadata: true,
+      },
     });
     if (!call) {
       throw new NotFoundException('Call not found');
@@ -184,6 +190,9 @@ export class InternalService {
         metadata: this.toJson(dto.metadata),
       },
     });
+    if (call.status === CallStatus.COMPLETED && this.isBrowserPreviewCall(call)) {
+      await this.assembleTranscriptFallback(call.id, call.liveKitRoomId);
+    }
     return { ok: true };
   }
 
@@ -281,6 +290,23 @@ export class InternalService {
 
   private toJson(value: Record<string, unknown> | undefined): Prisma.InputJsonValue | undefined {
     return value === undefined ? undefined : (value as Prisma.InputJsonObject);
+  }
+
+  private mergeMetadata(
+    existing: Prisma.JsonValue | null,
+    update: Record<string, unknown> | undefined,
+  ): Prisma.InputJsonValue | undefined {
+    const base =
+      existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? { ...(existing as Record<string, unknown>) }
+        : {};
+    if (update === undefined && Object.keys(base).length === 0) {
+      return undefined;
+    }
+    return {
+      ...base,
+      ...(update ?? {}),
+    } as Prisma.InputJsonObject;
   }
 
   private async resolveVoiceMetadata(

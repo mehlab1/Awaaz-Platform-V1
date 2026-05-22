@@ -58,9 +58,10 @@ class AwaazAgent:
         )
         timing = PipelineTiming()
         assistant = create_assistant(config, rime, AwaazTools(ctx), timing)
-        register_events(assistant, api, call_id)
+        speech_events = register_events(assistant, api, call_id, timing)
 
         async def shutdown() -> None:
+            await speech_events.flush()
             if call_id:
                 await api.end_call(call_id, {"reason": "room shutdown"})
             await rime.aclose()
@@ -114,6 +115,75 @@ def create_assistant(
         before_llm_cb=timing.before_llm,
         before_tts_cb=timing.before_tts,
     )
+
+
+class SpeechEventSink:
+    def __init__(
+        self,
+        api: AwaazAPIClient,
+        call_id: str | None,
+    ) -> None:
+        self._api = api
+        self._call_id = call_id
+        self._tasks: set[asyncio.Task[None]] = set()
+
+    def emit(
+        self,
+        event_type: str,
+        message: llm.ChatMessage,
+        latency_ms: int | None = None,
+        timing_payload: dict[str, object] | None = None,
+    ) -> None:
+        if not self._call_id:
+            return
+
+        text = message_text(message).strip()
+        if not text:
+            return
+
+        payload: dict[str, object] = {
+            "eventType": event_type,
+            "text": text,
+        }
+        if timing_payload:
+            payload.update(timing_payload)
+        if latency_ms is not None:
+            payload["latencyMs"] = latency_ms
+
+        task = asyncio.create_task(self._api.emit_event(self._call_id, payload))
+        self._tasks.add(task)
+        task.add_done_callback(self._on_emit_done)
+
+    async def flush(self, timeout_seconds: float = 8.0) -> None:
+        await asyncio.sleep(0)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            pending = [task for task in self._tasks if not task.done()]
+            if not pending:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "Timed out waiting for %s speech event(s) to persist",
+                    len(pending),
+                )
+                return
+            _, still_pending = await asyncio.wait(pending, timeout=remaining)
+            if still_pending:
+                logger.warning(
+                    "Timed out waiting for %s speech event(s) to persist",
+                    len(still_pending),
+                )
+                return
+
+    def _on_emit_done(self, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
+        if task.cancelled():
+            logger.warning("Speech event persistence was cancelled")
+            return
+        error = task.exception()
+        if error is not None:
+            logger.warning("Failed to emit speech event", exc_info=error)
 
 
 class PipelineTiming:
@@ -386,51 +456,25 @@ def register_events(
     assistant: VoiceAssistant,
     api: AwaazAPIClient,
     call_id: str | None,
-) -> None:
+    timing: PipelineTiming,
+) -> SpeechEventSink:
+    sink = SpeechEventSink(api, call_id)
     if not call_id:
         logger.warning("Call ID missing; speech events will not be emitted")
-        return
-
-    def on_emit_done(task: asyncio.Task[None]) -> None:
-        error = task.exception()
-        if error is not None:
-            logger.warning("Failed to emit speech event", exc_info=error)
+        return sink
 
     last_user_speech_at: float | None = None
-
-    def emit(
-        event_type: str,
-        message: llm.ChatMessage,
-        latency_ms: int | None = None,
-        timing_payload: dict[str, object] | None = None,
-    ) -> None:
-        payload: dict[str, object] = {
-            "eventType": event_type,
-            "text": message_text(message),
-        }
-        if timing_payload:
-            payload.update(timing_payload)
-        if latency_ms is not None:
-            payload["latencyMs"] = latency_ms
-
-        task = asyncio.create_task(
-            api.emit_event(
-                call_id,
-                payload,
-            ),
-        )
-        task.add_done_callback(on_emit_done)
 
     def on_user_speech(message: llm.ChatMessage) -> None:
         nonlocal last_user_speech_at
         last_user_speech_at = time.monotonic()
-        emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
+        sink.emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
 
     def on_agent_speech(message: llm.ChatMessage) -> None:
         latency_ms = None
         if last_user_speech_at is not None:
             latency_ms = max(0, round((time.monotonic() - last_user_speech_at) * 1000))
-        emit(
+        sink.emit(
             "AGENT_SPEECH",
             message,
             latency_ms,
@@ -439,6 +483,7 @@ def register_events(
 
     assistant.on("user_speech_committed", on_user_speech)
     assistant.on("agent_speech_committed", on_agent_speech)
+    return sink
 
 
 async def start_call_payload(

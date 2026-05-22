@@ -45,6 +45,7 @@ export class StorageService {
   async getPresignedUrl(
     key: string,
     expiresInSeconds = 300,
+    responseContentType?: string,
   ): Promise<string> {
     const r2 = this.getR2Config();
     const expiresIn = Math.min(
@@ -57,6 +58,9 @@ export class StorageService {
       new GetObjectCommand({
         Bucket: r2.bucketName,
         Key: key,
+        ...(responseContentType
+          ? { ResponseContentType: responseContentType }
+          : {}),
       }),
       { expiresIn },
     );

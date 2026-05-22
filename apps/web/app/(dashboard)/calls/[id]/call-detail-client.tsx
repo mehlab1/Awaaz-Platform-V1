@@ -76,6 +76,7 @@ type RecordingState =
 export function CallDetailClient({ callId }: { callId: string }) {
   const { activeOrgId, apiCall } = useOrgContext();
   const waveformRef = useRef<CallWaveformHandle | null>(null);
+  const detailRefreshAttempts = useRef(0);
 
   const [detail, setDetail] = useState<CallDetailPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,6 +135,49 @@ export function CallDetailClient({ callId }: { callId: string }) {
   }, [activeOrgId, apiCall, callId]);
 
   const detailId = detail?.id;
+
+  useEffect(() => {
+    detailRefreshAttempts.current = 0;
+  }, [callId]);
+
+  useEffect(() => {
+    if (!activeOrgId || !detail) {
+      return undefined;
+    }
+    const isCompletedBrowserTest =
+      detail.status === 'COMPLETED' && testCallFromMeta(detail.metadata);
+    const needsAsyncArtifacts =
+      !detail.transcript || detail.costBreakdown == null || !detail.recordingUrl;
+    if (
+      !isCompletedBrowserTest ||
+      !needsAsyncArtifacts ||
+      detailRefreshAttempts.current >= 6
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      detailRefreshAttempts.current += 1;
+      void (async () => {
+        try {
+          const res = await apiCall(`/api/v1/calls/${callId}`, {
+            method: 'GET',
+          });
+          if (!cancelled && res.ok) {
+            setDetail((await res.json()) as CallDetailPayload);
+          }
+        } catch {
+          /* keep showing the current snapshot */
+        }
+      })();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeOrgId, apiCall, callId, detail]);
 
   useEffect(() => {
     if (!activeOrgId || !detailId) {
@@ -205,7 +249,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [activeOrgId, apiCall, detailId]);
+  }, [activeOrgId, apiCall, detail?.recordingUrl, detailId]);
 
   const transcriptTurns = collectTranscriptTurns(detail?.transcript?.content);
   const callEpoch = parseEpoch(detail?.startedAt ?? detail?.createdAt);
@@ -213,6 +257,14 @@ export function CallDetailClient({ callId }: { callId: string }) {
   const latencyStats = summarizeLatencies(transcriptTurns);
   const handleWaveformReady = useCallback(() => {
     setIsWaveformReady(true);
+  }, []);
+  const handleWaveformError = useCallback((message: string) => {
+    setIsWaveformReady(false);
+    setRecordingState({
+      phase: 'unavailable',
+      reason: 'broken',
+      detail: message,
+    });
   }, []);
 
   const handleSeekFromTurn = useCallback(
@@ -361,6 +413,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
               ref={waveformRef}
               audioUrl={recordingState.audioUrl}
               onReady={handleWaveformReady}
+              onError={handleWaveformError}
             />
           ) : null}
           {recordingState.phase === 'unavailable' ? (

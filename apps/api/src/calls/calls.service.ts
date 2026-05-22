@@ -157,6 +157,7 @@ export class CallsService {
       const url = await this.storage.getPresignedUrl(
         recordingUrl,
         expiresInSeconds,
+        this.recordingContentType(recordingUrl),
       );
       if (!call.recordingUrl?.trim()) {
         await this.prisma.call.update({
@@ -196,6 +197,23 @@ export class CallsService {
     }
 
     return null;
+  }
+
+  private recordingContentType(key: string): string | undefined {
+    const normalized = key.split('?')[0]?.toLowerCase() ?? '';
+    if (normalized.endsWith('.mp3')) {
+      return 'audio/mpeg';
+    }
+    if (normalized.endsWith('.wav')) {
+      return 'audio/wav';
+    }
+    if (normalized.endsWith('.ogg') || normalized.endsWith('.oga')) {
+      return 'audio/ogg';
+    }
+    if (normalized.endsWith('.m4a')) {
+      return 'audio/mp4';
+    }
+    return undefined;
   }
 }
 
