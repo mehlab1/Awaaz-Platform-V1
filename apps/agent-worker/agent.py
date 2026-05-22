@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from collections.abc import AsyncIterable, Mapping
 
 from livekit.agents import AutoSubscribe, JobContext, llm
@@ -120,27 +121,50 @@ class PipelineTiming:
         self.turn_id = 0
         self.user_started_at: float | None = None
         self.user_stopped_at: float | None = None
+        self.user_started_at_iso: str | None = None
+        self.user_stopped_at_iso: str | None = None
         self.final_transcript_at: float | None = None
+        self.final_transcript_at_iso: str | None = None
         self.llm_started_at: float | None = None
+        self.llm_started_at_iso: str | None = None
         self.first_llm_token_at: float | None = None
+        self.first_llm_token_at_iso: str | None = None
         self.llm_finished_at: float | None = None
+        self.llm_finished_at_iso: str | None = None
         self.tts_text_started_at: float | None = None
+        self.tts_text_started_at_iso: str | None = None
+        self.tts_text_finished_at_iso: str | None = None
         self.playback_started_at: float | None = None
+        self.playback_stopped_at: float | None = None
+        self.playback_started_at_iso: str | None = None
+        self.playback_stopped_at_iso: str | None = None
 
     def mark_user_started(self) -> None:
         self.turn_id += 1
         self.user_started_at = time.monotonic()
+        self.user_started_at_iso = utc_now_iso()
         self.user_stopped_at = None
+        self.user_stopped_at_iso = None
         self.final_transcript_at = None
+        self.final_transcript_at_iso = None
         self.llm_started_at = None
+        self.llm_started_at_iso = None
         self.first_llm_token_at = None
+        self.first_llm_token_at_iso = None
         self.llm_finished_at = None
+        self.llm_finished_at_iso = None
         self.tts_text_started_at = None
+        self.tts_text_started_at_iso = None
+        self.tts_text_finished_at_iso = None
         self.playback_started_at = None
+        self.playback_stopped_at = None
+        self.playback_started_at_iso = None
+        self.playback_stopped_at_iso = None
         logger.info("voice_turn_started turn=%s", self.turn_id)
 
     def mark_user_stopped(self) -> None:
         self.user_stopped_at = time.monotonic()
+        self.user_stopped_at_iso = utc_now_iso()
         logger.info(
             "voice_user_stopped turn=%s speech_ms=%s",
             self.turn_id,
@@ -149,6 +173,7 @@ class PipelineTiming:
 
     def mark_final_transcript(self, text: str) -> None:
         self.final_transcript_at = time.monotonic()
+        self.final_transcript_at_iso = utc_now_iso()
         logger.info(
             "voice_stt_final turn=%s chars=%s since_user_start_ms=%s since_user_stop_ms=%s text=%r",
             self.turn_id,
@@ -164,6 +189,7 @@ class PipelineTiming:
         chat_ctx: ChatContext,
     ) -> LLMStream:
         self.llm_started_at = time.monotonic()
+        self.llm_started_at_iso = utc_now_iso()
         user_text = ""
         if chat_ctx.messages:
             user_text = message_text(chat_ctx.messages[-1])
@@ -207,6 +233,7 @@ class PipelineTiming:
 
     def mark_first_llm_token(self) -> None:
         self.first_llm_token_at = time.monotonic()
+        self.first_llm_token_at_iso = utc_now_iso()
         logger.info(
             "voice_llm_first_token turn=%s llm_first_token_ms=%s since_user_stop_ms=%s",
             self.turn_id,
@@ -216,6 +243,7 @@ class PipelineTiming:
 
     def mark_llm_finished(self) -> None:
         self.llm_finished_at = time.monotonic()
+        self.llm_finished_at_iso = utc_now_iso()
         logger.info(
             "voice_llm_done turn=%s llm_total_ms=%s since_user_stop_ms=%s",
             self.turn_id,
@@ -225,6 +253,7 @@ class PipelineTiming:
 
     def mark_tts_text_started(self, text: str) -> None:
         self.tts_text_started_at = time.monotonic()
+        self.tts_text_started_at_iso = utc_now_iso()
         logger.info(
             "voice_tts_text_start turn=%s since_llm_start_ms=%s since_first_llm_token_ms=%s preview=%r",
             self.turn_id,
@@ -234,6 +263,7 @@ class PipelineTiming:
         )
 
     def mark_tts_text_finished(self, chars: int) -> None:
+        self.tts_text_finished_at_iso = utc_now_iso()
         logger.info(
             "voice_tts_text_done turn=%s chars=%s since_tts_text_start_ms=%s",
             self.turn_id,
@@ -243,6 +273,7 @@ class PipelineTiming:
 
     def mark_playback_started(self) -> None:
         self.playback_started_at = time.monotonic()
+        self.playback_started_at_iso = utc_now_iso()
         logger.info(
             "voice_playback_started turn=%s total_from_user_stop_ms=%s total_from_final_ms=%s since_llm_start_ms=%s",
             self.turn_id,
@@ -252,12 +283,49 @@ class PipelineTiming:
         )
 
     def mark_playback_stopped(self) -> None:
+        self.playback_stopped_at = time.monotonic()
+        self.playback_stopped_at_iso = utc_now_iso()
         logger.info(
             "voice_playback_stopped turn=%s playback_ms=%s total_turn_ms=%s",
             self.turn_id,
             elapsed_ms(self.playback_started_at, time.monotonic()),
             elapsed_ms(self.user_started_at, time.monotonic()),
         )
+
+    def user_speech_payload(self) -> dict[str, object]:
+        return self._payload_window(
+            self.user_started_at_iso,
+            self.final_transcript_at_iso or self.user_stopped_at_iso,
+            self.user_started_at,
+            self.final_transcript_at or self.user_stopped_at,
+        )
+
+    def agent_speech_payload(self) -> dict[str, object]:
+        start_iso = self.playback_started_at_iso or self.tts_text_started_at_iso or self.llm_started_at_iso
+        end_iso = self.playback_stopped_at_iso or self.tts_text_finished_at_iso or utc_now_iso()
+        return self._payload_window(
+            start_iso,
+            end_iso,
+            self.playback_started_at or self.tts_text_started_at or self.llm_started_at,
+            self.playback_stopped_at or self.tts_text_started_at or self.llm_started_at,
+        )
+
+    def _payload_window(
+        self,
+        started_at_iso: str | None,
+        ended_at_iso: str | None,
+        started_at_mono: float | None,
+        ended_at_mono: float | None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        if started_at_iso:
+            payload["startedAt"] = started_at_iso
+        if ended_at_iso:
+            payload["endedAt"] = ended_at_iso
+        duration_ms = elapsed_ms(started_at_mono, ended_at_mono)
+        if duration_ms is not None:
+            payload["durationMs"] = duration_ms
+        return payload
 
 
 class TimedLLMStream(LLMStream):
@@ -334,11 +402,14 @@ def register_events(
         event_type: str,
         message: llm.ChatMessage,
         latency_ms: int | None = None,
+        timing_payload: dict[str, object] | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "eventType": event_type,
             "text": message_text(message),
         }
+        if timing_payload:
+            payload.update(timing_payload)
         if latency_ms is not None:
             payload["latencyMs"] = latency_ms
 
@@ -353,13 +424,18 @@ def register_events(
     def on_user_speech(message: llm.ChatMessage) -> None:
         nonlocal last_user_speech_at
         last_user_speech_at = time.monotonic()
-        emit("USER_SPEECH", message)
+        emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
 
     def on_agent_speech(message: llm.ChatMessage) -> None:
         latency_ms = None
         if last_user_speech_at is not None:
             latency_ms = max(0, round((time.monotonic() - last_user_speech_at) * 1000))
-        emit("AGENT_SPEECH", message, latency_ms)
+        emit(
+            "AGENT_SPEECH",
+            message,
+            latency_ms,
+            timing.agent_speech_payload(),
+        )
 
     assistant.on("user_speech_committed", on_user_speech)
     assistant.on("agent_speech_committed", on_agent_speech)
@@ -439,6 +515,10 @@ def elapsed_ms(start: float | None, end: float | None) -> int | None:
     if start is None or end is None:
         return None
     return max(0, round((end - start) * 1000))
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def int_env(name: str, default: int) -> int:

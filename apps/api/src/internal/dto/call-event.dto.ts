@@ -1,4 +1,5 @@
 import {
+  IsDateString,
   IsEnum,
   IsInt,
   IsObject,
@@ -19,6 +20,19 @@ export class CallEventDto {
   @IsOptional()
   @IsString()
   speaker?: string;
+
+  @IsOptional()
+  @IsDateString()
+  startedAt?: string;
+
+  @IsOptional()
+  @IsDateString()
+  endedAt?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  durationMs?: number;
 
   @IsOptional()
   @IsInt()

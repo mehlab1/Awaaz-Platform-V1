@@ -85,14 +85,6 @@ export class LiveKitEgressService {
   }
 
   async persistBrowserRecordingFromEgress(info: EgressInfo): Promise<boolean> {
-    const objectKey = this.extractObjectKey(info);
-    if (!objectKey) {
-      this.logger.warn(
-        `LiveKit egress ${info.egressId || '(unknown)'} ended without a file key`,
-      );
-      return false;
-    }
-
     const roomIds = [info.roomId, info.roomName].filter(
       (value): value is string => Boolean(value?.trim()),
     );
@@ -118,6 +110,15 @@ export class LiveKitEgressService {
       return false;
     }
     if (!this.isBrowserPreviewCall(call)) {
+      return false;
+    }
+
+    const objectKey =
+      this.extractObjectKey(info) ?? this.recordingObjectKeyFromMetadata(call.metadata);
+    if (!objectKey) {
+      this.logger.warn(
+        `LiveKit egress ${info.egressId || '(unknown)'} ended without a file key`,
+      );
       return false;
     }
 
@@ -197,6 +198,31 @@ export class LiveKitEgressService {
     } catch {
       return raw.replace(/^\/+/, '') || null;
     }
+  }
+
+  private recordingObjectKeyFromMetadata(
+    metadata: Prisma.JsonValue | null,
+  ): string | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+    const record = metadata as Record<string, unknown>;
+
+    const nested = record.recording;
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const nestedRecord = nested as Record<string, unknown>;
+      const objectKey = nestedRecord.objectKey;
+      if (typeof objectKey === 'string' && objectKey.trim()) {
+        return objectKey.trim();
+      }
+    }
+
+    const topLevel = record.recordingObjectKey;
+    if (typeof topLevel === 'string' && topLevel.trim()) {
+      return topLevel.trim();
+    }
+
+    return null;
   }
 
   private r2BucketName(): string {

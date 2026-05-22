@@ -107,7 +107,7 @@ export class CallsService {
   }
 
   async getDetailWithRelations(organizationId: string, callId: string) {
-    const call = await this.prisma.call.findFirst({
+    let call = await this.prisma.call.findFirst({
       where: { id: callId, organizationId },
       include: {
         transcript: true,
@@ -116,6 +116,17 @@ export class CallsService {
     });
     if (!call) {
       throw new NotFoundException('Call not found');
+    }
+    const recordingObjectKey = this.recordingObjectKeyFromMetadata(call.metadata);
+    if (!call.recordingUrl?.trim() && recordingObjectKey) {
+      call = await this.prisma.call.update({
+        where: { id: call.id },
+        data: { recordingUrl: recordingObjectKey },
+        include: {
+          transcript: true,
+          agent: { select: { id: true, name: true } },
+        },
+      });
     }
     return call;
   }
@@ -126,12 +137,14 @@ export class CallsService {
   ): Promise<{ url: string; expiresInSeconds: number }> {
     const call = await this.prisma.call.findFirst({
       where: { id: callId, organizationId },
-      select: { recordingUrl: true },
+      select: { recordingUrl: true, metadata: true },
     });
     if (!call) {
       throw new NotFoundException('Call not found');
     }
-    if (!call.recordingUrl?.trim()) {
+    const recordingUrl =
+      call.recordingUrl?.trim() || this.recordingObjectKeyFromMetadata(call.metadata);
+    if (!recordingUrl) {
       throw new NotFoundException('NO_RECORDING');
     }
     if (!this.storage.isConfigured()) {
@@ -142,9 +155,15 @@ export class CallsService {
     try {
       const expiresInSeconds = 300;
       const url = await this.storage.getPresignedUrl(
-        call.recordingUrl,
+        recordingUrl,
         expiresInSeconds,
       );
+      if (!call.recordingUrl?.trim()) {
+        await this.prisma.call.update({
+          where: { id: callId },
+          data: { recordingUrl },
+        });
+      }
       return { url, expiresInSeconds };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -152,6 +171,31 @@ export class CallsService {
         `Could not mint a playback URL: ${message}`,
       );
     }
+  }
+
+  private recordingObjectKeyFromMetadata(
+    metadata: Prisma.JsonValue | null,
+  ): string | null {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const record = metadata as Record<string, unknown>;
+    const nested = record.recording;
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const nestedRecord = nested as Record<string, unknown>;
+      const objectKey = nestedRecord.objectKey;
+      if (typeof objectKey === 'string' && objectKey.trim()) {
+        return objectKey.trim();
+      }
+    }
+
+    const topLevel = record.recordingObjectKey;
+    if (typeof topLevel === 'string' && topLevel.trim()) {
+      return topLevel.trim();
+    }
+
+    return null;
   }
 }
 

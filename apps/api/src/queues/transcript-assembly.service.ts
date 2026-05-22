@@ -20,6 +20,7 @@ interface TranscriptEntry {
   text: string;
   startedAt: string | null;
   endedAt: string | null;
+  durationMs: number | null;
   latencyMs: number | null;
 }
 
@@ -50,7 +51,7 @@ export class TranscriptAssemblyService {
         callId: call.id,
         eventType: { in: [EventType.USER_SPEECH, EventType.AGENT_SPEECH] },
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ startedAt: 'asc' }, { createdAt: 'asc' }],
     });
 
     const transcript = events.map((event): TranscriptEntry => ({
@@ -58,6 +59,7 @@ export class TranscriptAssemblyService {
       text: event.content ?? '',
       startedAt: event.startedAt?.toISOString() ?? null,
       endedAt: event.endedAt?.toISOString() ?? null,
+      durationMs: event.durationMs ?? null,
       latencyMs: event.latencyMs ?? null,
     }));
     const cost = this.calculateCost({
