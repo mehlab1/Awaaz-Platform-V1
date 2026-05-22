@@ -11,7 +11,9 @@ import {
   useConnectionState,
   useDisconnectButton,
   useLocalParticipant,
+  useRemoteParticipants,
   useRoomContext,
+  useTracks,
   useTrackVolume,
   useTranscriptions,
   useVoiceAssistant,
@@ -93,6 +95,32 @@ function describePublication(publication: unknown): Record<string, unknown> {
     enabled: p?.isEnabled,
     hasTrack: Boolean(p?.track),
   };
+}
+
+function hasPublishedTrack(publication: unknown): boolean {
+  const p = publication as {
+    trackSid?: string;
+    sid?: string;
+    track?: unknown;
+  } | null;
+  return Boolean(p?.trackSid ?? p?.sid ?? p?.track);
+}
+
+function isAgentLikeParticipant(participant: unknown): boolean {
+  const p = participant as {
+    identity?: string;
+    kind?: unknown;
+    name?: string;
+  } | null;
+  const identity = p?.identity?.toLowerCase() ?? '';
+  const kind = p?.kind ? String(p.kind).toLowerCase() : '';
+  const name = p?.name?.toLowerCase() ?? '';
+
+  return (
+    kind.includes('agent') ||
+    identity.includes('agent') ||
+    name.includes('agent')
+  );
 }
 
 function addEventLogger(
@@ -246,31 +274,44 @@ function formatTranscriptTime(timestamp: number): string {
 }
 
 function deriveVoiceMode(
-  agentState: string,
-  isMicrophoneEnabled: boolean,
+  input: {
+    agentState: string;
+    agentVolume: number;
+    hasAgentParticipant: boolean;
+    isMicrophoneEnabled: boolean;
+    isMicrophonePublished: boolean;
+    isRoomConnected: boolean;
+  },
 ): VoiceUiMode {
-  if (agentState === 'failed') {
+  if (!input.isRoomConnected) {
+    return 'connecting';
+  }
+  if (input.agentState === 'failed') {
     return 'failed';
   }
-  if (agentState === 'speaking') {
+  if (input.agentState === 'speaking' || input.agentVolume > 0.012) {
     return 'speaking';
   }
-  if (!isMicrophoneEnabled) {
+  if (!input.isMicrophoneEnabled || !input.isMicrophonePublished) {
     return 'muted';
   }
-  if (agentState === 'thinking') {
+  if (input.agentState === 'thinking') {
     return 'thinking';
   }
-  if (agentState === 'listening') {
+  if (input.agentState === 'listening' || input.hasAgentParticipant) {
     return 'listening';
   }
-  if (agentState === 'idle') {
-    return 'idle';
+
+  if (
+    input.agentState === 'idle' ||
+    input.agentState === 'initializing' ||
+    input.agentState === 'pre-connect-buffering' ||
+    input.agentState === 'connecting'
+  ) {
+    return 'listening';
   }
-  if (agentState === 'initializing' || agentState === 'pre-connect-buffering') {
-    return isMicrophoneEnabled ? 'idle' : 'muted';
-  }
-  return 'connecting';
+
+  return 'idle';
 }
 
 function AudioLevelBars({
@@ -521,21 +562,65 @@ function BrowserTestRoomChrome({
   } = useLocalParticipant();
   const { agent, audioTrack: agentAudioTrack, state: agentState } =
     useVoiceAssistant();
+  const remoteParticipants = useRemoteParticipants();
+  const remoteMicTracks = useTracks([Track.Source.Microphone], {
+    onlySubscribed: true,
+  });
   const connectionState = useConnectionState();
   const transcriptions = useTranscriptions();
   const [muteBusy, setMuteBusy] = useState(false);
   const autoMicAttemptRef = useRef(0);
+  const readinessLoggedRef = useRef(false);
   const userMutedRef = useRef(false);
 
+  const localMicPublication = localParticipant.getTrackPublication(
+    Track.Source.Microphone,
+  );
   const localAudioTrack =
     microphoneTrack?.track instanceof LocalAudioTrack
       ? microphoneTrack.track
       : undefined;
+  const isMicrophonePublished =
+    hasPublishedTrack(microphoneTrack) ||
+    hasPublishedTrack(localMicPublication) ||
+    Boolean(localAudioTrack);
+  const detectedAgent = useMemo(
+    () =>
+      agent ??
+      remoteParticipants.find(isAgentLikeParticipant) ??
+      remoteParticipants[0],
+    [agent, remoteParticipants],
+  );
+  const fallbackAgentAudioTrack = useMemo(
+    () =>
+      remoteMicTracks.find(
+        (track) =>
+          track.participant.identity !== localParticipant.identity &&
+          (!detectedAgent ||
+            track.participant.identity === detectedAgent.identity),
+      ) ??
+      remoteMicTracks.find(
+        (track) => track.participant.identity !== localParticipant.identity,
+      ),
+    [detectedAgent, localParticipant.identity, remoteMicTracks],
+  );
+  const activeAgentAudioTrack = agentAudioTrack ?? fallbackAgentAudioTrack;
+  const isRoomConnected =
+    connectionState === ConnectionState.Connected ||
+    room.state === ConnectionState.Connected;
   const localVolume = useTrackVolume(localAudioTrack);
-  const agentVolume = useTrackVolume(agentAudioTrack);
-  const mode = deriveVoiceMode(agentState, isMicrophoneEnabled);
+  const agentVolume = useTrackVolume(activeAgentAudioTrack);
+  const mode = deriveVoiceMode({
+    agentState,
+    agentVolume,
+    hasAgentParticipant: Boolean(detectedAgent),
+    isMicrophoneEnabled,
+    isMicrophonePublished,
+    isRoomConnected,
+  });
   const isAudioActive = mode === 'listening' || mode === 'speaking';
-  const agentDisplayName = agent?.name || agent?.identity || 'Local agent';
+  const agentDisplayName =
+    detectedAgent?.name || detectedAgent?.identity || 'Local agent';
 
   const messages = useMemo<TranscriptMessage[]>(() => {
     return transcriptions
@@ -582,6 +667,11 @@ function BrowserTestRoomChrome({
         nextEnabled ? browserAudioCaptureOptions : undefined,
       );
       logTestCallDebug('mic_toggle_completed', { nextEnabled });
+    } catch (error: unknown) {
+      logTestCallDebug('mic_toggle_failed', {
+        nextEnabled,
+        message: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setMuteBusy(false);
     }
@@ -593,20 +683,61 @@ function BrowserTestRoomChrome({
     );
     logTestCallDebug('room_state_snapshot', {
       connectionState,
+      roomState: room.state,
       agentState,
-      agent: agent ? describeParticipant(agent) : null,
+      agent: detectedAgent ? describeParticipant(detectedAgent) : null,
+      voiceAssistantAgent: agent ? describeParticipant(agent) : null,
       local: describeParticipant(localParticipant),
       microphone: describePublication(localMicPublication),
       isMicrophoneEnabled,
+      isMicrophonePublished,
+      remoteParticipantCount: remoteParticipants.length,
     });
   }, [
     agent,
     agentState,
     connectionState,
+    detectedAgent,
     isMicrophoneEnabled,
+    isMicrophonePublished,
     localParticipant,
+    localMicPublication,
     microphoneTrack,
+    remoteParticipants.length,
+    room.state,
   ]);
+
+  useEffect(() => {
+    logTestCallDebug(
+      detectedAgent ? 'agent_participant_detected' : 'agent_participant_missing',
+      {
+        agent: detectedAgent ? describeParticipant(detectedAgent) : null,
+        voiceAssistantAgent: agent ? describeParticipant(agent) : null,
+        remoteParticipants: remoteParticipants.map(describeParticipant),
+      },
+    );
+  }, [agent, detectedAgent, remoteParticipants]);
+
+  useEffect(() => {
+    logTestCallDebug(
+      isMicrophonePublished
+        ? 'microphone_publish_ready'
+        : 'microphone_publish_not_ready',
+      {
+        isMicrophoneEnabled,
+        microphone: describePublication(localMicPublication),
+      },
+    );
+  }, [isMicrophoneEnabled, isMicrophonePublished, localMicPublication]);
+
+  useEffect(() => {
+    if (!lastMicrophoneError) {
+      return;
+    }
+    logTestCallDebug('microphone_publish_failed', {
+      message: lastMicrophoneError.message,
+    });
+  }, [lastMicrophoneError]);
 
   useEffect(() => {
     const cleanups = [
@@ -693,14 +824,30 @@ function BrowserTestRoomChrome({
   }, [localParticipant, room]);
 
   useEffect(() => {
-    if (
-      connectionState === ConnectionState.Connected ||
-      agent ||
-      (agentState !== 'connecting' && agentState !== 'disconnected')
-    ) {
+    if (isRoomConnected && isMicrophonePublished) {
+      if (!readinessLoggedRef.current) {
+        logTestCallDebug('session_ready_detected', {
+          connectionState,
+          roomState: room.state,
+          microphone: describePublication(localMicPublication),
+          agent: detectedAgent ? describeParticipant(detectedAgent) : null,
+        });
+        readinessLoggedRef.current = true;
+      }
       onSessionActive();
+      return;
     }
-  }, [agent, agentState, connectionState, onSessionActive]);
+
+    readinessLoggedRef.current = false;
+  }, [
+    connectionState,
+    detectedAgent,
+    isMicrophonePublished,
+    isRoomConnected,
+    localMicPublication,
+    onSessionActive,
+    room.state,
+  ]);
 
   useEffect(() => {
     if (isMicrophoneEnabled) {
@@ -769,19 +916,25 @@ function BrowserTestRoomChrome({
         <section className="flex min-h-[520px] flex-col rounded-lg border bg-card shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
             <div className="flex items-center gap-2">
-              <Badge variant={agent ? 'default' : 'secondary'}>
+              <Badge variant={detectedAgent ? 'default' : 'secondary'}>
                 <Wifi className="h-3 w-3" aria-hidden />
-                {agent ? 'Agent joined' : 'Waiting'}
+                {detectedAgent ? 'Agent joined' : 'Waiting'}
               </Badge>
               <Badge
-                variant={isMicrophoneEnabled ? 'outline' : 'destructive'}
+                variant={
+                  isMicrophoneEnabled && isMicrophonePublished
+                    ? 'outline'
+                    : 'destructive'
+                }
               >
-                {isMicrophoneEnabled ? (
+                {isMicrophoneEnabled && isMicrophonePublished ? (
                   <Mic className="h-3 w-3" aria-hidden />
                 ) : (
                   <MicOff className="h-3 w-3" aria-hidden />
                 )}
-                {isMicrophoneEnabled ? 'Mic on' : 'Muted'}
+                {isMicrophoneEnabled && isMicrophonePublished
+                  ? 'Mic on'
+                  : 'Muted'}
               </Badge>
             </div>
           </div>
@@ -1036,8 +1189,14 @@ export function TestCallModal(props: TestCallModalProps) {
           options={{ adaptiveStream: true, dynacast: true }}
           onConnected={markRtcActive}
           onDisconnected={(reason?: DisconnectReason) => {
-            void reason;
+            logTestCallDebug('livekit_room_disconnected', { reason });
             setRtcPhase('ended');
+          }}
+          onError={(error) => {
+            logTestCallDebug('livekit_room_error', { message: error.message });
+          }}
+          onMediaDeviceFailure={(failure, kind) => {
+            logTestCallDebug('media_device_failure', { failure, kind });
           }}
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
