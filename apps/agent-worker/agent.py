@@ -21,17 +21,145 @@ logger = logging.getLogger(__name__)
 
 
 class AwaazTools(llm.FunctionContext):
-    def __init__(self, ctx: JobContext) -> None:
-        self._ctx = ctx
+    def __init__(self, lifecycle: "CallLifecycle") -> None:
+        self._lifecycle = lifecycle
         super().__init__()
 
     @llm.ai_callable(description="End the current call when the user is done.")
     async def end_call(self) -> str:
-        return await end_call(self._ctx)
+        return await end_call(self._lifecycle.request_end)
 
     @llm.ai_callable(description="Transfer the current call to a human team member.")
     async def transfer_to_human(self) -> str:
         return await transfer_to_human()
+
+
+class CallLifecycle:
+    def __init__(self, ctx: JobContext, call_id: str | None) -> None:
+        self._ctx = ctx
+        self._call_id = call_id
+        self._speech_events = None
+        self._end_requested = False
+        self._end_requested_at: float | None = None
+        self._playback_active = False
+        self._shutdown_started = False
+        self._finish_task: asyncio.Task[None] | None = None
+        self._timeout_task: asyncio.Task[None] | None = None
+        self._drain_seconds = float_env("LIVEKIT_FINAL_PLAYBACK_DRAIN_SECONDS", 0.75)
+        self._timeout_seconds = float_env(
+            "LIVEKIT_FINAL_RESPONSE_TIMEOUT_SECONDS",
+            18.0,
+        )
+
+    def set_speech_events(self, speech_events: object) -> None:
+        self._speech_events = speech_events
+
+    async def request_end(self, reason: str) -> None:
+        if self._shutdown_started:
+            logger.info(
+                "call_end_request_ignored_after_shutdown call_id=%s reason=%s",
+                self._call_id,
+                reason,
+            )
+            return
+
+        if not self._end_requested:
+            self._end_requested = True
+            self._end_requested_at = time.monotonic()
+            logger.info(
+                "call_end_requested call_id=%s reason=%s playback_active=%s timeout_seconds=%s",
+                self._call_id,
+                reason,
+                self._playback_active,
+                self._timeout_seconds,
+            )
+            self._timeout_task = asyncio.create_task(self._finish_after_timeout())
+            return
+
+        logger.info(
+            "call_end_request_already_pending call_id=%s reason=%s playback_active=%s",
+            self._call_id,
+            reason,
+            self._playback_active,
+        )
+
+    def mark_playback_started(self) -> None:
+        self._playback_active = True
+        logger.info(
+            "playback_confirmed_started call_id=%s end_requested=%s",
+            self._call_id,
+            self._end_requested,
+        )
+
+    def mark_playback_stopped(self, interrupted: bool) -> None:
+        self._playback_active = False
+        logger.info(
+            "playback_confirmed_finished call_id=%s interrupted=%s end_requested=%s since_end_request_ms=%s",
+            self._call_id,
+            interrupted,
+            self._end_requested,
+            elapsed_ms(self._end_requested_at, time.monotonic()),
+        )
+        if self._end_requested and not interrupted:
+            self._schedule_finish("final response playback completed")
+
+    def _schedule_finish(self, reason: str) -> None:
+        if self._shutdown_started:
+            return
+        if self._finish_task is not None and not self._finish_task.done():
+            return
+        self._finish_task = asyncio.create_task(self.finish(reason))
+
+    async def _finish_after_timeout(self) -> None:
+        await asyncio.sleep(self._timeout_seconds)
+        if self._shutdown_started:
+            return
+        logger.warning(
+            "call_end_timeout_waiting_for_final_playback call_id=%s playback_active=%s timeout_seconds=%s",
+            self._call_id,
+            self._playback_active,
+            self._timeout_seconds,
+        )
+        await self.finish("end requested timeout")
+
+    async def finish(self, reason: str) -> None:
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+
+        current_task = asyncio.current_task()
+        if self._timeout_task is not None and self._timeout_task is not current_task:
+            self._timeout_task.cancel()
+
+        logger.info(
+            "final_response_flush_timing call_id=%s reason=%s drain_seconds=%s since_end_request_ms=%s",
+            self._call_id,
+            reason,
+            self._drain_seconds,
+            elapsed_ms(self._end_requested_at, time.monotonic()),
+        )
+        await asyncio.sleep(self._drain_seconds)
+
+        flush = getattr(self._speech_events, "flush", None)
+        if callable(flush):
+            await flush(timeout_seconds=5.0)
+
+        logger.info("room_close_requested call_id=%s reason=%s", self._call_id, reason)
+        try:
+            await self._ctx.room.disconnect()
+            logger.info(
+                "room_disconnected_by_lifecycle call_id=%s reason=%s",
+                self._call_id,
+                reason,
+            )
+        except Exception:
+            logger.warning(
+                "room_disconnect_failed call_id=%s reason=%s",
+                self._call_id,
+                reason,
+                exc_info=True,
+            )
+        self._ctx.shutdown(reason)
 
 
 class AwaazAgent:
@@ -58,10 +186,13 @@ class AwaazAgent:
             language=required_string(config, "voiceLang", "eng"),
         )
         timing = PipelineTiming()
-        assistant = create_assistant(config, rime, AwaazTools(ctx), timing)
+        lifecycle = CallLifecycle(ctx, call_id)
+        assistant = create_assistant(config, rime, AwaazTools(lifecycle), timing)
         speech_events = register_events(assistant, api, call_id, timing)
+        lifecycle.set_speech_events(speech_events)
 
         async def shutdown() -> None:
+            logger.info("worker_shutdown_callback_started call_id=%s", call_id)
             await speech_events.flush()
             if call_id:
                 await api.end_call(call_id, {"reason": "room shutdown"})
@@ -77,7 +208,7 @@ class AwaazAgent:
             participant_kind(participant),
         )
         assistant.start(ctx.room, participant)
-        register_timing_events(assistant, timing)
+        register_timing_events(assistant, timing, lifecycle)
 
         first_message = string_value(config, "firstMessage")
         if first_message:
@@ -538,13 +669,27 @@ def register_room_debug_events(room: object) -> None:
 def register_timing_events(
     assistant: VoiceAssistant,
     timing: PipelineTiming,
+    lifecycle: CallLifecycle,
 ) -> None:
     assistant.on("user_started_speaking", lambda: timing.mark_user_started())
     assistant.on("user_stopped_speaking", lambda: timing.mark_user_stopped())
-    assistant.on("agent_started_speaking", lambda: timing.mark_playback_started())
+
+    def on_agent_started() -> None:
+        timing.mark_playback_started()
+        lifecycle.mark_playback_started()
+
+    def on_agent_stopped(interrupted: bool = False) -> None:
+        active_speech = getattr(assistant, "_playing_speech", None)
+        interrupted_value = bool(
+            interrupted or getattr(active_speech, "interrupted", False),
+        )
+        timing.mark_playback_stopped(interrupted_value)
+        lifecycle.mark_playback_stopped(interrupted_value)
+
+    assistant.on("agent_started_speaking", on_agent_started)
     assistant.on(
         "agent_stopped_speaking",
-        lambda interrupted=False: timing.mark_playback_stopped(bool(interrupted)),
+        on_agent_stopped,
     )
 
     human_input = getattr(assistant, "_human_input", None)

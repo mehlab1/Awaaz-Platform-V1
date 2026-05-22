@@ -324,6 +324,9 @@ export function CallDetailClient({ callId }: { callId: string }) {
   const testBadge = detail ? testCallFromMeta(detail.metadata) : false;
   const recordingDisplayKey =
     detail?.recordingUrl?.trim() || recordingObjectKeyFromMeta(detail?.metadata);
+  const recordingStorageLabel = recordingDisplayKey
+    ? 'Recording saved to R2'
+    : 'None';
 
   if (!activeOrgId && !loading) {
     return (
@@ -427,9 +430,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
             <h3 className="text-muted-foreground text-xs uppercase tracking-wide">
               Recording stored
             </h3>
-            <p className="break-words font-mono text-xs">
-              {recordingDisplayKey ?? 'None'}
-            </p>
+            <p className="text-sm">{recordingStorageLabel}</p>
           </div>
         </CardContent>
       </Card>

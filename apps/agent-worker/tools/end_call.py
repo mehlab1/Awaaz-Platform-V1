@@ -1,7 +1,8 @@
-from livekit.agents import JobContext
+from collections.abc import Awaitable, Callable
 
 
-async def end_call(ctx: JobContext) -> str:
-    await ctx.room.disconnect()
-    ctx.shutdown("call ended by assistant")
-    return "The call has been ended."
+async def end_call(
+    request_end: Callable[[str], Awaitable[None]],
+) -> str:
+    await request_end("assistant requested end_call tool")
+    return "Thanks for calling. Goodbye."
