@@ -6,9 +6,8 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Job, JobsOptions, Queue, Worker } from 'bullmq';
-import Redis from 'ioredis';
 
-import { createRedisConnection, isRedisDisabled } from './redis-connection';
+import { createRedisConnection, isRedisDisabled, preflightRedisUrl, BULLMQ_MAX_STALLED_COUNT, BULLMQ_STALLED_INTERVAL_MS } from './redis-connection';
 import { RECORDING_QUEUE, TRANSCRIPT_QUEUE } from './queue.constants';
 import {
   TranscriptAssemblyService,
@@ -85,9 +84,12 @@ export class SafeQueuesService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const ok = await this.preflightRedis(redisUrl);
+    const ok = await preflightRedisUrl(redisUrl);
     if (!ok) {
       this.state = 'unavailable';
+      this.logUnavailable(
+        'Redis preflight failed; BullMQ disabled for this process',
+      );
       return;
     }
 
@@ -109,6 +111,8 @@ export class SafeQueuesService implements OnModuleInit, OnModuleDestroy {
         {
           connection: createRedisConnection(redisUrl),
           concurrency: 1,
+          stalledInterval: BULLMQ_STALLED_INTERVAL_MS,
+          maxStalledCount: BULLMQ_MAX_STALLED_COUNT,
         },
       );
       this.worker.on('error', (error) => {
@@ -120,28 +124,6 @@ export class SafeQueuesService implements OnModuleInit, OnModuleDestroy {
       this.state = 'unavailable';
       this.logUnavailable(`BullMQ initialization failed: ${messageOf(error)}`);
       await this.closeRedisResources();
-    }
-  }
-
-  private async preflightRedis(redisUrl: string): Promise<boolean> {
-    const client = new Redis(
-      createRedisConnection(redisUrl, {
-        lazyConnect: true,
-        maxRetriesPerRequest: 1,
-      }),
-    );
-    client.on('error', () => undefined);
-    try {
-      await client.connect();
-      await client.ping();
-      return true;
-    } catch (error: unknown) {
-      this.logUnavailable(
-        `Redis preflight failed; BullMQ disabled for this process: ${messageOf(error)}`,
-      );
-      return false;
-    } finally {
-      client.disconnect();
     }
   }
 

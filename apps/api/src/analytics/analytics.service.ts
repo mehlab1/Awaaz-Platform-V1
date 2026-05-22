@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
@@ -12,6 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   createRedisConnection,
   isRedisDisabled,
+  preflightRedisUrl,
 } from '../queues/redis-connection';
 
 const ANALYTICS_CACHE_VERSION = 'v2';
@@ -84,34 +86,70 @@ interface LiveRow {
 }
 
 @Injectable()
-export class AnalyticsService implements OnModuleDestroy {
+export class AnalyticsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AnalyticsService.name);
-  private readonly redis: Redis | null;
+  private redis: Redis | null = null;
+  private cacheUnavailableLogged = false;
 
   constructor(
     private readonly prisma: PrismaService,
-    config: ConfigService,
-  ) {
-    const redisUrl = isRedisDisabled(config.get<string>('DISABLE_REDIS'))
-      ? undefined
-      : config.get<string>('REDIS_URL');
-    this.redis = redisUrl ? new Redis(createCacheConnection(redisUrl)) : null;
-    if (this.redis) {
-      this.redis.on('error', (error) => {
-        this.logger.warn(`Analytics cache unavailable: ${error.message}`);
-      });
-      this.redis.connect().catch((error: unknown) => {
-        this.logger.warn(`Analytics cache connect failed: ${messageOf(error)}`);
-      });
+    private readonly config: ConfigService,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    if (isRedisDisabled(this.config.get<string>('DISABLE_REDIS'))) {
+      return;
+    }
+
+    const redisUrl = this.config.get<string>('REDIS_URL')?.trim();
+    if (!redisUrl) {
+      return;
+    }
+
+    const ok = await preflightRedisUrl(redisUrl);
+    if (!ok) {
+      this.logCacheUnavailable(
+        'Redis preflight failed; analytics cache disabled for this process',
+      );
+      return;
+    }
+
+    this.redis = new Redis(createCacheConnection(redisUrl));
+    this.redis.on('error', (error) => {
+      this.logCacheUnavailable(`Analytics cache unavailable: ${error.message}`);
+      void this.disconnectCache();
+    });
+    try {
+      await this.redis.connect();
+    } catch (error: unknown) {
+      this.logCacheUnavailable(`Analytics cache connect failed: ${messageOf(error)}`);
+      await this.disconnectCache();
     }
   }
 
   async onModuleDestroy(): Promise<void> {
+    await this.disconnectCache();
+  }
+
+  private async disconnectCache(): Promise<void> {
+    const client = this.redis;
+    this.redis = null;
+    if (!client) {
+      return;
+    }
     try {
-      await this.redis?.quit();
+      await client.quit();
     } catch (error: unknown) {
       this.logger.warn(`Analytics cache shutdown failed: ${messageOf(error)}`);
     }
+  }
+
+  private logCacheUnavailable(message: string): void {
+    if (this.cacheUnavailableLogged) {
+      return;
+    }
+    this.cacheUnavailableLogged = true;
+    this.logger.warn(message);
   }
 
   async overview(organizationId: string) {
@@ -381,6 +419,7 @@ export class AnalyticsService implements OnModuleDestroy {
       }
     } catch (error: unknown) {
       this.logger.warn(`Analytics cache read failed: ${messageOf(error)}`);
+      await this.disconnectCache();
     }
 
     const value = await compute();
@@ -388,6 +427,7 @@ export class AnalyticsService implements OnModuleDestroy {
       await this.redis.set(key, JSON.stringify(value), 'EX', ttlSeconds);
     } catch (error: unknown) {
       this.logger.warn(`Analytics cache write failed: ${messageOf(error)}`);
+      await this.disconnectCache();
     }
     return value;
   }
