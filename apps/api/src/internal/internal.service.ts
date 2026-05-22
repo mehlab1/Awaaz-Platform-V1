@@ -139,6 +139,11 @@ export class InternalService {
     }
 
     const endedAt = new Date();
+    this.logger.log(
+      `Ending call ${callId}: room=${call.liveKitRoomId ?? '(none)'}, ` +
+        `browserPreview=${this.isBrowserPreviewCall(call)}, ` +
+        `metadataUpdateKeys=${Object.keys(dto.metadata ?? {}).join(',') || '(none)'}`,
+    );
     const updatedCall = await this.prisma.call.update({
       where: { id: callId },
       data: {
@@ -190,6 +195,11 @@ export class InternalService {
         metadata: this.toJson(dto.metadata),
       },
     });
+    this.logger.log(
+      `Persisted call event ${dto.eventType} for ${callId}: ` +
+        `chars=${dto.text?.length ?? 0}, latencyMs=${dto.latencyMs ?? 'null'}, ` +
+        `status=${call.status}, browserPreview=${this.isBrowserPreviewCall(call)}`,
+    );
     if (call.status === CallStatus.COMPLETED && this.isBrowserPreviewCall(call)) {
       await this.assembleTranscriptFallback(call.id, call.liveKitRoomId);
     }

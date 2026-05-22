@@ -11,6 +11,7 @@ import {
   useConnectionState,
   useDisconnectButton,
   useLocalParticipant,
+  useRoomContext,
   useTrackVolume,
   useTranscriptions,
   useVoiceAssistant,
@@ -30,11 +31,82 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { ConnectionState, DisconnectReason, LocalAudioTrack } from 'livekit-client';
+import {
+  ConnectionState,
+  DisconnectReason,
+  LocalAudioTrack,
+  ParticipantEvent,
+  RoomEvent,
+  Track,
+  type AudioCaptureOptions,
+} from 'livekit-client';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+
+const browserAudioCaptureOptions: AudioCaptureOptions = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  voiceIsolation: true,
+};
+
+function logTestCallDebug(event: string, detail?: Record<string, unknown>) {
+  console.info('[awaaz:test-call]', event, detail ?? {});
+}
+
+function describeParticipant(participant: unknown): Record<string, unknown> {
+  const p = participant as {
+    identity?: string;
+    sid?: string;
+    kind?: unknown;
+    name?: string;
+  } | null;
+  return {
+    identity: p?.identity,
+    sid: p?.sid,
+    kind: p?.kind ? String(p.kind) : undefined,
+    name: p?.name,
+  };
+}
+
+function describePublication(publication: unknown): Record<string, unknown> {
+  const p = publication as {
+    source?: unknown;
+    kind?: unknown;
+    trackSid?: string;
+    sid?: string;
+    isMuted?: boolean;
+    muted?: boolean;
+    isSubscribed?: boolean;
+    subscribed?: boolean;
+    isEnabled?: boolean;
+    track?: unknown;
+  } | null;
+  return {
+    source: p?.source ? String(p.source) : undefined,
+    kind: p?.kind ? String(p.kind) : undefined,
+    sid: p?.trackSid ?? p?.sid,
+    muted: p?.isMuted ?? p?.muted,
+    subscribed: p?.isSubscribed ?? p?.subscribed,
+    enabled: p?.isEnabled,
+    hasTrack: Boolean(p?.track),
+  };
+}
+
+function addEventLogger(
+  target: unknown,
+  event: string,
+  handler: (...args: unknown[]) => void,
+): () => void {
+  const emitter = target as {
+    on?: (event: string, handler: (...args: unknown[]) => void) => void;
+    off?: (event: string, handler: (...args: unknown[]) => void) => void;
+  } | null;
+  emitter?.on?.(event, handler);
+  return () => emitter?.off?.(event, handler);
+}
 
 /** User-visible session states for the ribbon badge */
 export type BrowserTestPhaseBadge =
@@ -440,6 +512,7 @@ function BrowserTestRoomChrome({
   showEndButton,
   onSessionActive,
 }: RoomChromeProps) {
+  const room = useRoomContext();
   const {
     localParticipant,
     microphoneTrack,
@@ -451,7 +524,8 @@ function BrowserTestRoomChrome({
   const connectionState = useConnectionState();
   const transcriptions = useTranscriptions();
   const [muteBusy, setMuteBusy] = useState(false);
-  const autoMicRequestedRef = useRef(false);
+  const autoMicAttemptRef = useRef(0);
+  const userMutedRef = useRef(false);
 
   const localAudioTrack =
     microphoneTrack?.track instanceof LocalAudioTrack
@@ -495,13 +569,128 @@ function BrowserTestRoomChrome({
   }, [localParticipant.identity, transcriptions]);
 
   const toggleMute = useCallback(async () => {
+    const nextEnabled = !isMicrophoneEnabled;
+    userMutedRef.current = !nextEnabled;
+    logTestCallDebug('mic_toggle_requested', {
+      nextEnabled,
+      identity: localParticipant.identity,
+    });
     setMuteBusy(true);
     try {
-      await localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);
+      await localParticipant.setMicrophoneEnabled(
+        nextEnabled,
+        nextEnabled ? browserAudioCaptureOptions : undefined,
+      );
+      logTestCallDebug('mic_toggle_completed', { nextEnabled });
     } finally {
       setMuteBusy(false);
     }
   }, [isMicrophoneEnabled, localParticipant]);
+
+  useEffect(() => {
+    const localMicPublication = localParticipant.getTrackPublication(
+      Track.Source.Microphone,
+    );
+    logTestCallDebug('room_state_snapshot', {
+      connectionState,
+      agentState,
+      agent: agent ? describeParticipant(agent) : null,
+      local: describeParticipant(localParticipant),
+      microphone: describePublication(localMicPublication),
+      isMicrophoneEnabled,
+    });
+  }, [
+    agent,
+    agentState,
+    connectionState,
+    isMicrophoneEnabled,
+    localParticipant,
+    microphoneTrack,
+  ]);
+
+  useEffect(() => {
+    const cleanups = [
+      addEventLogger(room, RoomEvent.ConnectionStateChanged, (state) => {
+        logTestCallDebug('room_connection_state_changed', { state });
+      }),
+      addEventLogger(room, RoomEvent.Connected, () => {
+        logTestCallDebug('room_connected', {
+          local: describeParticipant(localParticipant),
+        });
+      }),
+      addEventLogger(room, RoomEvent.Reconnecting, () => {
+        logTestCallDebug('room_reconnecting');
+      }),
+      addEventLogger(room, RoomEvent.Reconnected, () => {
+        logTestCallDebug('room_reconnected');
+      }),
+      addEventLogger(room, RoomEvent.Disconnected, (reason) => {
+        logTestCallDebug('room_disconnected', { reason });
+      }),
+      addEventLogger(room, RoomEvent.ParticipantConnected, (participant) => {
+        logTestCallDebug('participant_connected', describeParticipant(participant));
+      }),
+      addEventLogger(room, RoomEvent.ParticipantDisconnected, (participant) => {
+        logTestCallDebug(
+          'participant_disconnected',
+          describeParticipant(participant),
+        );
+      }),
+      addEventLogger(room, RoomEvent.TrackPublished, (publication, participant) => {
+        logTestCallDebug('remote_track_published', {
+          participant: describeParticipant(participant),
+          publication: describePublication(publication),
+        });
+      }),
+      addEventLogger(
+        room,
+        RoomEvent.TrackUnpublished,
+        (publication, participant) => {
+          logTestCallDebug('remote_track_unpublished', {
+            participant: describeParticipant(participant),
+            publication: describePublication(publication),
+          });
+        },
+      ),
+      addEventLogger(room, RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        void track;
+        logTestCallDebug('remote_track_subscribed', {
+          participant: describeParticipant(participant),
+          publication: describePublication(publication),
+        });
+      }),
+      addEventLogger(
+        localParticipant,
+        ParticipantEvent.LocalTrackPublished,
+        (publication) => {
+          logTestCallDebug('local_track_published', {
+            publication: describePublication(publication),
+          });
+        },
+      ),
+      addEventLogger(
+        localParticipant,
+        ParticipantEvent.LocalTrackUnpublished,
+        (publication) => {
+          logTestCallDebug('local_track_unpublished', {
+            publication: describePublication(publication),
+          });
+        },
+      ),
+      addEventLogger(localParticipant, ParticipantEvent.TrackMuted, (publication) => {
+        logTestCallDebug('local_track_muted', {
+          publication: describePublication(publication),
+        });
+      }),
+      addEventLogger(localParticipant, ParticipantEvent.TrackUnmuted, (publication) => {
+        logTestCallDebug('local_track_unmuted', {
+          publication: describePublication(publication),
+        });
+      }),
+    ];
+
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [localParticipant, room]);
 
   useEffect(() => {
     if (
@@ -514,29 +703,49 @@ function BrowserTestRoomChrome({
   }, [agent, agentState, connectionState, onSessionActive]);
 
   useEffect(() => {
+    if (isMicrophoneEnabled) {
+      autoMicAttemptRef.current = 0;
+      return undefined;
+    }
     if (
       connectionState !== ConnectionState.Connected ||
-      autoMicRequestedRef.current ||
-      isMicrophoneEnabled ||
+      userMutedRef.current ||
+      autoMicAttemptRef.current >= 4 ||
       lastMicrophoneError
     ) {
       return undefined;
     }
 
-    autoMicRequestedRef.current = true;
     let cancelled = false;
-    setMuteBusy(true);
-    localParticipant
-      .setMicrophoneEnabled(true)
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) {
-          setMuteBusy(false);
-        }
-      });
+    const attempt = autoMicAttemptRef.current + 1;
+    autoMicAttemptRef.current = attempt;
+    const timer = window.setTimeout(() => {
+      if (cancelled) {
+        return;
+      }
+      logTestCallDebug('mic_auto_publish_attempt', { attempt });
+      setMuteBusy(true);
+      localParticipant
+        .setMicrophoneEnabled(true, browserAudioCaptureOptions)
+        .then(() => {
+          logTestCallDebug('mic_auto_publish_completed', { attempt });
+        })
+        .catch((error: unknown) => {
+          logTestCallDebug('mic_auto_publish_failed', {
+            attempt,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setMuteBusy(false);
+          }
+        });
+    }, attempt === 1 ? 0 : 600);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [
     connectionState,
@@ -822,7 +1031,7 @@ export function TestCallModal(props: TestCallModalProps) {
           serverUrl={session.serverUrl}
           token={session.participantToken}
           connect
-          audio
+          audio={browserAudioCaptureOptions}
           video={false}
           options={{ adaptiveStream: true, dynacast: true }}
           onConnected={markRtcActive}

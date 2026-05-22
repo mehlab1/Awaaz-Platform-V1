@@ -38,6 +38,7 @@ class AwaazAgent:
     @staticmethod
     async def entrypoint(ctx: JobContext) -> None:
         await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
+        register_room_debug_events(ctx.room)
 
         room_metadata = parse_json_object(ctx.room.metadata)
         agent_id = string_value(room_metadata, "agentId")
@@ -69,6 +70,12 @@ class AwaazAgent:
 
         ctx.add_shutdown_callback(shutdown)
         participant = await ctx.wait_for_participant()
+        logger.info(
+            "livekit_wait_for_participant identity=%s sid=%s kind=%s",
+            participant_identity(participant),
+            participant_sid(participant),
+            participant_kind(participant),
+        )
         assistant.start(ctx.room, participant)
         register_timing_events(assistant, timing)
 
@@ -108,9 +115,9 @@ def create_assistant(
         allow_interruptions=True,
         interrupt_speech_duration=float_env(
             "LIVEKIT_INTERRUPT_SPEECH_SECONDS",
-            0.25,
+            0.45,
         ),
-        interrupt_min_words=0,
+        interrupt_min_words=int_env("LIVEKIT_INTERRUPT_MIN_WORDS", 2),
         preemptive_synthesis=True,
         before_llm_cb=timing.before_llm,
         before_tts_cb=timing.before_tts,
@@ -133,6 +140,7 @@ class SpeechEventSink:
         message: llm.ChatMessage,
         latency_ms: int | None = None,
         timing_payload: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         if not self._call_id:
             return
@@ -149,9 +157,19 @@ class SpeechEventSink:
             payload.update(timing_payload)
         if latency_ms is not None:
             payload["latencyMs"] = latency_ms
+        if metadata:
+            payload["metadata"] = metadata
 
         task = asyncio.create_task(self._api.emit_event(self._call_id, payload))
         self._tasks.add(task)
+        logger.info(
+            "speech_event_emit_queued type=%s chars=%s latency_ms=%s metadata=%s pending=%s",
+            event_type,
+            len(text),
+            latency_ms,
+            metadata or {},
+            len(self._tasks),
+        )
         task.add_done_callback(self._on_emit_done)
 
     async def flush(self, timeout_seconds: float = 8.0) -> None:
@@ -352,15 +370,30 @@ class PipelineTiming:
             elapsed_ms(self.llm_started_at, self.playback_started_at),
         )
 
-    def mark_playback_stopped(self) -> None:
+    def mark_playback_stopped(self, interrupted: bool = False) -> None:
         self.playback_stopped_at = time.monotonic()
         self.playback_stopped_at_iso = utc_now_iso()
         logger.info(
-            "voice_playback_stopped turn=%s playback_ms=%s total_turn_ms=%s",
+            "voice_playback_stopped turn=%s interrupted=%s playback_ms=%s total_turn_ms=%s",
             self.turn_id,
+            interrupted,
             elapsed_ms(self.playback_started_at, time.monotonic()),
             elapsed_ms(self.user_started_at, time.monotonic()),
         )
+
+    def response_latency_ms(self) -> int | None:
+        response_started = (
+            self.playback_started_at
+            or self.tts_text_started_at
+            or self.first_llm_token_at
+            or self.llm_started_at
+        )
+        user_reference = (
+            self.user_stopped_at
+            or self.final_transcript_at
+            or self.user_started_at
+        )
+        return elapsed_ms(user_reference, response_started)
 
     def user_speech_payload(self) -> dict[str, object]:
         return self._payload_window(
@@ -430,6 +463,54 @@ class TimedLLMStream(LLMStream):
         return chunk
 
 
+def register_room_debug_events(room: object) -> None:
+    logger.info(
+        "livekit_room_debug_attached name=%s metadata_chars=%s",
+        getattr(room, "name", None),
+        len(getattr(room, "metadata", "") or ""),
+    )
+
+    def log_participant(prefix: str, participant: object) -> None:
+        logger.info(
+            "%s identity=%s sid=%s kind=%s track_publications=%s",
+            prefix,
+            participant_identity(participant),
+            participant_sid(participant),
+            participant_kind(participant),
+            len(getattr(participant, "track_publications", {}) or {}),
+        )
+
+    def log_publication(prefix: str, publication: object, participant: object | None = None) -> None:
+        logger.info(
+            "%s participant=%s source=%s sid=%s subscribed=%s muted=%s kind=%s",
+            prefix,
+            participant_identity(participant) if participant is not None else None,
+            getattr(publication, "source", None),
+            getattr(publication, "sid", None),
+            getattr(publication, "subscribed", None),
+            getattr(publication, "muted", None),
+            getattr(publication, "kind", None),
+        )
+
+    on = getattr(room, "on", None)
+    if not callable(on):
+        logger.warning("LiveKit room debug could not attach; room has no on()")
+        return
+
+    on("connection_state_changed", lambda state: logger.info("livekit_room_connection_state=%s", state))
+    on("reconnecting", lambda: logger.warning("livekit_room_reconnecting"))
+    on("reconnected", lambda: logger.info("livekit_room_reconnected"))
+    on("disconnected", lambda reason=None: logger.warning("livekit_room_disconnected reason=%s", reason))
+    on("participant_connected", lambda participant: log_participant("livekit_participant_connected", participant))
+    on("participant_disconnected", lambda participant: log_participant("livekit_participant_disconnected", participant))
+    on("track_published", lambda publication, participant: log_publication("livekit_track_published", publication, participant))
+    on("track_unpublished", lambda publication, participant: log_publication("livekit_track_unpublished", publication, participant))
+    on("track_subscribed", lambda track, publication, participant: log_publication("livekit_track_subscribed", publication, participant))
+    on("track_unsubscribed", lambda track, publication, participant: log_publication("livekit_track_unsubscribed", publication, participant))
+    on("track_muted", lambda participant, publication: log_publication("livekit_track_muted", publication, participant))
+    on("track_unmuted", lambda participant, publication: log_publication("livekit_track_unmuted", publication, participant))
+
+
 def register_timing_events(
     assistant: VoiceAssistant,
     timing: PipelineTiming,
@@ -437,19 +518,42 @@ def register_timing_events(
     assistant.on("user_started_speaking", lambda: timing.mark_user_started())
     assistant.on("user_stopped_speaking", lambda: timing.mark_user_stopped())
     assistant.on("agent_started_speaking", lambda: timing.mark_playback_started())
-    assistant.on("agent_stopped_speaking", lambda *args: timing.mark_playback_stopped())
+    assistant.on(
+        "agent_stopped_speaking",
+        lambda interrupted=False: timing.mark_playback_stopped(bool(interrupted)),
+    )
 
     human_input = getattr(assistant, "_human_input", None)
     if human_input is None:
         logger.warning("Voice timing could not attach to human input events")
         return
+    logger.info("voice_timing_attached_to_human_input")
+
+    last_interim_log_at = 0.0
 
     def on_final_transcript(event: object) -> None:
         alternatives = getattr(event, "alternatives", [])
         text = alternatives[0].text if alternatives else ""
         timing.mark_final_transcript(text)
 
+    def on_interim_transcript(event: object) -> None:
+        nonlocal last_interim_log_at
+        now = time.monotonic()
+        if now - last_interim_log_at < 1.0:
+            return
+        last_interim_log_at = now
+        alternatives = getattr(event, "alternatives", [])
+        text = alternatives[0].text if alternatives else ""
+        if text:
+            logger.info(
+                "voice_stt_interim turn=%s chars=%s text=%r",
+                timing.turn_id,
+                len(text),
+                text[:100],
+            )
+
     human_input.on("final_transcript", on_final_transcript)
+    human_input.on("interim_transcript", on_interim_transcript)
 
 
 def register_events(
@@ -471,8 +575,8 @@ def register_events(
         sink.emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
 
     def on_agent_speech(message: llm.ChatMessage) -> None:
-        latency_ms = None
-        if last_user_speech_at is not None:
+        latency_ms = timing.response_latency_ms()
+        if latency_ms is None and last_user_speech_at is not None:
             latency_ms = max(0, round((time.monotonic() - last_user_speech_at) * 1000))
         sink.emit(
             "AGENT_SPEECH",
@@ -481,8 +585,27 @@ def register_events(
             timing.agent_speech_payload(),
         )
 
+    def on_agent_speech_interrupted(message: llm.ChatMessage) -> None:
+        latency_ms = timing.response_latency_ms()
+        if latency_ms is None and last_user_speech_at is not None:
+            latency_ms = max(0, round((time.monotonic() - last_user_speech_at) * 1000))
+        logger.warning(
+            "voice_agent_speech_interrupted turn=%s chars=%s latency_ms=%s",
+            timing.turn_id,
+            len(message_text(message)),
+            latency_ms,
+        )
+        sink.emit(
+            "AGENT_SPEECH",
+            message,
+            latency_ms,
+            timing.agent_speech_payload(),
+            {"interrupted": True},
+        )
+
     assistant.on("user_speech_committed", on_user_speech)
     assistant.on("agent_speech_committed", on_agent_speech)
+    assistant.on("agent_speech_interrupted", on_agent_speech_interrupted)
     return sink
 
 
@@ -545,6 +668,21 @@ def required_string(
 ) -> str:
     value = source.get(key)
     return value if isinstance(value, str) else default
+
+
+def participant_identity(participant: object) -> str | None:
+    value = getattr(participant, "identity", None)
+    return value if isinstance(value, str) else None
+
+
+def participant_sid(participant: object) -> str | None:
+    value = getattr(participant, "sid", None)
+    return value if isinstance(value, str) else None
+
+
+def participant_kind(participant: object) -> str | None:
+    value = getattr(participant, "kind", None)
+    return str(value) if value is not None else None
 
 
 def message_text(message: llm.ChatMessage) -> str:
