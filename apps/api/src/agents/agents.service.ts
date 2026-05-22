@@ -370,6 +370,13 @@ export class AgentsService {
               source: 'awaaz_browser_test_call',
               isTest: true,
               isTestCall: true,
+              liveKitRoomName: session.roomName,
+              ...(session.recordingObjectKey
+                ? {
+                    recordingProvider: 'livekit-egress',
+                    recordingObjectKey: session.recordingObjectKey,
+                  }
+                : {}),
             },
           },
         });

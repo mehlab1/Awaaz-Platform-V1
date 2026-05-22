@@ -5,6 +5,10 @@ export class StartCallDto {
   @IsString()
   liveKitRoomId!: string;
 
+  @IsOptional()
+  @IsString()
+  liveKitRoomName?: string;
+
   @IsString()
   agentId!: string;
 

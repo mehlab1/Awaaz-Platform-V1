@@ -370,7 +370,7 @@ async def start_call_payload(
     config: Mapping[str, object],
     room_metadata: Mapping[str, object],
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "liveKitRoomId": await ctx.room.sid,
         "agentId": string_value(config, "agentId"),
         "organizationId": string_value(config, "organizationId"),
@@ -379,6 +379,19 @@ async def start_call_payload(
         "toNumber": string_value(room_metadata, "toNumber", ""),
         "metadata": dict(room_metadata),
     }
+    room_name = (
+        string_value(room_metadata, "liveKitRoomName")
+        or string_value(room_metadata, "roomName")
+        or room_name_from_context(ctx)
+    )
+    if room_name:
+        payload["liveKitRoomName"] = room_name
+    return payload
+
+
+def room_name_from_context(ctx: JobContext) -> str | None:
+    room_name = getattr(ctx.room, "name", None)
+    return room_name if isinstance(room_name, str) and room_name else None
 
 
 def parse_json_object(raw: str) -> dict[str, object]:

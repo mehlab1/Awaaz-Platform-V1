@@ -11,13 +11,15 @@ import { ConfigService } from '@nestjs/config';
 import type { Queue } from 'bullmq';
 import { WebhookReceiver, type WebhookEvent } from 'livekit-server-sdk';
 
+import { LiveKitEgressService } from '../livekit/livekit-egress.service';
 import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
-import type { TranscriptJobData } from '../queues/transcript.processor';
+import type { TranscriptJobData } from '../queues/transcript-assembly.service';
 
 export interface LiveKitWebhookResult {
   ok: true;
   event: string;
   queued: boolean;
+  recordingPersisted?: boolean;
 }
 
 @Injectable()
@@ -26,6 +28,7 @@ export class LiveKitWebhooksService {
 
   constructor(
     private readonly config: ConfigService,
+    private readonly egress: LiveKitEgressService,
     @InjectQueue(TRANSCRIPT_QUEUE)
     private readonly transcriptQueue: Queue<TranscriptJobData>,
   ) {}
@@ -49,6 +52,18 @@ export class LiveKitWebhooksService {
     }
 
     const event = await this.verifyEvent(rawBody, authHeader);
+    if (event.event === 'egress_ended') {
+      const recordingPersisted = event.egressInfo
+        ? await this.egress.persistBrowserRecordingFromEgress(event.egressInfo)
+        : false;
+      return {
+        ok: true,
+        event: event.event,
+        queued: false,
+        recordingPersisted,
+      };
+    }
+
     if (event.event !== 'room_finished') {
       return { ok: true, event: event.event, queued: false };
     }

@@ -12,19 +12,25 @@ import {
   RoomServiceClient,
 } from 'livekit-server-sdk';
 
+import { LiveKitEgressService } from './livekit-egress.service';
+
 export interface BrowserTestLiveKitSessionDto {
   roomName: string;
   participantToken: string;
   participantIdentity: string;
   /** WebRTC signaling endpoint for the browser (typically `wss://…`). */
   serverUrl: string;
+  recordingObjectKey: string | null;
 }
 
 @Injectable()
 export class LiveKitBrowserTestService {
   private readonly logger = new Logger(LiveKitBrowserTestService.name);
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly egress: LiveKitEgressService,
+  ) {}
 
   async issueBrowserParticipantSession(params: {
     agentId: string;
@@ -48,23 +54,48 @@ export class LiveKitBrowserTestService {
       96,
     );
     const participantIdentity = `browser-test-${suffix}`;
-    const roomMetadata = JSON.stringify({
-      source: 'awaaz_browser_test_call',
+    let recording = this.egress.createBrowserRecordingEgress({
+      roomName,
       agentId: params.agentId,
       organizationId: params.organizationId,
-      direction: 'INBOUND',
-      fromNumber: 'browser-preview',
-      toNumber: '',
-      isTest: true,
-      isTestCall: true,
+    });
+    let roomMetadata = this.browserRoomMetadata({
+      agentId: params.agentId,
+      organizationId: params.organizationId,
+      roomName,
+      recordingObjectKey: recording?.objectKey ?? null,
     });
 
-    await rooms.createRoom({
-      name: roomName,
-      metadata: roomMetadata,
-      emptyTimeout: 300,
-      maxParticipants: 4,
-    });
+    try {
+      await rooms.createRoom({
+        name: roomName,
+        metadata: roomMetadata,
+        emptyTimeout: 300,
+        maxParticipants: 4,
+        ...(recording ? { egress: recording.egress } : {}),
+      });
+    } catch (error: unknown) {
+      if (!recording) {
+        throw error;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Browser test recording egress could not be attached for ${roomName}; retrying without recording: ${message}`,
+      );
+      recording = null;
+      roomMetadata = this.browserRoomMetadata({
+        agentId: params.agentId,
+        organizationId: params.organizationId,
+        roomName,
+        recordingObjectKey: null,
+      });
+      await rooms.createRoom({
+        name: roomName,
+        metadata: roomMetadata,
+        emptyTimeout: 300,
+        maxParticipants: 4,
+      });
+    }
 
     try {
       await dispatchClient.createDispatch(roomName, agentWorkerName, {
@@ -72,6 +103,13 @@ export class LiveKitBrowserTestService {
           source: 'awaaz_browser_test_call',
           agentId: params.agentId,
           organizationId: params.organizationId,
+          liveKitRoomName: roomName,
+          ...(recording?.objectKey
+            ? {
+                recordingProvider: 'livekit-egress',
+                recordingObjectKey: recording.objectKey,
+              }
+            : {}),
         }),
       });
     } catch (error: unknown) {
@@ -106,7 +144,33 @@ export class LiveKitBrowserTestService {
       participantIdentity,
       participantToken,
       serverUrl: serverWsUrl,
+      recordingObjectKey: recording?.objectKey ?? null,
     };
+  }
+
+  private browserRoomMetadata(input: {
+    agentId: string;
+    organizationId: string;
+    roomName: string;
+    recordingObjectKey: string | null;
+  }): string {
+    return JSON.stringify({
+      source: 'awaaz_browser_test_call',
+      agentId: input.agentId,
+      organizationId: input.organizationId,
+      liveKitRoomName: input.roomName,
+      direction: 'INBOUND',
+      fromNumber: 'browser-preview',
+      toNumber: '',
+      isTest: true,
+      isTestCall: true,
+      ...(input.recordingObjectKey
+        ? {
+            recordingProvider: 'livekit-egress',
+            recordingObjectKey: input.recordingObjectKey,
+          }
+        : {}),
+    });
   }
 
   isConfigured(): boolean {

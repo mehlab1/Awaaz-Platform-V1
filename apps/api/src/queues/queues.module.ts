@@ -5,6 +5,7 @@ import { BullModule, getQueueToken } from '@nestjs/bullmq';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RECORDING_QUEUE, TRANSCRIPT_QUEUE } from './queue.constants';
 import { createRedisConnection, isRedisDisabled } from './redis-connection';
+import { TranscriptAssemblyService } from './transcript-assembly.service';
 import { TranscriptProcessor } from './transcript.processor';
 
 const queuesDisabled = isRedisDisabled(process.env.DISABLE_REDIS);
@@ -35,8 +36,12 @@ const bullQueueModules = [
     PrismaModule,
     ...(queuesDisabled ? [] : bullQueueModules),
   ],
-  providers: queuesDisabled ? noopQueueProviders : [TranscriptProcessor],
-  exports: queuesDisabled ? queueNames.map(getQueueToken) : [BullModule],
+  providers: queuesDisabled
+    ? [...noopQueueProviders, TranscriptAssemblyService]
+    : [TranscriptAssemblyService, TranscriptProcessor],
+  exports: queuesDisabled
+    ? [...queueNames.map(getQueueToken), TranscriptAssemblyService]
+    : [BullModule, TranscriptAssemblyService],
 })
 export class QueuesModule {}
 
@@ -53,6 +58,7 @@ function createNoopQueueProvider(name: string): Provider {
           id: `disabled-${Date.now()}`,
           name: jobName,
           data,
+          queueDisabled: true,
         };
       },
     },

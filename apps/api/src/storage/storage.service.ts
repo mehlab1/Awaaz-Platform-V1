@@ -10,6 +10,11 @@ interface R2Config {
   bucketName: string;
 }
 
+export interface R2S3UploadConfig extends R2Config {
+  endpoint: string;
+  region: string;
+}
+
 @Injectable()
 export class StorageService {
   constructor(private readonly config: ConfigService) {}
@@ -57,10 +62,19 @@ export class StorageService {
     );
   }
 
+  getS3UploadConfig(): R2S3UploadConfig {
+    const r2 = this.getR2Config();
+    return {
+      ...r2,
+      endpoint: this.endpointForAccount(r2.accountId),
+      region: 'auto',
+    };
+  }
+
   private createClient(r2: R2Config): S3Client {
     return new S3Client({
       region: 'auto',
-      endpoint: `https://${r2.accountId}.r2.cloudflarestorage.com`,
+      endpoint: this.endpointForAccount(r2.accountId),
       credentials: {
         accessKeyId: r2.accessKeyId,
         secretAccessKey: r2.secretAccessKey,
@@ -100,5 +114,9 @@ export class StorageService {
       secretAccessKey,
       bucketName,
     };
+  }
+
+  private endpointForAccount(accountId: string): string {
+    return `https://${accountId}.r2.cloudflarestorage.com`;
   }
 }

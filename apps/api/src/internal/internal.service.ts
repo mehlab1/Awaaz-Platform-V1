@@ -9,7 +9,10 @@ import type { Queue } from 'bullmq';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
-import type { TranscriptJobData } from '../queues/transcript.processor';
+import {
+  TranscriptAssemblyService,
+  type TranscriptJobData,
+} from '../queues/transcript-assembly.service';
 import { RimeService } from '../voices/rime.service';
 import type { CallEventDto } from './dto/call-event.dto';
 import type { EndCallDto } from './dto/end-call.dto';
@@ -23,6 +26,7 @@ export class InternalService {
     private readonly prisma: PrismaService,
     @InjectQueue(TRANSCRIPT_QUEUE)
     private readonly transcriptQueue: Queue<TranscriptJobData>,
+    private readonly transcriptAssembly: TranscriptAssemblyService,
     private readonly rime: RimeService,
   ) {}
 
@@ -65,42 +69,77 @@ export class InternalService {
       throw new NotFoundException('Agent not found');
     }
 
+    const data = {
+      agentId: dto.agentId,
+      agentVersionId: agent.currentVersionId,
+      status: CallStatus.IN_PROGRESS,
+      fromNumber: dto.fromNumber,
+      toNumber: dto.toNumber,
+      metadata: this.toJson(dto.metadata),
+    };
+    const roomName = dto.liveKitRoomName?.trim();
+    if (roomName && roomName !== dto.liveKitRoomId) {
+      const existingBySid = await this.prisma.call.findUnique({
+        where: { liveKitRoomId: dto.liveKitRoomId },
+        select: { id: true },
+      });
+      if (existingBySid) {
+        return this.prisma.call.update({
+          where: { id: existingBySid.id },
+          data,
+        });
+      }
+
+      const placeholder = await this.prisma.call.findFirst({
+        where: {
+          organizationId: dto.organizationId,
+          agentId: dto.agentId,
+          liveKitRoomId: roomName,
+          status: CallStatus.INITIATED,
+        },
+        select: { id: true },
+      });
+      if (placeholder) {
+        return this.prisma.call.update({
+          where: { id: placeholder.id },
+          data: {
+            ...data,
+            liveKitRoomId: dto.liveKitRoomId,
+            startedAt: new Date(),
+          },
+        });
+      }
+    }
+
     return this.prisma.call.upsert({
       where: { liveKitRoomId: dto.liveKitRoomId },
       create: {
         organizationId: dto.organizationId,
-        agentId: dto.agentId,
-        agentVersionId: agent.currentVersionId,
+        ...data,
         liveKitRoomId: dto.liveKitRoomId,
         direction: dto.direction,
-        status: CallStatus.IN_PROGRESS,
-        fromNumber: dto.fromNumber,
-        toNumber: dto.toNumber,
         startedAt: new Date(),
-        metadata: this.toJson(dto.metadata),
       },
-      update: {
-        agentId: dto.agentId,
-        agentVersionId: agent.currentVersionId,
-        status: CallStatus.IN_PROGRESS,
-        fromNumber: dto.fromNumber,
-        toNumber: dto.toNumber,
-        metadata: this.toJson(dto.metadata),
-      },
+      update: data,
     });
   }
 
   async endCall(callId: string, dto: EndCallDto): Promise<{ ok: true }> {
     const call = await this.prisma.call.findUnique({
       where: { id: callId },
-      select: { startedAt: true, liveKitRoomId: true },
+      select: {
+        startedAt: true,
+        liveKitRoomId: true,
+        fromNumber: true,
+        metadata: true,
+      },
     });
     if (!call) {
       throw new NotFoundException('Call not found');
     }
 
     const endedAt = new Date();
-    await this.prisma.call.update({
+    const updatedCall = await this.prisma.call.update({
       where: { id: callId },
       data: {
         status: CallStatus.COMPLETED,
@@ -108,8 +147,17 @@ export class InternalService {
         durationSeconds: this.durationSeconds(call.startedAt, endedAt),
         metadata: this.toJson(dto.metadata),
       },
+      select: {
+        id: true,
+        liveKitRoomId: true,
+        fromNumber: true,
+        metadata: true,
+      },
     });
-    await this.enqueueTranscriptJob(callId, call.liveKitRoomId);
+    const enqueued = await this.enqueueTranscriptJob(callId, call.liveKitRoomId);
+    if (!enqueued && this.isBrowserPreviewCall(updatedCall)) {
+      await this.assembleTranscriptFallback(callId, call.liveKitRoomId);
+    }
     return { ok: true };
   }
 
@@ -160,9 +208,9 @@ export class InternalService {
   private async enqueueTranscriptJob(
     callId: string,
     liveKitRoomId: string | null,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
-      await this.transcriptQueue.add(
+      const job = await this.transcriptQueue.add(
         'call_ended',
         { callId, liveKitRoomId: liveKitRoomId ?? undefined },
         {
@@ -172,10 +220,60 @@ export class InternalService {
           removeOnFail: 50,
         },
       );
+      if (this.isDisabledQueueJob(job)) {
+        throw new Error('Transcript queue is disabled for this process');
+      }
+      return true;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Failed to enqueue transcript job for ${callId}: ${message}`);
+      return false;
     }
+  }
+
+  private async assembleTranscriptFallback(
+    callId: string,
+    liveKitRoomId: string | null,
+  ): Promise<void> {
+    try {
+      const result = await this.transcriptAssembly.assemble({
+        callId,
+        liveKitRoomId: liveKitRoomId ?? undefined,
+      });
+      this.logger.warn(
+        `Transcript fallback assembled call ${result.callId}: ` +
+          `${result.transcriptEntries} turns, totalCostUsd=${result.totalCostUsd}`,
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Transcript fallback failed for ${callId}: ${message}`);
+    }
+  }
+
+  private isDisabledQueueJob(job: unknown): boolean {
+    return (
+      typeof job === 'object' &&
+      job !== null &&
+      (job as { queueDisabled?: unknown }).queueDisabled === true
+    );
+  }
+
+  private isBrowserPreviewCall(call: {
+    fromNumber: string | null;
+    metadata: Prisma.JsonValue | null;
+  }): boolean {
+    if (call.fromNumber === 'browser-preview') {
+      return true;
+    }
+    if (!call.metadata || typeof call.metadata !== 'object' || Array.isArray(call.metadata)) {
+      return false;
+    }
+    const metadata = call.metadata as Record<string, unknown>;
+    return (
+      metadata.source === 'awaaz_browser_test_call' ||
+      metadata.isTest === true ||
+      metadata.isTestCall === true
+    );
   }
 
   private toJson(value: Record<string, unknown> | undefined): Prisma.InputJsonValue | undefined {
