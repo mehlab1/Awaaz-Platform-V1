@@ -415,6 +415,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       return;
     }
 
+    console.debug('[AgentEditor] Save version voice', {
+      selectedVoiceId,
+      selectedVoiceName: selectedVoice?.name ?? null,
+      publish,
+    });
+
     saveInFlightRef.current = true;
     setSaveBusy(publish ? 'publish' : 'version');
     setPageError(null);
@@ -438,6 +444,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(created.systemPrompt);
       setSelectedVoiceId(created.voiceId);
       setDraftPrompt('');
+      console.debug('[AgentEditor] Saved version voice', {
+        versionId: created.id,
+        versionNumber: created.versionNumber,
+        voiceId: created.voiceId,
+        published: publish,
+      });
 
       if (publish) {
         const pub = await apiCall(
@@ -506,6 +518,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       agentActive: agent?.isActive ?? null,
       liveVersionId: agent?.currentVersionId ?? null,
       liveVersionNumber: liveVersion?.versionNumber ?? null,
+      liveVersionVoiceId: liveVersion?.voiceId ?? null,
+      selectedVoiceId,
+      selectedVoiceName: selectedVoice?.name ?? null,
       selectedVersionId,
       selectedVersionNumber: selectedVersion?.versionNumber ?? null,
       hasUsableLiveConfig,
@@ -516,10 +531,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     canTest,
     hasUnsavedChanges,
     hasUsableLiveConfig,
-    liveVersion?.versionNumber,
     loading,
     promptHydrated,
     saveBusy,
+    liveVersion?.versionNumber,
+    liveVersion?.voiceId,
+    selectedVoice?.name,
+    selectedVoiceId,
     selectedVersion?.versionNumber,
     selectedVersionId,
     testCallBlockedReason,
@@ -539,6 +557,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
     setPreviewBusy(true);
     try {
+      console.debug('[AgentEditor] Voice preview request', {
+        selectedVoiceId,
+        rimeVoiceId: selectedVoice.rimeVoiceId,
+        voiceName: selectedVoice.name,
+      });
       const res = await apiCall('/api/v1/voices/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

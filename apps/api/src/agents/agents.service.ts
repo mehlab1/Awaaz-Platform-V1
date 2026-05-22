@@ -9,6 +9,7 @@ import { AuditAction, Prisma, CallStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { VoicesService } from '../voices/voices.service';
 import type { CreateAgentVersionDto } from './dto/create-agent-version.dto';
 import type { CreateAgentDto } from './dto/create-agent.dto';
 import type { PatchAgentDto } from './dto/patch-agent.dto';
@@ -19,6 +20,7 @@ export class AgentsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly liveKitBrowserTest: LiveKitBrowserTestService,
+    private readonly voices: VoicesService,
   ) {}
 
   async list(organizationId: string) {
@@ -190,6 +192,7 @@ export class AgentsService {
     agentId: string,
     dto: CreateAgentVersionDto,
   ) {
+    const resolvedVoice = await this.voices.resolveForTts(dto.voiceId);
     return this.prisma.$transaction(
       async (tx) => {
         await this.ensureAgentInTransaction(tx, organizationId, agentId);
@@ -203,7 +206,7 @@ export class AgentsService {
             agentId,
             versionNumber: (last?.versionNumber ?? 0) + 1,
             systemPrompt: dto.systemPrompt,
-            voiceId: dto.voiceId,
+            voiceId: resolvedVoice.rimeVoiceId,
             model: dto.model,
             temperature: dto.temperature,
             maxTokens: dto.maxTokens,
@@ -221,7 +224,10 @@ export class AgentsService {
             metadata: {
               agentId,
               versionNumber: version.versionNumber,
+              requestedVoiceId: dto.voiceId,
               voiceId: version.voiceId,
+              voiceModelId: resolvedVoice.modelId,
+              voiceLang: resolvedVoice.lang,
               model: version.model,
               temperature: version.temperature,
               maxTokens: version.maxTokens,

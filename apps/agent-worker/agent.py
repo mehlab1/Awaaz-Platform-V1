@@ -200,10 +200,11 @@ class AwaazAgent:
         voice_lang = required_string(config, "voiceLang", "eng")
         logger.info(
             "voice_config_loaded agent_id=%s call_id=%s agent_version_id=%s "
-            "voice=%s model=%s lang=%s",
+            "stored_voice_id=%s rime_speaker=%s model=%s lang=%s",
             agent_id,
             call_id,
             string_value(config, "agentVersionId"),
+            string_value(config, "voiceId"),
             voice_id,
             voice_model_id,
             voice_lang,
@@ -1099,7 +1100,11 @@ def required_string(
     default: str,
 ) -> str:
     value = source.get(key)
-    return value if isinstance(value, str) else default
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if trimmed:
+            return trimmed
+    return default
 
 
 def participant_identity(participant: object) -> str | None:

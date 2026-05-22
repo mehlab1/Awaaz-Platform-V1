@@ -13,7 +13,7 @@ import {
   TranscriptAssemblyService,
   type TranscriptJobData,
 } from '../queues/transcript-assembly.service';
-import { RimeService } from '../voices/rime.service';
+import { VoicesService } from '../voices/voices.service';
 import type { CallEventDto } from './dto/call-event.dto';
 import type { EndCallDto } from './dto/end-call.dto';
 import type { StartCallDto } from './dto/start-call.dto';
@@ -27,7 +27,7 @@ export class InternalService {
     @InjectQueue(TRANSCRIPT_QUEUE)
     private readonly transcriptQueue: Queue<TranscriptJobData>,
     private readonly transcriptAssembly: TranscriptAssemblyService,
-    private readonly rime: RimeService,
+    private readonly voices: VoicesService,
   ) {}
 
   async getAgentConfig(agentId: string) {
@@ -40,20 +40,20 @@ export class InternalService {
     }
 
     const version = agent.currentVersion;
-    const voice = await this.resolveVoiceMetadata(version.voiceId);
+    const voice = await this.voices.resolveForTts(version.voiceId);
     this.logger.log(
-      `Loaded agent config agent=${agent.id} version=${version.id} ` +
-        `voiceId=${version.voiceId} voiceModelId=${voice?.modelId ?? 'default'} ` +
-        `voiceLang=${voice?.lang ?? 'default'}`,
+      `Loaded agent config agent=${agent.id} version=${version.id} v${version.versionNumber} ` +
+        `storedVoiceId=${version.voiceId} rimeSpeaker=${voice.rimeVoiceId} ` +
+        `modelId=${voice.modelId} lang=${voice.lang}`,
     );
     return {
       agentId: agent.id,
       agentVersionId: version.id,
       organizationId: agent.organizationId,
       systemPrompt: version.systemPrompt,
-      voiceId: version.voiceId,
-      voiceModelId: voice?.modelId,
-      voiceLang: voice?.lang,
+      voiceId: voice.rimeVoiceId,
+      voiceModelId: voice.modelId,
+      voiceLang: voice.lang,
       model: version.model,
       temperature: version.temperature,
       maxTokens: version.maxTokens,
@@ -323,41 +323,5 @@ export class InternalService {
       ...base,
       ...(update ?? {}),
     } as Prisma.InputJsonObject;
-  }
-
-  private async resolveVoiceMetadata(
-    voiceId: string,
-  ): Promise<{ modelId: string | null; lang: string | null } | null> {
-    const cached = await this.prisma.voice.findUnique({
-      where: { rimeVoiceId: voiceId },
-      select: { modelId: true, lang: true },
-    });
-    if (cached?.modelId && cached.lang) {
-      return cached;
-    }
-
-    try {
-      const voices = await this.rime.listVoices();
-      const fresh = voices.find((voice) => voice.rimeVoiceId === voiceId);
-      if (!fresh) {
-        return cached;
-      }
-      await this.prisma.voice.updateMany({
-        where: { rimeVoiceId: voiceId },
-        data: {
-          modelId: fresh.modelId,
-          lang: fresh.lang,
-          language: fresh.language,
-        },
-      });
-      return {
-        modelId: fresh.modelId ?? null,
-        lang: fresh.lang ?? null,
-      };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`Failed to resolve Rime metadata for ${voiceId}: ${message}`);
-      return cached;
-    }
   }
 }

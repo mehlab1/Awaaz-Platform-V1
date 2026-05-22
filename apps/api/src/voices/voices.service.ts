@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -10,8 +11,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { RimeService, type RimeVoice } from './rime.service';
 
+export interface ResolvedRimeVoice {
+  rimeVoiceId: string;
+  modelId: string;
+  lang: string;
+}
+
 @Injectable()
 export class VoicesService {
+  private readonly logger = new Logger(VoicesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly rime: RimeService,
@@ -26,29 +35,76 @@ export class VoicesService {
   }
 
   async preview(voiceId: string): Promise<Uint8Array> {
-    const voice = await this.prisma.voice.findUnique({
-      where: { rimeVoiceId: voiceId },
+    const trimmed = voiceId.trim();
+    const voiceRow = await this.prisma.voice.findUnique({
+      where: { rimeVoiceId: trimmed },
     });
-    if (!voice?.isActive) {
+    if (voiceRow && !voiceRow.isActive) {
+      throw new NotFoundException('Voice not found');
+    }
+    const resolved = await this.resolveForTts(trimmed);
+    this.logger.log(
+      `Voice preview request voiceId=${trimmed} rimeSpeaker=${resolved.rimeVoiceId} modelId=${resolved.modelId} lang=${resolved.lang}`,
+    );
+    return this.rime.synthesizePreview({
+      rimeVoiceId: resolved.rimeVoiceId,
+      name: resolved.rimeVoiceId,
+      language: resolved.lang,
+      lang: resolved.lang,
+      modelId: resolved.modelId,
+    });
+  }
+
+  /**
+   * Resolve a stored AgentVersion.voiceId (rime id or legacy DB id) to the exact
+   * Rime speaker + model + lang tuple used by preview and the Python worker.
+   */
+  async resolveForTts(storedVoiceId: string): Promise<ResolvedRimeVoice> {
+    const trimmed = storedVoiceId.trim();
+    if (!trimmed) {
       throw new NotFoundException('Voice not found');
     }
 
-    const resolved = await this.resolveRimeVoice({
-      rimeVoiceId: voice.rimeVoiceId,
-      name: voice.name,
-      description: voice.description ?? undefined,
-      language: voice.language,
-      lang: voice.lang ?? undefined,
-      modelId: voice.modelId ?? undefined,
-      gender: voice.gender ?? undefined,
-    });
+    const voiceRow =
+      (await this.prisma.voice.findUnique({
+        where: { rimeVoiceId: trimmed },
+      })) ??
+      (await this.prisma.voice.findUnique({
+        where: { id: trimmed },
+      }));
+
+    const rimeVoice: RimeVoice = voiceRow
+      ? {
+          rimeVoiceId: voiceRow.rimeVoiceId,
+          name: voiceRow.name,
+          description: voiceRow.description ?? undefined,
+          language: voiceRow.language,
+          lang: voiceRow.lang ?? undefined,
+          modelId: voiceRow.modelId ?? undefined,
+          gender: voiceRow.gender ?? undefined,
+        }
+      : {
+          rimeVoiceId: trimmed,
+          name: trimmed,
+          language: 'en',
+        };
+
+    const resolved = await this.resolveRimeVoice(rimeVoice);
     if (!resolved.lang || !resolved.modelId) {
       throw new ServiceUnavailableException(
-        'Rime voice metadata is missing; run voice sync before previewing this voice',
+        'Rime voice metadata is missing; run voice sync before using this voice',
       );
     }
 
-    return this.rime.synthesizePreview(resolved);
+    const result: ResolvedRimeVoice = {
+      rimeVoiceId: resolved.rimeVoiceId,
+      modelId: resolved.modelId,
+      lang: resolved.lang,
+    };
+    this.logger.log(
+      `Resolved voice for TTS stored=${trimmed} rimeVoiceId=${result.rimeVoiceId} modelId=${result.modelId} lang=${result.lang}`,
+    );
+    return result;
   }
 
   async sync() {

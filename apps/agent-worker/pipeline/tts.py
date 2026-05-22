@@ -317,6 +317,13 @@ class RimeStream(tts.ChunkedStream):
         bytes_received = 0
 
         try:
+            logger.info(
+                "rime_http_request speaker=%s modelId=%s lang=%s chars=%s",
+                self._voice_id,
+                self._model_id,
+                self._language,
+                len(self._text),
+            )
             async with self._client.stream(
                 "POST",
                 self._base_url,
