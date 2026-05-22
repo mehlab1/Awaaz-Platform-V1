@@ -1,8 +1,12 @@
 import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from livekit.agents import WorkerOptions, WorkerType, cli
 
 from agent import AwaazAgent
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 _opts = dict(
     entrypoint_fnc=AwaazAgent.entrypoint,
