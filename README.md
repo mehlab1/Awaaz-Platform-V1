@@ -81,6 +81,14 @@ pnpm dev:api
 pnpm dev:web
 ```
 
+If you only need the API to boot and do not want local dev to touch Upstash/Redis:
+
+```powershell
+pnpm dev:api:no-redis
+```
+
+That disables Redis-backed queues and analytics cache for the local process. Queue-backed transcript assembly is skipped in that mode.
+
 Useful checks:
 
 ```powershell

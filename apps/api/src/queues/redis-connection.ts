@@ -1,5 +1,15 @@
 import type { RedisOptions } from 'ioredis';
 
+export function isRedisDisabled(value: string | undefined | null): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return (
+    normalized === '1' ||
+    normalized === 'true' ||
+    normalized === 'yes' ||
+    normalized === 'on'
+  );
+}
+
 export function createRedisConnection(url: string): RedisOptions {
   const parsed = new URL(url);
   const isTls = parsed.protocol === 'rediss:';

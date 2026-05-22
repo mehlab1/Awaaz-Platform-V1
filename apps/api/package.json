@@ -9,6 +9,7 @@
     "build": "nest build",
     "start": "dotenv -e ../../.env -- nest start",
     "start:dev": "dotenv -e ../../.env -- nest start --watch",
+    "start:dev:no-redis": "dotenv -e ../../.env -v DISABLE_REDIS=true -- nest start --watch",
     "start:prod": "node dist/main",
     "prisma:validate": "dotenv -e ../../.env -- prisma validate",
     "prisma:generate": "prisma generate",

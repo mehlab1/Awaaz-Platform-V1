@@ -64,6 +64,24 @@ Resolution:
 - Re-run a browser test call.
 - If the missing transcript depends on Twilio recording ingestion, defer to Phase 9.
 
+## Upstash Max Requests Exceeded Locally
+
+Symptoms:
+
+- Local API logs show `ERR max requests limit exceeded`.
+- Errors mention BullMQ commands such as `auth`, `eval`, or `evalsha`.
+
+Cause:
+
+- The local API is using an Upstash `REDIS_URL` from `.env`, and that database has hit its request quota.
+
+Resolution:
+
+- Stop the local API to avoid repeated Redis retries.
+- For a local boot without Redis, run `pnpm dev:api:no-redis`.
+- For queue-backed local testing, point `REDIS_URL` at a local Redis instance instead of Upstash.
+- Rotate the Redis credential if the password/token was pasted into logs or chat.
+
 ## Analytics Empty
 
 Symptoms:

@@ -9,7 +9,10 @@ import Redis from 'ioredis';
 import type { RedisOptions } from 'ioredis';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { createRedisConnection } from '../queues/redis-connection';
+import {
+  createRedisConnection,
+  isRedisDisabled,
+} from '../queues/redis-connection';
 
 const ANALYTICS_CACHE_VERSION = 'v2';
 const OVERVIEW_TTL_SECONDS = 60;
@@ -89,7 +92,9 @@ export class AnalyticsService implements OnModuleDestroy {
     private readonly prisma: PrismaService,
     config: ConfigService,
   ) {
-    const redisUrl = config.get<string>('REDIS_URL');
+    const redisUrl = isRedisDisabled(config.get<string>('DISABLE_REDIS'))
+      ? undefined
+      : config.get<string>('REDIS_URL');
     this.redis = redisUrl ? new Redis(createCacheConnection(redisUrl)) : null;
     if (this.redis) {
       this.redis.on('error', (error) => {
