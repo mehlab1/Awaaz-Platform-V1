@@ -10,7 +10,10 @@ export function isRedisDisabled(value: string | undefined | null): boolean {
   );
 }
 
-export function createRedisConnection(url: string): RedisOptions {
+export function createRedisConnection(
+  url: string,
+  overrides: RedisOptions = {},
+): RedisOptions {
   const parsed = new URL(url);
   const isTls = parsed.protocol === 'rediss:';
   return {
@@ -21,5 +24,10 @@ export function createRedisConnection(url: string): RedisOptions {
     ...(isTls ? { tls: {} } : {}),
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
+    enableOfflineQueue: false,
+    connectTimeout: 1_000,
+    retryStrategy: () => null,
+    reconnectOnError: () => false,
+    ...overrides,
   };
 }

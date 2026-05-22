@@ -13,7 +13,10 @@ import { WebhookReceiver, type WebhookEvent } from 'livekit-server-sdk';
 
 import { LiveKitEgressService } from '../livekit/livekit-egress.service';
 import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
-import type { TranscriptJobData } from '../queues/transcript-assembly.service';
+import {
+  TranscriptAssemblyService,
+  type TranscriptJobData,
+} from '../queues/transcript-assembly.service';
 
 export interface LiveKitWebhookResult {
   ok: true;
@@ -29,6 +32,7 @@ export class LiveKitWebhooksService {
   constructor(
     private readonly config: ConfigService,
     private readonly egress: LiveKitEgressService,
+    private readonly transcriptAssembly: TranscriptAssemblyService,
     @InjectQueue(TRANSCRIPT_QUEUE)
     private readonly transcriptQueue: Queue<TranscriptJobData>,
   ) {}
@@ -98,21 +102,52 @@ export class LiveKitWebhooksService {
       return { ok: true, event: event.event, queued: false };
     }
 
-    await this.transcriptQueue.add(
-      'room_finished',
-      {
-        liveKitRoomId,
-        roomName: event.room?.name,
-      },
-      {
+    const data = {
+      liveKitRoomId,
+      roomName: event.room?.name,
+    };
+    try {
+      const job = await this.transcriptQueue.add('room_finished', data, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 1_000 },
         removeOnComplete: true,
         removeOnFail: 50,
-      },
-    );
+      });
+      if (this.isDisabledQueueJob(job)) {
+        throw new Error('Transcript queue is disabled for this process');
+      }
+      return { ok: true, event: event.event, queued: true };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Failed to enqueue transcript job from LiveKit room_finished ${liveKitRoomId}: ${message}`,
+      );
+      await this.assembleTranscriptFallback(data);
+      return { ok: true, event: event.event, queued: false };
+    }
+  }
 
-    return { ok: true, event: event.event, queued: true };
+  private async assembleTranscriptFallback(data: TranscriptJobData): Promise<void> {
+    try {
+      const result = await this.transcriptAssembly.assemble(data);
+      this.logger.warn(
+        `Transcript fallback assembled LiveKit room ${data.liveKitRoomId}: ` +
+          `${result.transcriptEntries} turns, totalCostUsd=${result.totalCostUsd}`,
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Transcript fallback failed for LiveKit room ${data.liveKitRoomId}: ${message}`,
+      );
+    }
+  }
+
+  private isDisabledQueueJob(job: unknown): boolean {
+    return (
+      typeof job === 'object' &&
+      job !== null &&
+      (job as { queueDisabled?: unknown }).queueDisabled === true
+    );
   }
 
   private headerValue(
