@@ -466,18 +466,65 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
-  const selectedVersionIsLive =
-    selectedVersion != null &&
-    agent?.currentVersionId != null &&
-    selectedVersion.id === agent.currentVersionId;
-  const testCallBlockedReason =
-    !agent?.isActive || !agent.currentVersion
-      ? 'Activate the agent and configure a current version first.'
-      : hasUnsavedChanges
-        ? 'Save & publish this version before testing voice changes.'
-        : !selectedVersionIsLive
-          ? 'Publish this version before testing it. Browser preview uses the live version.'
-          : null;
+  const liveVersion = agent?.currentVersion ?? null;
+  const hasUsableLiveConfig =
+    liveVersion != null &&
+    liveVersion.systemPrompt.trim().length > 0 &&
+    liveVersion.voiceId.trim().length > 0;
+
+  const testCallBlockedReason = loading
+    ? 'Agent is still loading.'
+    : !agent
+      ? 'Agent failed to load.'
+      : saveBusy !== null
+        ? 'Wait for save or publish to finish before testing.'
+        : versionPanelBusy
+          ? 'Wait for the version action to finish before testing.'
+          : !promptHydrated
+            ? 'Editor is still loading.'
+            : hasUnsavedChanges
+              ? 'Save or discard unsaved changes before testing.'
+              : !agent.isActive
+                ? 'Activate the agent before testing.'
+                : !liveVersion
+                  ? 'Publish a version before testing.'
+                  : !hasUsableLiveConfig
+                    ? 'Live version is missing a system prompt or voice.'
+                    : null;
+
+  const canTest = testCallBlockedReason === null;
+
+  useEffect(() => {
+    console.debug('[AgentEditor] Test Agent gate', {
+      canTest,
+      testCallBlockedReason,
+      loading,
+      promptHydrated,
+      hasUnsavedChanges,
+      saveBusy,
+      versionPanelBusy,
+      agentActive: agent?.isActive ?? null,
+      liveVersionId: agent?.currentVersionId ?? null,
+      liveVersionNumber: liveVersion?.versionNumber ?? null,
+      selectedVersionId,
+      selectedVersionNumber: selectedVersion?.versionNumber ?? null,
+      hasUsableLiveConfig,
+    });
+  }, [
+    agent?.currentVersionId,
+    agent?.isActive,
+    canTest,
+    hasUnsavedChanges,
+    hasUsableLiveConfig,
+    liveVersion?.versionNumber,
+    loading,
+    promptHydrated,
+    saveBusy,
+    selectedVersion?.versionNumber,
+    selectedVersionId,
+    testCallBlockedReason,
+    versionPanelBusy,
+  ]);
 
   const playVoicePreview = async () => {
     if (!selectedVoice) {
@@ -649,11 +696,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           <Button
             type="button"
             variant="secondary"
-            disabled={
-              testCallBlockedReason !== null ||
-              saveBusy !== null ||
-              versionPanelBusy
-            }
+            disabled={!canTest}
             title={testCallBlockedReason ?? 'Run a browser preview over LiveKit.'}
             onClick={() => setTestCallOpen(true)}
           >
