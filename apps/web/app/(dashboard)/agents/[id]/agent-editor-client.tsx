@@ -25,13 +25,7 @@ import useLocalStorageState from 'use-local-storage-state';
 import { AgentSystemPromptEditor } from '@/components/agent-system-prompt-editor';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+
 import {
   Dialog,
   DialogContent,
@@ -52,7 +46,7 @@ const TestCallModal = dynamic(
   { ssr: false },
 );
 
-const VERSION_HISTORY_PREVIEW_LIMIT = 5;
+const VERSION_HISTORY_PREVIEW_LIMIT = 3;
 
 interface AgentVersion {
   id: string;
@@ -148,6 +142,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     | null
   >(null);
   const [testCallOpen, setTestCallOpen] = useState(false);
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+  const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
+  const [phoneDropdownOpen, setPhoneDropdownOpen] = useState(false);
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
 
   useEffect(() => {
     setPromptHydrated(false);
@@ -195,6 +193,36 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [openVersionMenuId]);
+
+  useEffect(() => {
+    if (!phoneDropdownOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      if (!target.closest('[data-phone-dropdown-root]')) {
+        setPhoneDropdownOpen(false);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPhoneDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [phoneDropdownOpen]);
 
   const liveVersion = agent?.currentVersion ?? null;
   const latestVersion = versions[0] ?? liveVersion;
@@ -256,11 +284,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       : selectedVersion
         ? `Viewing ${selectedVersionLabel}`
         : 'No version selected';
-  const quickStateText = hasUnsavedChanges
-    ? 'Unsaved edits in progress'
-    : isSelectedLive
-      ? 'Live version selected'
-      : 'Previewing a saved version';
+
   const lastUpdatedLabel = selectedVersion
     ? `Updated ${safeRelativeTime(selectedVersion.updatedAt)}`
     : liveVersion
@@ -814,8 +838,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     versionPanelBusy,
   ]);
 
-  const playVoicePreview = async () => {
-    if (!selectedVoice) {
+  const playVoicePreview = async (voiceToPreview?: VoiceDto) => {
+    const targetVoice = voiceToPreview ?? selectedVoice;
+    if (!targetVoice) {
       setToast('Pick a voice to preview.');
       return;
     }
@@ -826,16 +851,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
 
     setPreviewBusy(true);
+    if (voiceToPreview) {
+      setPlayingVoiceId(voiceToPreview.rimeVoiceId);
+    }
     try {
       console.debug('[AgentEditor] Voice preview request', {
-        selectedVoiceId,
-        rimeVoiceId: selectedVoice.rimeVoiceId,
-        voiceName: selectedVoice.name,
+        selectedVoiceId: targetVoice.rimeVoiceId,
+        rimeVoiceId: targetVoice.rimeVoiceId,
+        voiceName: targetVoice.name,
       });
       const res = await apiCall('/api/v1/voices/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voiceId: selectedVoice.rimeVoiceId }),
+        body: JSON.stringify({ voiceId: targetVoice.rimeVoiceId }),
       });
       if (!res.ok) {
         throw new Error(await readApiError(res));
@@ -854,6 +882,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setToast(message || 'Could not play preview.');
     } finally {
       setPreviewBusy(false);
+      setPlayingVoiceId(null);
     }
   };
 
@@ -963,7 +992,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     options: { pinnedLive?: boolean } = {},
   ) => {
     const isSelected = selectedVersion?.id === v.id;
-    const snippet = compactPromptSnippet(v.systemPrompt);
     const status = versionStatus(v, liveVersion, latestVersion);
     const timestamp = v.publishedAt ?? v.updatedAt ?? v.createdAt;
     const isOlderHistory = showAllVersions && v.versionNumber < VERSION_HISTORY_PREVIEW_LIMIT;
@@ -972,45 +1000,53 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       <li
         key={options.pinnedLive ? `${v.id}-pinned` : v.id}
         className={cn(
-          'group/version relative rounded-lg px-2.5 py-2 text-xs transition-colors',
+          'group/version relative rounded-lg px-2.5 py-1.5 text-xs transition-colors',
           v.isLive ? 'bg-primary/5' : 'hover:bg-muted/50',
           isSelected && 'bg-muted/75 ring-1 ring-border/70',
           isOlderHistory && 'opacity-75',
         )}
       >
-        <div className="flex items-start gap-2">
+        <div className="flex items-center justify-between gap-2">
           <button
             type="button"
             className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             disabled={versionPanelBusy}
             onClick={() => loadVersionIntoEditor(v)}
           >
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <span className="font-semibold text-sm leading-none">
-                V{v.versionNumber}
-              </span>
-              <Badge variant={v.isLive ? 'default' : 'secondary'}>{status}</Badge>
-              {isSelected ? <Badge variant="outline">Open</Badge> : null}
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="font-semibold text-xs leading-none">
+                  V{v.versionNumber}
+                </span>
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {safeRelativeTime(timestamp)}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <Badge variant={v.isLive ? 'default' : 'secondary'} className="text-[9px] px-1 py-0 h-4">
+                  {status}
+                </Badge>
+                {isSelected ? (
+                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                    Open
+                  </Badge>
+                ) : null}
+              </div>
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              {safeRelativeTime(timestamp)}
-            </p>
-            <p className="mt-1 line-clamp-1 text-[11px] leading-snug text-muted-foreground">
-              {snippet}
-            </p>
           </button>
           <div className="relative shrink-0" data-version-menu-root={v.id}>
             <Button
               type="button"
               variant="ghost"
               size="icon-xs"
+              className="h-6 w-6"
               aria-label={`Actions for version ${v.versionNumber}`}
               aria-expanded={openVersionMenuId === v.id}
               onClick={() =>
                 setOpenVersionMenuId((current) => (current === v.id ? null : v.id))
               }
             >
-              <MoreVertical className="size-3.5" aria-hidden />
+              <MoreVertical className="size-3" aria-hidden />
             </Button>
             {openVersionMenuId === v.id ? (
               <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-border/70 bg-popover p-1.5 text-popover-foreground shadow-lg">
@@ -1067,48 +1103,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     );
   };
 
-  const renderLiveSummary = () => {
-    if (!liveVersion) {
-      return (
-        <div className="rounded-md border border-dashed border-border bg-muted/30 p-3 text-sm">
-          <p className="font-medium">No live version</p>
-          <p className="mt-1 text-muted-foreground text-xs">
-            Create a version, then publish it before testing or receiving calls.
-          </p>
-        </div>
-      );
-    }
 
-    return (
-      <button
-        type="button"
-        className={cn(
-          'w-full rounded-md border border-primary/25 bg-primary/5 p-3 text-left transition hover:bg-primary/10',
-          selectedVersion?.id === liveVersion.id && 'ring-2 ring-primary/15',
-        )}
-        onClick={() => loadVersionIntoEditor(liveVersion)}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-              Live version
-            </p>
-            <p className="mt-1 font-semibold">
-              V{liveVersion.versionNumber} - Published -{' '}
-              {safeRelativeTime(liveVersion.publishedAt ?? liveVersion.updatedAt)}
-            </p>
-          </div>
-          <Badge>Live</Badge>
-        </div>
-        <p className="mt-2 text-muted-foreground text-xs">
-          Currently serving preview and production calls.
-        </p>
-      </button>
-    );
-  };
-
-  const fieldClass =
-    'mt-1 w-full max-w-md rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring';
 
   if (!activeOrgId && !loading) {
     return (
@@ -1151,60 +1146,99 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         </div>
       ) : null}
 
-      <div className="border-b border-border/60 bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
-        <div className="mx-auto flex max-w-[1500px] flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                href="/agents"
-                onClick={(event) => {
-                  if (
-                    hasUnsavedChanges &&
-                    !window.confirm('Leave this editor and discard unsaved prompt changes?')
-                  ) {
-                    event.preventDefault();
-                  }
-                }}
-                className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }))}
-                aria-label="Back to agents"
-              >
-                <ArrowLeft className="size-4" aria-hidden />
-              </Link>
-              <h1 className="truncate font-semibold text-xl tracking-tight">
-                {agent.name}
-              </h1>
-              <Badge variant={agent.isActive ? 'default' : 'secondary'}>
-                {agent.isActive ? 'Active' : 'Inactive'}
-              </Badge>
-              <Badge variant={liveVersion ? 'outline' : 'secondary'}>
-                Live {liveVersionLabel}
-              </Badge>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-foreground">
-                {editorStatusText}
-              </span>
-              <span>{quickStateText}</span>
-              <span>•</span>
-              <span>{lastUpdatedLabel}</span>
-              <span>•</span>
-              <span>Preview uses the published live version</span>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2 xl:justify-end">
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={!canTest}
-              title={testCallBlockedReason ?? 'Run a browser preview.'}
-              onClick={() => setTestCallOpen(true)}
+      <div className="border-b border-border/60 bg-background/95 px-4 py-2.5 backdrop-blur sm:px-6">
+        <div className="mx-auto flex max-w-[1500px] flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0 flex items-center flex-wrap gap-3">
+            <Link
+              href="/agents"
+              onClick={(event) => {
+                if (
+                  hasUnsavedChanges &&
+                  !window.confirm('Leave this editor and discard unsaved prompt changes?')
+                ) {
+                  event.preventDefault();
+                }
+              }}
+              className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'h-8 w-8')}
+              aria-label="Back to agents"
             >
-              <Play className="size-4" aria-hidden />
-              Preview Call
-            </Button>
+              <ArrowLeft className="size-4" aria-hidden />
+            </Link>
+            <h1 className="truncate font-semibold text-lg tracking-tight">
+              {agent.name}
+            </h1>
+            <Badge variant={agent.isActive ? 'default' : 'secondary'} className="h-5 text-[10px] px-2">
+              {agent.isActive ? 'Active' : 'Inactive'}
+            </Badge>
+
+            {/* Voice Pill Trigger */}
+            <button
+              type="button"
+              onClick={() => setVoiceModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 hover:bg-muted/40 px-2.5 py-0.5 text-xs font-semibold text-foreground transition-colors shadow-sm h-6"
+            >
+              <Volume2 className="size-3 text-muted-foreground" />
+              <span>{selectedVoice?.name ?? 'Select Voice'}</span>
+            </button>
+
+            {/* Phone Pill Trigger with Dropdown */}
+            <div className="relative inline-block" data-phone-dropdown-root>
+              <button
+                type="button"
+                onClick={() => setPhoneDropdownOpen((prev) => !prev)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 hover:bg-muted/40 px-2.5 py-0.5 text-xs font-semibold text-foreground transition-colors shadow-sm h-6"
+              >
+                <span>📞</span>
+                <span>
+                  {attachedPhones.length > 0 ? attachedPhones[0].number : 'No Phone'}
+                </span>
+              </button>
+              {phoneDropdownOpen && (
+                <div 
+                  className="absolute left-0 mt-1.5 z-50 w-64 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg focus-visible:outline-none" 
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-1">
+                    Assign Phone Number
+                  </p>
+                  <select
+                    className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={primaryAttachedId}
+                    disabled={saveBusy === 'phone'}
+                    onChange={(e) => {
+                      void onPhoneRoutingChange(e.target.value);
+                      setPhoneDropdownOpen(false);
+                    }}
+                  >
+                    <option value="">None (unassigned)</option>
+                    {phones.map((p) => {
+                      const assignment =
+                        p.agent && !p.agent.deletedAt
+                          ? ` (-> ${p.agent.name})`
+                          : '';
+                      return (
+                        <option key={p.id} value={p.id}>
+                          {p.number}{assignment}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <span className="text-[11px] text-muted-foreground hidden lg:inline-block">•</span>
+            <span className="text-[11px] text-muted-foreground font-medium hidden lg:inline-block">
+              {editorStatusText}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
             <Button
               type="button"
               variant="ghost"
+              size="sm"
+              className="h-8 text-xs px-3"
               disabled={!canUpdateCurrentVersion}
               title={
                 selectedVersion
@@ -1214,29 +1248,33 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               onClick={() => void updateCurrentVersionFlow()}
             >
               {saveBusy === 'update' ? (
-                <Loader2 className="animate-spin" />
+                <Loader2 className="size-3.5 animate-spin mr-1.5" />
               ) : (
-                <Save className="size-4" aria-hidden />
+                <Save className="size-3.5 mr-1.5" aria-hidden />
               )}
               Update Version
             </Button>
             <Button
               type="button"
-              variant="default"
+              variant="secondary"
+              size="sm"
+              className="h-8 text-xs px-3"
               disabled={!canCreateNewVersion}
               title="Save a new version from your current edits."
               onClick={() => void createVersionFlow()}
             >
               {saveBusy === 'create' ? (
-                <Loader2 className="animate-spin" />
+                <Loader2 className="size-3.5 animate-spin mr-1.5" />
               ) : (
-                <Plus className="size-4" aria-hidden />
+                <Plus className="size-3.5 mr-1.5" aria-hidden />
               )}
-              Save as New Version
+              Save Draft
             </Button>
             <Button
               type="button"
-              variant="outline"
+              variant="default"
+              size="sm"
+              className="h-8 text-xs px-3"
               disabled={!canPublishLive}
               title={
                 hasUnsavedChanges
@@ -1247,7 +1285,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               }
               onClick={() => selectedVersion && setPublishTarget(selectedVersion)}
             >
-              <Rocket className="size-4" aria-hidden />
+              <Rocket className="size-3.5 mr-1.5" aria-hidden />
               Publish Live
             </Button>
           </div>
@@ -1269,298 +1307,295 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         agentName={agent.name}
         apiCall={apiCall}
       />
-
-      <div className="mx-auto grid max-w-[1500px] gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(17.5rem,21rem)]">
-        <Card className="overflow-hidden bg-background shadow-sm ring-1 ring-border/50">
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <CardTitle>System prompt</CardTitle>
-              {selectedVersion ? (
-                <Badge variant={hasUnsavedChanges ? 'outline' : 'secondary'}>
-                  {hasUnsavedChanges
-                    ? `Draft from V${selectedVersion.versionNumber}`
-                    : isSelectedLive
-                      ? `Viewing Live V${selectedVersion.versionNumber}`
-                      : `Viewing V${selectedVersion.versionNumber}`}
-                </Badge>
-              ) : null}
+      <div className="mx-auto grid max-w-[1500px] gap-8 px-4 py-6 sm:px-6 lg:grid-cols-[1fr_320px] items-stretch">
+        {/* Left Column: Prompt Editor Workspace */}
+        <div className="flex flex-col min-w-0 space-y-4">
+          <div className="flex items-center justify-between gap-2 pb-1 border-b border-border/30">
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">System Instructions</h2>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Define the assistant&apos;s role, tone, boundaries, and conversation goals.
+              </p>
             </div>
-            <CardDescription>
-              Write the assistant&apos;s tone, guardrails, call goals, and handoff rules.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+            {selectedVersion ? (
+              <Badge variant={hasUnsavedChanges ? 'outline' : 'secondary'} className="h-6 text-[10px]">
+                {hasUnsavedChanges
+                  ? `Draft from V${selectedVersion.versionNumber}`
+                  : isSelectedLive
+                    ? `Viewing Live V${selectedVersion.versionNumber}`
+                    : `Viewing V${selectedVersion.versionNumber}`}
+              </Badge>
+            ) : null}
+          </div>
+
+          <div className="space-y-2">
             {isSelectedLive && hasUnsavedChanges ? (
-              <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-800 text-sm dark:text-amber-300">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-                <p>
-                  You are editing the live version currently used for calls. Saving
-                  here changes what the agent says next.
+              <div className="flex items-center gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-amber-800 text-xs dark:text-amber-300">
+                <AlertTriangle className="size-4 text-amber-500 shrink-0" aria-hidden />
+                <p className="font-medium">
+                  Editing Live Version: Saving will immediately affect active calls.
                 </p>
               </div>
             ) : null}
             {isViewingHistoricalVersion ? (
-              <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm">
-                <p className="font-medium text-foreground">
-                  Viewing V{selectedVersion?.versionNumber}
+              <div className="flex flex-col gap-1 rounded-lg border border-border bg-muted/20 px-3.5 py-2.5 text-xs">
+                <p className="font-semibold text-foreground">
+                  Viewing Historical V{selectedVersion?.versionNumber}
                 </p>
-                <p className="mt-1 text-muted-foreground">
-                  This is a historical snapshot, not the live version. Restore it
-                  to start a new draft from here, or create a new version to keep
-                  editing safely.
+                <p className="text-muted-foreground leading-normal">
+                  This is a read-only snapshot. Click <strong>Restore</strong> to start editing a new draft based on this version.
                 </p>
               </div>
             ) : null}
             {hasUnsavedChanges ? (
-              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-800 text-sm dark:text-amber-300">
-                Draft changes are saved only in this editor until you update the
-                current version or save a new one.
+              <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-amber-800 text-xs dark:text-amber-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                <p className="font-medium">
+                  Unsaved draft: changes are currently stored locally.
+                </p>
               </div>
             ) : null}
-            {promptHydrated ? (
-              <AgentSystemPromptEditor
-                value={prompt}
-                onChange={setPrompt}
-                disabled={saveBusy !== null}
-                statusLabel={hasUnsavedChanges ? 'Draft editing' : 'Ready'}
-                updatedLabel={lastUpdatedLabel}
-                helperLabel={editorMetaLabel}
-              />
+          </div>
+
+          {promptHydrated ? (
+            <AgentSystemPromptEditor
+              value={prompt}
+              onChange={setPrompt}
+              disabled={saveBusy !== null}
+              statusLabel={hasUnsavedChanges ? 'Draft editing' : 'Ready'}
+              updatedLabel={lastUpdatedLabel}
+              helperLabel={editorMetaLabel}
+            />
+          ) : (
+            <div className="min-h-[520px] rounded-2xl border border-dashed border-border bg-muted/30 flex-1" />
+          )}
+        </div>
+
+        {/* Right Column: Sticky Sidebar Tools */}
+        <div className="space-y-6 lg:self-start lg:sticky lg:top-[74px]">
+          {/* Test Agent CTA */}
+          <div className="space-y-2">
+            <Button
+              type="button"
+              variant="default"
+              size="lg"
+              className="w-full h-11 text-sm font-semibold shadow-md bg-primary hover:bg-primary/90 hover:shadow-lg transition-all rounded-xl"
+              disabled={!canTest}
+              title={testCallBlockedReason ?? 'Run a browser preview.'}
+              onClick={() => setTestCallOpen(true)}
+            >
+              <Play className="size-4 mr-2 text-primary-foreground fill-primary-foreground" aria-hidden />
+              Test Agent
+            </Button>
+            {testCallBlockedReason ? (
+              <p className="text-[10px] text-muted-foreground text-center leading-normal px-2">
+                ⚠️ {testCallBlockedReason}
+              </p>
             ) : (
-              <div className="min-h-[520px] rounded-2xl border border-dashed border-border bg-muted/30" />
+              <p className="text-[10px] text-muted-foreground text-center leading-normal">
+                Start a live audio preview test call with this agent.
+              </p>
             )}
-          </CardContent>
-        </Card>
+          </div>
 
-        <div className="space-y-4 lg:self-start">
-          <Card size="sm" className="bg-background shadow-sm ring-1 ring-border/50">
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between gap-2">
-                <CardTitle>Voice</CardTitle>
-                {isSelectedLive ? <Badge variant="outline">Live voice</Badge> : null}
+          {/* Voice Section */}
+          <div className="pt-4 border-t border-border/40 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Voice</h3>
+              {isSelectedLive ? <Badge variant="outline" className="text-[9px] px-1.5 py-0">Live Voice</Badge> : null}
+            </div>
+            <div 
+              onClick={() => setVoiceModalOpen(true)}
+              className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/15 px-3 py-2 hover:bg-muted/40 cursor-pointer transition-colors"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold text-xs text-foreground">
+                  {selectedVoice?.name ?? 'Select Voice'}
+                </p>
+                <p className="truncate text-muted-foreground text-[10px] mt-0.5">
+                  {selectedVoice?.rimeVoiceId ?? 'No voice selected'}
+                </p>
               </div>
-              <CardDescription>
-                Choose how the assistant sounds when it speaks.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
-                <div className="grid size-9 shrink-0 place-items-center rounded-full bg-background text-primary ring-1 ring-border/60">
-                  <Volume2 className="size-4.5" aria-hidden />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-sm">
-                    {selectedVoice?.name ?? 'Select a voice'}
-                  </p>
-                  <p className="truncate text-muted-foreground text-xs">
-                    {selectedVoice?.rimeVoiceId ?? 'No voice selected'}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  size="icon-sm"
-                  variant="outline"
-                  onClick={() => void playVoicePreview()}
-                  disabled={!selectedVoiceId || previewBusy}
-                  title={
-                    selectedVoiceId
-                      ? 'Play this voice preview.'
-                      : 'Select a voice first.'
-                  }
-                >
-                  {previewBusy ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <Play className="size-4" aria-hidden />
-                  )}
-                </Button>
-              </div>
-              <label className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Voice
-              </label>
-              <select
-                className={cn(fieldClass, 'max-w-none')}
-                value={selectedVoiceId}
-                onChange={(e) => setSelectedVoiceId(e.target.value)}
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                className="shrink-0 hover:bg-background/80 h-7 w-7"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void playVoicePreview();
+                }}
+                disabled={!selectedVoiceId || previewBusy}
+                title={selectedVoiceId ? 'Play preview' : 'Select voice first'}
               >
-                <option value="">Select voice...</option>
-                {voices.map((v) => (
-                  <option key={v.id} value={v.rimeVoiceId}>
-                    {v.name} ({v.rimeVoiceId})
-                  </option>
-                ))}
-              </select>
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-foreground">
-                  <Volume2 className="size-3.5" aria-hidden />
-                  Preview before publishing
-                </span>
-                {voices.length === 0 ? <span>No voices are available yet.</span> : null}
-              </div>
-              <audio ref={previewAudioRef} className="hidden" preload="none" />
-            </CardContent>
-          </Card>
+                {previewBusy ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Play className="size-3 text-muted-foreground hover:text-foreground" aria-hidden />
+                )}
+              </Button>
+            </div>
+            <audio ref={previewAudioRef} className="hidden" preload="none" />
+          </div>
 
-          <Card size="sm" className="bg-background shadow-sm ring-1 ring-border/50">
-            <CardHeader className="pb-2">
-              <CardTitle>Phone number</CardTitle>
-              <CardDescription>Choose which number should route to this agent.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+          {/* Phone Number Section */}
+          <div className="pt-4 border-t border-border/40 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Phone Number</h3>
+            </div>
+            <div className="rounded-lg border border-border/60 bg-muted/15 px-3 py-2.5 space-y-2">
+              <div className="min-w-0">
                 {attachedPhones.length > 0 ? (
-                  <div className="space-y-1">
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Assigned number
-                    </p>
-                    <p className="font-medium text-sm">
+                  <div>
+                    <p className="font-semibold text-xs text-foreground">
                       {attachedPhones[0].number}
-                      {attachedPhones[0].friendlyName ? ` → ${attachedPhones[0].friendlyName}` : ''}
                     </p>
-                    <p className="text-muted-foreground text-xs">
-                      This number will ring this agent.
-                    </p>
+                    {attachedPhones[0].friendlyName ? (
+                      <p className="text-[10px] text-muted-foreground truncate mt-0.5">
+                        {attachedPhones[0].friendlyName}
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">Assigned to this agent</p>
+                    )}
                   </div>
                 ) : (
-                  <div className="space-y-1">
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      Assigned number
+                  <div>
+                    <p className="font-semibold text-xs text-muted-foreground">
+                      No Phone Assigned
                     </p>
-                    <p className="font-medium text-sm">No phone number assigned</p>
-                    <p className="text-muted-foreground text-xs">
-                      Add one when you want callers to reach this agent.
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      Assign a number to receive inbound calls.
                     </p>
                   </div>
                 )}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    onClick={() => setPhoneEditOpen((current) => !current)}
-                  >
-                    {phoneEditOpen ? 'Close' : 'Change'}
-                  </Button>
-                  {saveBusy === 'phone' ? (
-                    <span className="text-xs text-muted-foreground">Saving…</span>
-                  ) : null}
-                </div>
               </div>
-              {phoneEditOpen ? (
-                <div className="space-y-2 rounded-lg border border-border/60 p-3">
-                  <label className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Change assignment
-                  </label>
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  className="h-7 text-[10px] px-2.5"
+                  onClick={() => setPhoneEditOpen((current) => !current)}
+                >
+                  {phoneEditOpen ? 'Cancel' : 'Assign Number'}
+                </Button>
+                {saveBusy === 'phone' ? (
+                  <span className="text-[10px] text-muted-foreground animate-pulse">Saving…</span>
+                ) : null}
+              </div>
+              {phoneEditOpen && (
+                <div className="pt-2 border-t border-border/30">
                   <select
-                    className={cn(fieldClass, 'max-w-none')}
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     value={primaryAttachedId}
                     disabled={saveBusy === 'phone'}
-                    onChange={(e) => void onPhoneRoutingChange(e.target.value)}
+                    onChange={(e) => {
+                      void onPhoneRoutingChange(e.target.value);
+                      setPhoneEditOpen(false);
+                    }}
                   >
-                    <option value="">None attached</option>
+                    <option value="">None (unassigned)</option>
                     {phones.map((p) => {
                       const assignment =
                         p.agent && !p.agent.deletedAt
-                          ? ` -> ${p.agent.name}`
+                          ? ` (-> ${p.agent.name})`
                           : ' (unassigned)';
                       return (
                         <option key={p.id} value={p.id}>
-                          {p.number}
-                          {p.friendlyName ? ` (${p.friendlyName})` : ''}
-                          {assignment}
+                          {p.number}{assignment}
                         </option>
                       );
                     })}
                   </select>
                 </div>
-              ) : null}
-            </CardContent>
-          </Card>
+              )}
+            </div>
+          </div>
 
-          <Card size="sm" className="bg-background shadow-sm ring-1 ring-border/50">
-            <CardHeader className="pb-2">
-              <CardTitle>Version history</CardTitle>
-              <CardDescription>
-                Recent versions are highlighted. Older snapshots are kept lighter.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {renderLiveSummary()}
-              {versions.length > 0 ? (
-                <>
-                  <div className="pt-1">
-                    <p className="mb-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                      Recent versions
+          {/* Version History Section */}
+          <div className="pt-4 border-t border-border/40 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Version History</h3>
+              {liveVersion && (
+                <span className="text-[10px] text-muted-foreground font-semibold">
+                  Live: V{liveVersion.versionNumber}
+                </span>
+              )}
+            </div>
+            {versions.length > 0 ? (
+              <div className="space-y-3">
+                <ul className="space-y-1">
+                  {(showAllVersions
+                    ? displayedVersions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT)
+                    : displayedVersions
+                  ).map((v) => renderVersionRow(v))}
+                </ul>
+
+                {showAllVersions && displayedVersions.length > VERSION_HISTORY_PREVIEW_LIMIT ? (
+                  <div className="space-y-1 pt-1 border-t border-border/20">
+                    <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider px-1 py-0.5">
+                      Older History
                     </p>
-                    <ul className="max-h-[28rem] space-y-1 overflow-auto pr-1">
-                      {(showAllVersions
-                        ? displayedVersions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT)
-                        : displayedVersions
-                      ).map((v) => renderVersionRow(v))}
+                    <ul className="space-y-1 border-l border-dashed border-border/60 pl-2">
+                      {displayedVersions
+                        .slice(VERSION_HISTORY_PREVIEW_LIMIT)
+                        .map((v) => renderVersionRow(v))}
                     </ul>
                   </div>
-                  {showAllVersions && displayedVersions.length > VERSION_HISTORY_PREVIEW_LIMIT ? (
-                    <div className="space-y-2 pt-1">
-                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                        Older history
-                      </p>
-                      <ul className="space-y-1 border-l border-dashed border-border/60 pl-2">
-                        {displayedVersions
-                          .slice(VERSION_HISTORY_PREVIEW_LIMIT)
-                          .map((v) => renderVersionRow(v))}
-                      </ul>
-                    </div>
-                  ) : null}
-                  {shouldRenderPinnedLive && pinnedLiveVersion ? (
-                    <div className="space-y-2 pt-1">
-                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                        Also live
-                      </p>
-                      <ul className="space-y-1">
-                        {renderVersionRow(pinnedLiveVersion, {
-                          pinnedLive: true,
-                        })}
-                      </ul>
-                    </div>
-                  ) : null}
-                  <div className="flex items-center justify-between gap-2 pt-2">
-                    <p className="text-muted-foreground text-xs">
-                      {showAllVersions
-                        ? `Showing all ${versions.length} versions.`
-                        : `Showing latest ${Math.min(
-                            VERSION_HISTORY_PREVIEW_LIMIT,
-                            previewVersions.length,
-                          )}.`}
+                ) : null}
+
+                {shouldRenderPinnedLive && pinnedLiveVersion ? (
+                  <div className="space-y-1 pt-1 border-t border-border/20">
+                    <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider px-1 py-0.5">
+                      Active Live Version
                     </p>
-                    {showAllVersions ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => setShowAllVersions(false)}
-                      >
-                        Show recent only
-                      </Button>
-                    ) : canRevealAllVersions ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="xs"
-                        disabled={versionHistoryBusy}
-                        onClick={() => void loadFullVersionHistory()}
-                      >
-                        {versionHistoryBusy ? 'Loading...' : 'View full history'}
-                      </Button>
-                    ) : null}
+                    <ul className="space-y-1">
+                      {renderVersionRow(pinnedLiveVersion, {
+                        pinnedLive: true,
+                      })}
+                    </ul>
                   </div>
-                </>
-              ) : (
-                <p className="rounded-lg border border-dashed border-border p-4 text-muted-foreground text-sm">
-                  No versions yet. Write the first prompt and create V1.
-                </p>
-              )}
-            </CardContent>
-          </Card>
+                ) : null}
+
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/20">
+                  <p className="text-muted-foreground text-[10px]">
+                    {showAllVersions
+                      ? `All ${versions.length} versions.`
+                      : `Latest ${Math.min(
+                          VERSION_HISTORY_PREVIEW_LIMIT,
+                          previewVersions.length,
+                        )}.`}
+                  </p>
+                  {showAllVersions ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="h-6 text-[10px]"
+                      onClick={() => setShowAllVersions(false)}
+                    >
+                      Show recent only
+                    </Button>
+                  ) : canRevealAllVersions ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      className="h-6 text-[10px]"
+                      disabled={versionHistoryBusy}
+                      onClick={() => void loadFullVersionHistory()}
+                    >
+                      {versionHistoryBusy ? 'Loading...' : 'View full history'}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <p className="rounded-lg border border-dashed border-border p-4 text-center text-muted-foreground text-xs">
+                No versions yet. Save V1 to start.
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1725,6 +1760,116 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           </DialogContent>
         ) : null}
       </Dialog>
+
+      <Dialog
+        open={voiceModalOpen}
+        onOpenChange={(next) => {
+          if (!next) {
+            setVoiceModalOpen(false);
+            setVoiceSearchQuery('');
+          }
+        }}
+      >
+        <DialogContent className="max-h-[80vh] w-[min(480px,calc(100vw-2rem))] max-w-none gap-4 overflow-hidden sm:max-w-none flex flex-col p-6 rounded-2xl border border-border/80 shadow-2xl">
+          <DialogHeader className="pb-2 border-b border-border/40">
+            <DialogTitle className="text-lg font-semibold tracking-tight">Select Agent Voice</DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              Choose the voice your assistant will use. Search from our list of available voices.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Search box */}
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="Search voices by name or ID..."
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={voiceSearchQuery}
+              onChange={(e) => setVoiceSearchQuery(e.target.value)}
+            />
+          </div>
+
+          {/* Scrollable voice list */}
+          <div className="flex-1 overflow-y-auto min-h-0 pr-1 py-1 space-y-1">
+            {voices
+              .filter((v) => {
+                const q = voiceSearchQuery.toLowerCase();
+                return v.name.toLowerCase().includes(q) || v.rimeVoiceId.toLowerCase().includes(q);
+              })
+              .map((v) => {
+                const isSelected = selectedVoiceId === v.rimeVoiceId;
+                const isPlaying = playingVoiceId === v.rimeVoiceId;
+                return (
+                  <div
+                    key={v.id}
+                    onClick={() => {
+                      setSelectedVoiceId(v.rimeVoiceId);
+                      setVoiceModalOpen(false);
+                      setVoiceSearchQuery('');
+                    }}
+                    className={cn(
+                      "flex items-center justify-between gap-3 p-2 rounded-lg border border-transparent hover:bg-muted/75 cursor-pointer transition-all",
+                      isSelected && "bg-primary/5 border-primary/20"
+                    )}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant={isPlaying ? "default" : "outline"}
+                        className="rounded-full shrink-0 h-6 w-6"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void playVoicePreview(v);
+                        }}
+                        disabled={previewBusy && !isPlaying}
+                      >
+                        {isPlaying ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Play className="size-3 text-muted-foreground fill-muted-foreground" />
+                        )}
+                      </Button>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-xs truncate">{v.name}</p>
+                        <p className="text-[9px] text-muted-foreground truncate">{v.rimeVoiceId}</p>
+                      </div>
+                    </div>
+                    {isSelected && (
+                      <span className="text-[10px] font-semibold text-primary px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            {voices.filter((v) => {
+              const q = voiceSearchQuery.toLowerCase();
+              return v.name.toLowerCase().includes(q) || v.rimeVoiceId.toLowerCase().includes(q);
+            }).length === 0 && (
+              <p className="text-center text-xs text-muted-foreground py-8">No voices match your search.</p>
+            )}
+          </div>
+
+          <DialogFooter className="pt-2 border-t border-border/40 flex items-center justify-between gap-2">
+            <span className="text-[10px] text-muted-foreground">
+              {voices.length} voices available
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => {
+                setVoiceModalOpen(false);
+                setVoiceSearchQuery('');
+              }}
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1789,13 +1934,7 @@ function versionStatus(
   return 'Saved';
 }
 
-function compactPromptSnippet(value: string): string {
-  const normalized = value.trim().replace(/\s+/g, ' ');
-  if (!normalized) {
-    return 'Empty prompt';
-  }
-  return normalized.length > 92 ? `${normalized.slice(0, 89)}...` : normalized;
-}
+
 
 function mergeVersions(
   versions: AgentVersion[],
