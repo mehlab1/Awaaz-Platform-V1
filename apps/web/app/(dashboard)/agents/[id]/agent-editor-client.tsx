@@ -8,7 +8,6 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   AlertTriangle,
   ArrowLeft,
-  BookOpen,
   ChevronRight,
   Clock,
   Copy,
@@ -18,7 +17,6 @@ import {
   Info,
   Loader2,
   MoreVertical,
-  Pause,
   Play,
   Plus,
   Rocket,
@@ -348,7 +346,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const shouldRenderPinnedLive =
     pinnedLiveVersion != null &&
     !previewVersions.some((version) => version.id === pinnedLiveVersion.id);
-  const displayedVersions = showAllVersions ? versions : previewVersions;
 
   useEffect(() => {
     if (!agent || promptHydrated) {
