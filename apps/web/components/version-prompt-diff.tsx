@@ -24,7 +24,7 @@ export function VersionPromptDiff({
   newValue,
 }: VersionPromptDiffProps) {
   return (
-    <div className="max-h-[min(560px,calc(100vh-12rem))] overflow-auto [&_.diff-viewer-wrapper]:font-mono [&_.diff-viewer-wrapper]:text-xs">
+    <div className="max-h-[min(560px,calc(100vh-12rem))] overflow-auto rounded-lg border border-border/60 bg-muted/20 p-2 [&_.diff-viewer-wrapper]:font-mono [&_.diff-viewer-wrapper]:text-xs">
       <ReactDiffViewer
         oldValue={oldValue}
         newValue={newValue}

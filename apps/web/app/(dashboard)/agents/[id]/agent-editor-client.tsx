@@ -229,6 +229,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     : isSelectedLive
       ? 'Live version selected'
       : 'Previewing a saved version';
+  const lastUpdatedLabel = selectedVersion
+    ? `Updated ${safeRelativeTime(selectedVersion.updatedAt)}`
+    : liveVersion
+      ? `Live ${safeRelativeTime(liveVersion.updatedAt)}`
+      : 'No version selected';
+  const editorMetaLabel = hasUnsavedChanges
+    ? 'Draft changes saved locally'
+    : 'No unpublished draft changes';
   const previewVersions = versions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT);
   const pinnedLiveVersion =
     !showAllVersions && liveVersion
@@ -919,6 +927,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   ) => {
     const isSelected = selectedVersion?.id === v.id;
     const isLatest = latestVersion?.id === v.id;
+    const isPrimaryVersion = isSelected || isLatest || v.isLive;
     const snippet = compactPromptSnippet(v.systemPrompt);
     const status = versionStatus(v, liveVersion, latestVersion);
     const timestamp = v.publishedAt ?? v.updatedAt ?? v.createdAt;
@@ -927,9 +936,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       <li
         key={options.pinnedLive ? `${v.id}-pinned` : v.id}
         className={cn(
-          'group/version relative rounded-md px-2 py-2 text-xs transition-colors',
-          v.isLive ? 'bg-primary/5' : 'hover:bg-muted/40',
-          isSelected && 'bg-muted',
+          'group/version relative rounded-md border-l-2 border-l-transparent px-2 py-2 text-xs transition-colors',
+          v.isLive ? 'border-l-primary/60 bg-primary/5' : 'hover:bg-muted/40',
+          isSelected && 'border-l-primary/40 bg-muted/70',
+          !isPrimaryVersion && showAllVersions && 'opacity-75',
         )}
       >
         <div className="flex items-start gap-2">
@@ -943,11 +953,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <span className="font-semibold text-sm leading-none">
                 V{v.versionNumber}
               </span>
-              <Badge variant={v.isLive ? 'default' : 'secondary'}>
-                {status}
-              </Badge>
+              <Badge variant={v.isLive ? 'default' : 'secondary'}>{status}</Badge>
               {isSelected ? <Badge variant="outline">Open</Badge> : null}
-              {isLatest ? <Badge variant="outline">Latest</Badge> : null}
             </div>
             <p className="mt-1 text-[11px] text-muted-foreground">
               {safeRelativeTime(timestamp)}
@@ -966,7 +973,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             >
               <MoreVertical className="size-3.5" aria-hidden />
             </summary>
-            <div className="absolute right-0 z-20 mt-1 w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-lg">
+            <div className="absolute right-0 z-20 mt-1 w-40 rounded-md border border-border/60 bg-popover p-1 text-popover-foreground shadow-lg">
               <VersionMenuButton
                 icon={GitCompare}
                 label="View diff"
@@ -1078,7 +1085,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   }
 
   return (
-    <div className="-m-4 min-h-screen bg-muted/10 sm:-m-6">
+    <div className="-m-4 min-h-screen bg-background sm:-m-6">
       {toast ? (
         <div
           role="status"
@@ -1088,7 +1095,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         </div>
       ) : null}
 
-      <div className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
+      <div className="sticky top-0 z-20 border-b border-border/60 bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
         <div className="mx-auto flex max-w-[1500px] flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1113,23 +1120,25 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <Badge variant={agent.isActive ? 'default' : 'secondary'}>
                 {agent.isActive ? 'Active' : 'Inactive'}
               </Badge>
-              <Badge variant={liveVersion ? 'secondary' : 'outline'}>
+              <Badge variant={liveVersion ? 'outline' : 'secondary'}>
                 Live {liveVersionLabel}
               </Badge>
             </div>
-            <div className="mt-2 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-md bg-muted px-2 py-1 font-medium text-foreground">
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span className="rounded-full bg-muted px-2.5 py-1 font-medium text-foreground">
                 {editorStatusText}
               </span>
-              <span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">
-                {quickStateText}
-              </span>
+              <span>{quickStateText}</span>
+              <span>•</span>
+              <span>{lastUpdatedLabel}</span>
+              <span>•</span>
+              <span>Preview uses the published live version</span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2 xl:justify-end">
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               disabled={!canTest}
               title={testCallBlockedReason ?? 'Run a browser preview.'}
               onClick={() => setTestCallOpen(true)}
@@ -1178,12 +1187,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   ? 'Update or create a version before publishing.'
                   : isSelectedLive
                     ? 'This version is already live.'
-                    : 'Publish the selected version for Test Agent and production calls.'
+                    : 'Publish this version for preview and production calls.'
               }
               onClick={() => selectedVersion && setPublishTarget(selectedVersion)}
             >
               <Rocket className="size-4" aria-hidden />
-              Publish Version
+              Publish Live
             </Button>
           </div>
         </div>
@@ -1205,8 +1214,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         apiCall={apiCall}
       />
 
-      <div className="mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
-        <Card className="overflow-hidden border-border/70 bg-background shadow-sm">
+      <div className="mx-auto grid max-w-[1500px] gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(17.5rem,21rem)]">
+        <Card className="overflow-hidden bg-background shadow-sm ring-1 ring-border/50">
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle>System prompt</CardTitle>
@@ -1222,7 +1231,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </div>
             <CardDescription>
               Write assistant behavior, tone, boundaries, call goals, and escalation rules.
-              Save polished changes as a new version, then publish when you are ready.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1252,6 +1260,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 value={prompt}
                 onChange={setPrompt}
                 disabled={saveBusy !== null}
+                statusLabel={hasUnsavedChanges ? 'Draft editing' : 'Ready to publish'}
+                updatedLabel={lastUpdatedLabel}
+                helperLabel={editorMetaLabel}
               />
             ) : (
               <div className="min-h-[520px] rounded-2xl border border-dashed border-border bg-muted/30" />
@@ -1260,7 +1271,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         </Card>
 
         <div className="space-y-4 lg:sticky lg:top-28 lg:self-start">
-          <Card className="border-border/70 bg-background shadow-sm">
+          <Card className="bg-background shadow-sm ring-1 ring-border/50">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <CardTitle>Voice</CardTitle>
@@ -1271,7 +1282,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="rounded-md bg-muted/50 p-3">
+              <div className="rounded-lg bg-gradient-to-br from-primary/10 via-primary/5 to-background p-3">
                 <div className="flex items-center gap-3">
                   <div className="grid size-10 shrink-0 place-items-center rounded-full bg-background text-primary shadow-sm">
                     <Volume2 className="size-5" aria-hidden />
@@ -1305,7 +1316,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 <Button
                   type="button"
                   size="sm"
-                  variant="secondary"
+                  variant="outline"
                   onClick={() => void playVoicePreview()}
                   disabled={!selectedVoiceId || previewBusy}
                   title={
@@ -1323,6 +1334,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 </Button>
                 <audio ref={previewAudioRef} className="hidden" preload="none" />
               </div>
+              <p className="text-xs text-muted-foreground">
+                Publishing a version updates the live voice used in preview and production calls.
+              </p>
               {voices.length === 0 ? (
                 <p className="text-muted-foreground text-xs">
                   No voices are available yet.
@@ -1331,7 +1345,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </CardContent>
           </Card>
 
-          <Card className="border-border/70 bg-background shadow-sm">
+          <Card className="bg-background shadow-sm ring-1 ring-border/50">
             <CardHeader className="pb-2">
               <CardTitle>Phone number</CardTitle>
               <CardDescription>Choose which number should route to this agent.</CardDescription>
@@ -1361,7 +1375,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </CardContent>
           </Card>
 
-          <Card className="bg-background shadow-sm">
+          <Card className="bg-background shadow-sm ring-1 ring-border/50">
             <CardHeader className="pb-2">
               <CardTitle>Version history</CardTitle>
               <CardDescription>
@@ -1617,7 +1631,7 @@ function VersionMenuButton({
         event.currentTarget.closest('details')?.removeAttribute('open');
         onClick();
       }}
-      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition hover:bg-muted/70 disabled:pointer-events-none disabled:opacity-50"
     >
       <Icon className="size-3.5" aria-hidden />
       {label}
@@ -1647,12 +1661,12 @@ function versionStatus(
   latestVersion: AgentVersion | null,
 ): string {
   if (liveVersion?.id === version.id || version.isLive) {
-    return 'Published';
+    return 'Live';
   }
   if (latestVersion?.id === version.id) {
     return 'Draft';
   }
-  return 'Archived';
+  return 'Saved';
 }
 
 function compactPromptSnippet(value: string): string {
