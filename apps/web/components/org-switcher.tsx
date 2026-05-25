@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+
 import { useOrgContext } from '@/components/org-context';
 import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
 
@@ -14,8 +16,15 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
     setActiveOrgId,
     loadingOrgs,
   } = useOrgContext();
+  const [switching, setSwitching] = useState(false);
   const activeOrg = orgs.find((org) => org.id === activeOrgId);
   const title = activeOrg?.name ?? activeOrgId ?? 'No organization selected';
+
+  useEffect(() => {
+    if (!loadingOrgs) {
+      setSwitching(false);
+    }
+  }, [loadingOrgs, activeOrgId]);
 
   if (compact) {
     return (
@@ -28,8 +37,14 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
           <select
             className="h-8 w-full rounded-md border border-input bg-background px-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
             value={activeOrgId ?? ''}
+            disabled={loadingOrgs || switching}
             onChange={(e) =>
-              setActiveOrgId(e.target.value.length > 0 ? e.target.value : undefined)
+              {
+                setSwitching(true);
+                setActiveOrgId(
+                  e.target.value.length > 0 ? e.target.value : undefined,
+                );
+              }
             }
             aria-label="Switch organization"
           >
@@ -59,14 +74,22 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
       >
         {loadingOrgs
           ? 'Loading...'
+          : switching
+            ? 'Switching...'
           : activeOrg?.name ?? 'None selected'}
       </div>
       {orgs.length > 0 ? (
         <select
           className="mt-2 h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
           value={activeOrgId ?? ''}
+          disabled={loadingOrgs || switching}
           onChange={(e) =>
-            setActiveOrgId(e.target.value.length > 0 ? e.target.value : undefined)
+            {
+              setSwitching(true);
+              setActiveOrgId(
+                e.target.value.length > 0 ? e.target.value : undefined,
+              );
+            }
           }
           aria-label="Switch organization"
         >

@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   type InviteMemberInput,
   type MemberRole,
@@ -92,12 +93,19 @@ export function MembersClient() {
 
       <StatusLine error={firstError(membersApi)} message={feedback} />
 
-      <MembersTable members={members} isLoading={membersApi.members.isLoading} />
+      <MembersTable
+        members={members}
+        isLoading={membersApi.members.isLoading}
+        isRefreshing={membersApi.members.isFetching && !membersApi.members.isLoading}
+      />
 
       {membersApi.canManageMembers ? (
         <InvitationsTable
           invitations={invitations}
           isLoading={membersApi.invitations.isLoading}
+          isRefreshing={
+            membersApi.invitations.isFetching && !membersApi.invitations.isLoading
+          }
           resendId={membersApi.resendInvitation.variables}
           cancelId={membersApi.cancelInvitation.variables}
           onResend={resend}
@@ -124,10 +132,14 @@ function StatusLine({
 function MembersTable({
   members,
   isLoading,
+  isRefreshing,
 }: {
   members: MemberRow[];
   isLoading: boolean;
+  isRefreshing?: boolean;
 }) {
+  const initialLoading = isLoading && members.length === 0;
+
   return (
     <Card>
       <CardHeader>
@@ -135,11 +147,15 @@ function MembersTable({
         <CardDescription>{members.length.toLocaleString()} members</CardDescription>
       </CardHeader>
       <CardContent>
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading members...</p>
+        {initialLoading ? (
+          <MembersTableSkeleton />
         ) : members.length === 0 ? (
           <EmptyState label="No members found." />
         ) : (
+          <div className="space-y-2">
+            {isRefreshing ? (
+              <p className="text-xs text-muted-foreground">Refreshing members...</p>
+            ) : null}
           <Table>
             <TableHeader>
               <TableRow>
@@ -155,6 +171,7 @@ function MembersTable({
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -183,6 +200,7 @@ function MemberTableRow({ member }: { member: MemberRow }) {
 function InvitationsTable({
   invitations,
   isLoading,
+  isRefreshing,
   resendId,
   cancelId,
   onResend,
@@ -190,11 +208,14 @@ function InvitationsTable({
 }: {
   invitations: PendingInvitationRow[];
   isLoading: boolean;
+  isRefreshing: boolean;
   resendId: string | undefined;
   cancelId: string | undefined;
   onResend: (id: string) => void;
   onCancel: (id: string) => void;
 }) {
+  const initialLoading = isLoading && invitations.length === 0;
+
   return (
     <Card>
       <CardHeader>
@@ -204,11 +225,15 @@ function InvitationsTable({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading invitations...</p>
+        {initialLoading ? (
+          <InvitationsTableSkeleton />
         ) : invitations.length === 0 ? (
           <EmptyState label="No pending invitations." />
         ) : (
+          <div className="space-y-2">
+            {isRefreshing ? (
+              <p className="text-xs text-muted-foreground">Refreshing invitations...</p>
+            ) : null}
           <Table>
             <TableHeader>
               <TableRow>
@@ -233,9 +258,42 @@ function InvitationsTable({
               ))}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function MembersTableSkeleton() {
+  return (
+    <div className="space-y-3">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="grid grid-cols-4 gap-3">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InvitationsTableSkeleton() {
+  return (
+    <div className="space-y-3">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="grid grid-cols-6 gap-3">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      ))}
+    </div>
   );
 }
 

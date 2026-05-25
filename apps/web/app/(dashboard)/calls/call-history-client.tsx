@@ -31,6 +31,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useOrgContext } from '@/components/org-context';
+import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
 const PAGE_LIMIT = 20;
@@ -292,6 +293,8 @@ export function CallHistoryClient() {
     'rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring transition-colors';
 
   const rows = payload?.items ?? [];
+  const initialLoading = loading && payload === null;
+  const refreshing = loading && payload !== null;
 
   if (!activeOrgId && !loading) {
     return (
@@ -440,7 +443,7 @@ export function CallHistoryClient() {
             <CardTitle>Recent calls</CardTitle>
             <CardDescription>Open any row to review transcript and recording.</CardDescription>
           </div>
-          {payload !== null && !loading ? (
+          {payload !== null ? (
             <p className="text-muted-foreground text-xs">
               Page {payload.page} of {payload.totalPages}
               {' · '}
@@ -451,8 +454,8 @@ export function CallHistoryClient() {
           ) : null}
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <p className="text-muted-foreground text-sm">Loading calls…</p>
+          {initialLoading ? (
+            <CallsTableSkeleton />
           ) : rows.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border p-12 text-center text-muted-foreground text-sm flex flex-col items-center gap-3">
               <Phone className="size-8 text-muted-foreground/40" />
@@ -464,6 +467,12 @@ export function CallHistoryClient() {
             </div>
           ) : (
             <div className="overflow-x-auto">
+              {refreshing ? (
+                <div className="mb-3 inline-flex items-center gap-2 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-[11px] text-muted-foreground">
+                  <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+                  Refreshing calls...
+                </div>
+              ) : null}
               <Table>
                 <TableHeader>
                   <TableRow className="text-muted-foreground">
@@ -544,7 +553,7 @@ export function CallHistoryClient() {
             </div>
           )}
 
-          {payload !== null && !loading && payload.total > 0 ? (
+          {payload !== null && payload.total > 0 ? (
             <div className="mt-6 flex items-center justify-between gap-3 pt-5 border-t border-border/50">
               <Button
                 type="button"
@@ -580,6 +589,49 @@ export function CallHistoryClient() {
           ) : null}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function CallsTableSkeleton() {
+  return (
+    <div className="space-y-3">
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date / time</TableHead>
+              <TableHead>Direction</TableHead>
+              <TableHead>Caller</TableHead>
+              <TableHead>Callee</TableHead>
+              <TableHead>Agent</TableHead>
+              <TableHead>Duration</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Cost</TableHead>
+              <TableHead>Test</TableHead>
+              <TableHead className="w-10 text-right">
+                <span className="sr-only">Open call</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {Array.from({ length: 8 }).map((_, index) => (
+              <TableRow key={index}>
+                <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-12" /></TableCell>
+                <TableCell><Skeleton className="h-5 w-20 rounded-full" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-12" /></TableCell>
+                <TableCell><Skeleton className="h-4 w-10" /></TableCell>
+                <TableCell className="text-right"><Skeleton className="ml-auto h-4 w-4" /></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

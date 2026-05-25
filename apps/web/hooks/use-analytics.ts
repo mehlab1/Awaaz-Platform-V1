@@ -187,8 +187,10 @@ function useAnalyticsQuery<T extends z.ZodType>(
   return useQuery({
     queryKey: ['analytics', endpoint, organizationId],
     enabled,
-    refetchInterval: enabled ? staleTime : false,
+    refetchInterval: false,
     staleTime,
+    gcTime: 10 * 60_000,
+    placeholderData: (previous) => previous,
     queryFn: () => fetchAnalytics(endpoint, schema, apiCall),
   });
 }
@@ -202,6 +204,9 @@ function useLiveAnalyticsQuery(
     queryKey: ['analytics', 'live', organizationId],
     enabled,
     refetchInterval: enabled ? 10_000 : false,
+    staleTime: 5_000,
+    gcTime: 10 * 60_000,
+    placeholderData: (previous) => previous,
     queryFn: () => fetchAnalytics('live', liveSchema, apiCall),
   });
 }

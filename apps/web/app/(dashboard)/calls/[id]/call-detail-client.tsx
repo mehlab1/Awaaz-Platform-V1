@@ -33,6 +33,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { useOrgContext } from '@/components/org-context';
+import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
 import {
@@ -366,6 +367,13 @@ export function CallDetailClient({ callId }: { callId: string }) {
     (recordingState.phase === 'ready' ||
       recordingState.phase === 'processing' ||
       recordingState.phase === 'loading');
+  const refreshingArtifacts =
+    detail != null &&
+    detailRefreshAttempts.current > 0 &&
+    detailRefreshAttempts.current < 6 &&
+    (detail.transcript == null ||
+      detail.costBreakdown == null ||
+      (detail.status === 'COMPLETED' && !detail.recordingUrl?.trim()));
 
   if (!activeOrgId && !loading) {
     return (
@@ -376,12 +384,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
   }
 
   if (loading && !detail) {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 gap-3">
-        <Loader2 className="size-8 text-primary animate-spin" />
-        <p className="text-muted-foreground text-sm font-medium">Loading call session…</p>
-      </div>
-    );
+    return <CallDetailSkeleton />;
   }
 
   if (error || !detail) {
@@ -428,6 +431,12 @@ export function CallDetailClient({ callId }: { callId: string }) {
               Call Session
             </h1>
           </div>
+          {refreshingArtifacts ? (
+            <div className="inline-flex items-center gap-2 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-[11px] text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" />
+              Refreshing call artifacts...
+            </div>
+          ) : null}
           <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground pl-10">
             <span>ID:</span>
             <span className="bg-muted px-1.5 py-0.5 rounded select-all">{detail.id}</span>
@@ -657,6 +666,46 @@ export function CallDetailClient({ callId }: { callId: string }) {
         />
         <LatencyCard stats={latencyStats} />
       </div>
+    </div>
+  );
+}
+
+function CallDetailSkeleton() {
+  return (
+    <div className="space-y-6 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between border-b border-border/40 pb-5">
+        <div className="space-y-2">
+          <Skeleton className="h-7 w-44" />
+          <Skeleton className="h-4 w-64" />
+        </div>
+        <div className="flex gap-2">
+          <Skeleton className="h-6 w-20 rounded-full" />
+          <Skeleton className="h-6 w-20 rounded-full" />
+        </div>
+      </div>
+      <Card className="border-border/50">
+        <CardContent className="p-6">
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div key={index} className="space-y-2">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-5 w-28" />
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      <Card className="border-border/50">
+        <CardHeader>
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-4 w-72" />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+          <Skeleton className="h-16 w-full" />
+        </CardContent>
+      </Card>
     </div>
   );
 }

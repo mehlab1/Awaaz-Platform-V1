@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { usePathname } from 'next/navigation';
 import {
   Activity,
@@ -258,6 +259,7 @@ function SidebarNavLink({
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
+  const router = useRouter();
   const Icon = item.icon;
 
   return (
@@ -266,6 +268,8 @@ function SidebarNavLink({
       title={collapsed ? item.label : undefined}
       aria-label={collapsed ? item.label : undefined}
       onClick={onNavigate}
+      onMouseEnter={() => router.prefetch(item.href)}
+      onFocus={() => router.prefetch(item.href)}
       className={cn(
         'group flex shrink-0 items-center rounded-lg text-muted-foreground transition-all duration-200 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         active

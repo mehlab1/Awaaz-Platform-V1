@@ -73,11 +73,17 @@ export function useMembers(): MembersApi {
   const members = useQuery({
     queryKey: membersKey,
     enabled: Boolean(activeOrgId),
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    placeholderData: (previous) => previous,
     queryFn: () => fetchMembers(apiCall, activeOrgId),
   });
   const invitations = useQuery({
     queryKey: invitationsKey,
     enabled: Boolean(activeOrgId) && canManageMembers,
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    placeholderData: (previous) => previous,
     queryFn: () => fetchInvitations(apiCall, activeOrgId),
   });
 

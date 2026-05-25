@@ -27,6 +27,7 @@ import {
   TrendChart,
 } from './analytics-charts';
 import { formatUsd } from './analytics-format';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const EMPTY_SUMMARY: AnalyticsSummary = {
   calls: 0,
@@ -61,19 +62,65 @@ export function AnalyticsDashboardClient() {
         isLoading={analytics.isLoading}
         errorMessage={analytics.error?.message ?? null}
       />
-      <StatGrid today={today} />
-      <TrendSection
-        data={visibleTrend}
-        range={trendRange}
-        onRangeChange={setTrendRange}
-      />
-      <CostAndAgentsSection costBuckets={costBuckets} agents={agents} />
-      <HealthSection
-        summary={last30Days}
-        liveCalls={analytics.live.data?.activeCalls ?? 0}
-        liveGeneratedAt={analytics.live.data?.generatedAt}
-        latency={analytics.latency.data}
-      />
+      {analytics.isLoading &&
+      !analytics.overview.data &&
+      !analytics.trend.data &&
+      !analytics.costs.data ? (
+        <AnalyticsSkeleton />
+      ) : (
+        <>
+          <StatGrid today={today} />
+          <TrendSection
+            data={visibleTrend}
+            range={trendRange}
+            onRangeChange={setTrendRange}
+          />
+          <CostAndAgentsSection costBuckets={costBuckets} agents={agents} />
+          <HealthSection
+            summary={last30Days}
+            liveCalls={analytics.live.data?.activeCalls ?? 0}
+            liveGeneratedAt={analytics.live.data?.generatedAt}
+            latency={analytics.latency.data}
+          />
+          {analytics.isLoading ? (
+            <p className="text-xs text-muted-foreground">Refreshing analytics...</p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+function AnalyticsSkeleton() {
+  return (
+    <div className="space-y-8">
+      <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <div key={index} className="rounded-xl border border-border/50 p-6 space-y-3">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-8 w-20" />
+          </div>
+        ))}
+      </div>
+      <section className="grid gap-6 xl:grid-cols-2">
+        <div className="rounded-xl border border-border/50 p-6 space-y-4">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-56 w-full" />
+        </div>
+        <div className="rounded-xl border border-border/50 p-6 space-y-4">
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-56 w-full" />
+        </div>
+      </section>
+      <section className="grid gap-6 lg:grid-cols-3">
+        {Array.from({ length: 3 }).map((_, index) => (
+          <div key={index} className="rounded-xl border border-border/50 p-6 space-y-3">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-8 w-16" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+        ))}
+      </section>
     </div>
   );
 }

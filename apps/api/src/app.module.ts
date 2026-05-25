@@ -19,6 +19,7 @@ import { CallsController } from './calls/calls.controller';
 import { CallsModule } from './calls/calls.module';
 import { ClerkAuthMiddleware } from './auth/clerk-auth.middleware';
 import { RolesGuard } from './common/roles.guard';
+import { PerformanceMiddleware } from './common/performance.middleware';
 import { TenantMiddleware } from './common/tenant.middleware';
 import { InternalModule } from './internal/internal.module';
 import { InvitationsController } from './organizations/invitations.controller';
@@ -54,6 +55,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
   ],
   controllers: [AppController],
   providers: [
+    PerformanceMiddleware,
     ClerkAuthMiddleware,
     TenantMiddleware,
     { provide: APP_GUARD, useClass: RolesGuard },
@@ -61,6 +63,10 @@ import { WebhooksModule } from './webhooks/webhooks.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(PerformanceMiddleware)
+      .forRoutes({ path: '*', method: RequestMethod.ALL });
+
     // Clerk webhooks use Svix signatures only; never JWT — exclude alone was brittle with `forRoutes('*')`.
     consumer.apply(ClerkAuthMiddleware).forRoutes(
       OrganizationsController,

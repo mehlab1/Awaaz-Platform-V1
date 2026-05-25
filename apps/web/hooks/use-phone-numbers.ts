@@ -76,11 +76,17 @@ export function usePhoneNumbers(): PhoneNumbersApi {
   const phoneNumbers = useQuery({
     queryKey,
     enabled,
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    placeholderData: (previous) => previous,
     queryFn: () => fetchList(apiCall),
   });
   const agents = useQuery({
     queryKey: ['phone-number-agents', activeOrgId],
     enabled,
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    placeholderData: (previous) => previous,
     queryFn: () => fetchAgents(apiCall),
   });
 

@@ -33,6 +33,7 @@ import useLocalStorageState from 'use-local-storage-state';
 import { AgentSystemPromptEditor } from '@/components/agent-system-prompt-editor';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 
 import {
   Dialog,
@@ -51,10 +52,29 @@ const TestCallModal = dynamic(
     import('@/components/test-call-modal').then((m) => ({
       default: m.TestCallModal,
     })),
-  { ssr: false },
+  {
+    ssr: false,
+    loading: () => (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-background/40 backdrop-blur-sm">
+        <div className="rounded-xl border border-border bg-background px-4 py-3 text-sm text-muted-foreground shadow-lg">
+          Loading test tools...
+        </div>
+      </div>
+    ),
+  },
 );
 
-const VERSION_HISTORY_PREVIEW_LIMIT = 5;
+let testCallModalPreloaded = false;
+
+function preloadTestCallModal() {
+  if (testCallModalPreloaded) {
+    return;
+  }
+  testCallModalPreloaded = true;
+  void import('@/components/test-call-modal');
+}
+
+const VERSION_HISTORY_PREVIEW_LIMIT = 3;
 
 const BLUEPRINTS = [
   {
@@ -146,6 +166,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const { activeOrgId, apiCall } = useOrgContext();
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const saveInFlightRef = useRef(false);
+  const voicesLoadedRef = useRef(false);
+  const phonesLoadedOrgRef = useRef<string | undefined>(undefined);
 
   const [draftPrompt, setDraftPrompt] = useLocalStorageState(
     `agent-draft-${agentId}`,
@@ -192,6 +214,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [testCallOpen, setTestCallOpen] = useState(false);
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
+  const [voiceSaveBusy, setVoiceSaveBusy] = useState(false);
   const [phoneDropdownOpen, setPhoneDropdownOpen] = useState(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [previewingVersion, setPreviewingVersion] = useState<AgentVersion | null>(null);
@@ -396,44 +419,80 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [hasUnsavedChanges, prompt, setDraftPrompt]);
 
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let idleId: number | undefined;
+
+    if (
+      typeof globalThis !== 'undefined' &&
+      'requestIdleCallback' in globalThis
+    ) {
+      idleId = (globalThis as unknown as {
+        requestIdleCallback: (cb: () => void) => number;
+      }).requestIdleCallback(() => preloadTestCallModal());
+    } else {
+      timeoutId = globalThis.setTimeout(() => preloadTestCallModal(), 1200);
+    }
+
+    return () => {
+      if (
+        idleId !== undefined &&
+        typeof globalThis !== 'undefined' &&
+        'cancelIdleCallback' in globalThis
+      ) {
+        (
+          globalThis as unknown as {
+            cancelIdleCallback: (id: number) => void;
+          }
+        ).cancelIdleCallback(idleId);
+      }
+      if (timeoutId !== undefined) {
+        globalThis.clearTimeout(timeoutId);
+      }
+    };
+  }, []);
+
   const loadData = useCallback(async (loadAllVersions = false) => {
     if (!activeOrgId) {
       setLoading(false);
       setAgent(null);
       setVersions([]);
+      setPhones([]);
       setAllVersionsLoaded(false);
       setShowAllVersions(false);
+      phonesLoadedOrgRef.current = undefined;
       return;
     }
     setPageError(null);
     setLoading(true);
     try {
-      const [
-        agentRes,
-        voicesRes,
-        phonesRes,
-        versionsRes,
-      ] = await Promise.all([
+      const shouldFetchVoices = !voicesLoadedRef.current;
+      const shouldFetchPhones = phonesLoadedOrgRef.current !== activeOrgId;
+      const [agentRes, versionsRes, voicesRes, phonesRes] = await Promise.all([
         apiCall(`/api/v1/agents/${agentId}`, { method: 'GET' }),
-        apiCall('/api/v1/voices', { method: 'GET' }),
-        apiCall('/api/v1/phone-numbers', { method: 'GET' }),
         apiCall(
           loadAllVersions
             ? `/api/v1/agents/${agentId}/versions`
             : `/api/v1/agents/${agentId}/versions?limit=${VERSION_HISTORY_PREVIEW_LIMIT}`,
           { method: 'GET' },
         ),
+        shouldFetchVoices
+          ? apiCall('/api/v1/voices', { method: 'GET' })
+          : Promise.resolve(null),
+        shouldFetchPhones
+          ? apiCall('/api/v1/phone-numbers', { method: 'GET' })
+          : Promise.resolve(null),
       ]);
 
       if (!agentRes.ok) {
         const txt = await agentRes.text();
         throw new Error(txt || agentRes.statusText);
       }
-      if (!voicesRes.ok) {
+      if (voicesRes && !voicesRes.ok) {
         const txt = await voicesRes.text();
         throw new Error(txt || voicesRes.statusText);
       }
-      if (!phonesRes.ok) {
+      if (phonesRes && !phonesRes.ok) {
         const txt = await phonesRes.text();
         throw new Error(txt || phonesRes.statusText);
       }
@@ -443,8 +502,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       }
 
       const agentBody = (await agentRes.json()) as AgentDetail;
-      const voicesBody = (await voicesRes.json()) as VoiceDto[];
-      const phonesBody = (await phonesRes.json()) as PhoneDto[];
       const versionsBody = (await versionsRes.json()) as AgentVersion[];
       const sortedVersions = sortVersionsDesc(
         loadAllVersions
@@ -456,8 +513,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setAllVersionsLoaded(loadAllVersions);
       setShowAllVersions(loadAllVersions);
       setAgent(agentBody);
-      setVoices(voicesBody);
-      setPhones(phonesBody);
+      if (voicesRes) {
+        setVoices((await voicesRes.json()) as VoiceDto[]);
+        voicesLoadedRef.current = true;
+      }
+      if (phonesRes) {
+        setPhones((await phonesRes.json()) as PhoneDto[]);
+        phonesLoadedOrgRef.current = activeOrgId;
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setPageError(message);
@@ -746,8 +809,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setSelectedVoiceId(voiceId);
     setVoiceModalOpen(false);
     setVoiceSearchQuery('');
+    setVoiceSaveBusy(true);
 
     if (!selectedVersion || !activeOrgId) {
+      setVoiceSaveBusy(false);
       return;
     }
 
@@ -787,6 +852,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setToast(`Failed to update voice: ${message}`);
+    } finally {
+      setVoiceSaveBusy(false);
     }
   };
 
@@ -947,6 +1014,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       return;
     }
 
+    // Ensure a prior preview does not continue playing underneath the next one.
+    el.pause();
+    el.currentTime = 0;
+
     setPreviewBusy(true);
     if (voiceToPreview) {
       setPlayingVoiceId(voiceToPreview.rimeVoiceId);
@@ -1029,6 +1100,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       });
       if (phonesRes.ok) {
         setPhones((await phonesRes.json()) as PhoneDto[]);
+        phonesLoadedOrgRef.current = activeOrgId;
       }
       setToast('Phone assignment updated.');
     } catch (e) {
@@ -1226,7 +1298,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   }
 
   if (loading && !agent) {
-    return <p className="text-muted-foreground text-sm">Loading agent...</p>;
+    return <AgentEditorSkeleton />;
   }
 
   if (pageError && !agent) {
@@ -1393,6 +1465,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               )}
               {editorStatusText}
             </span>
+            {loading ? (
+              <span className="hidden lg:inline-flex items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
+                <Loader2 className="size-3 animate-spin" />
+                Refreshing...
+              </span>
+            ) : null}
             <Button
               type="button"
               variant="default"
@@ -1400,6 +1478,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               className="h-8 text-xs px-4 rounded-lg shadow-sm"
               disabled={!canTest}
               title={testCallBlockedReason ?? 'Run a browser preview.'}
+              onMouseEnter={preloadTestCallModal}
+              onFocus={preloadTestCallModal}
               onClick={() => setTestCallOpen(true)}
             >
               <Play className="size-3.5 mr-1.5 fill-current" aria-hidden />
@@ -2095,12 +2175,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 variant="default"
                 size="sm"
                 className="h-8 text-xs px-4"
-                disabled={!tempSelectedVoiceId}
+                disabled={!tempSelectedVoiceId || voiceSaveBusy}
                 onClick={() => {
                   void onVoiceSelect(tempSelectedVoiceId);
                 }}
               >
-                Select Voice
+                {voiceSaveBusy ? 'Saving...' : 'Select Voice'}
               </Button>
             </div>
           </DialogFooter>
@@ -2313,6 +2393,30 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function AgentEditorSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between border-b border-border/40 pb-4">
+        <div className="space-y-2">
+          <Skeleton className="h-6 w-56" />
+          <Skeleton className="h-4 w-72" />
+        </div>
+        <Skeleton className="h-8 w-28" />
+      </div>
+      <div className="grid gap-8 lg:grid-cols-[1fr_300px]">
+        <div className="space-y-4">
+          <Skeleton className="h-10 w-64" />
+          <Skeleton className="h-[540px] w-full" />
+        </div>
+        <div className="space-y-4">
+          <Skeleton className="h-36 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
+      </div>
     </div>
   );
 }

@@ -53,6 +53,9 @@ export function useApiKeys(): ApiKeysApi {
   const apiKeys = useQuery({
     queryKey,
     enabled: Boolean(activeOrgId) && canManageApiKeys,
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    placeholderData: (previous) => previous,
     queryFn: () => fetchApiKeys(apiCall),
   });
 
