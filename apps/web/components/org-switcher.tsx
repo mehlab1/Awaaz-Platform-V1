@@ -20,13 +20,13 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
   if (compact) {
     return (
       <div
-        className="rounded-lg border border-border bg-background p-1.5 text-xs shadow-sm"
+        className="rounded-md bg-background/80 p-1 text-xs"
         title={title}
       >
         <span className="sr-only">Organization</span>
         {orgs.length > 0 ? (
           <select
-            className="h-8 w-full rounded-md border border-input bg-background px-1 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="h-8 w-full rounded-md border border-input bg-background px-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
             value={activeOrgId ?? ''}
             onChange={(e) =>
               setActiveOrgId(e.target.value.length > 0 ? e.target.value : undefined)
@@ -40,7 +40,7 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
             ))}
           </select>
         ) : (
-          <div className="flex h-8 items-center justify-center rounded-md border border-dashed border-border text-[10px] text-muted-foreground">
+          <div className="flex h-8 items-center justify-center rounded-md border border-dashed border-border text-[11px] text-muted-foreground">
             Org
           </div>
         )}
@@ -49,12 +49,12 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-background p-2.5 text-sm shadow-sm">
+    <div className="rounded-lg bg-background p-3 text-sm shadow-sm">
       <div className="text-muted-foreground text-[11px] font-medium uppercase tracking-wide">
         Organization
       </div>
       <div
-        className="mt-1 truncate font-medium text-xs"
+        className="mt-1 truncate font-medium text-sm"
         title={title}
       >
         {loadingOrgs
@@ -63,7 +63,7 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
       </div>
       {orgs.length > 0 ? (
         <select
-          className="mt-2 h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="mt-2 h-8 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
           value={activeOrgId ?? ''}
           onChange={(e) =>
             setActiveOrgId(e.target.value.length > 0 ? e.target.value : undefined)

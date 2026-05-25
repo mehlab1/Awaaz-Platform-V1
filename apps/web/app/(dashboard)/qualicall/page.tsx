@@ -483,7 +483,7 @@ export default function QualicallPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <span className="rounded-lg border border-border px-2.5 py-1">
-            API: {API_BASE}
+            Connected service
           </span>
         </div>
       </header>
@@ -769,16 +769,16 @@ function ApiConnectionCard({
     <Card>
       <CardHeader className="grid-cols-[1fr_auto]">
         <div>
-          <CardTitle>API Connection</CardTitle>
+          <CardTitle>Service status</CardTitle>
           <CardDescription>
-            Render may take 30 to 60 seconds to wake after inactivity.
+            Confirms service and database availability before processing.
           </CardDescription>
         </div>
         <StatusBadge value={loading ? 'Checking' : health?.status ?? 'Unavailable'} tone={tone} />
       </CardHeader>
       <CardContent className="space-y-3">
         {loading ? (
-          <LoadingState label="Checking QualiCall health..." compact />
+          <LoadingState label="Checking service health..." compact />
         ) : error ? (
           <ErrorMessage message={error} />
         ) : (
@@ -790,7 +790,7 @@ function ApiConnectionCard({
         )}
         <Button type="button" variant="outline" onClick={onRetry} disabled={loading}>
           <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
-          Retry health check
+          Check again
         </Button>
       </CardContent>
     </Card>
@@ -1185,7 +1185,7 @@ function HistoryCard({
       <CardHeader className="grid-cols-[1fr_auto]">
         <div>
           <CardTitle>Recent Calls</CardTitle>
-          <CardDescription>Newest 50 calls from QualiCall.</CardDescription>
+          <CardDescription>Newest 50 processed calls.</CardDescription>
         </div>
         <Button type="button" size="sm" variant="outline" onClick={onRefresh} disabled={loading}>
           <RefreshCw className={cn('size-4', loading && 'animate-spin')} />
@@ -1388,11 +1388,11 @@ async function apiJson<T>(
     try {
       return (await response.json()) as T;
     } catch {
-      throw new Error('QualiCall returned a malformed response.');
+      throw new Error('The service returned an unexpected response.');
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('The QualiCall API is taking longer than expected. Render may be waking up, so retry in a moment.');
+      throw new Error('The service is taking longer than expected. Please try again in a moment.');
     }
     throw error;
   } finally {
@@ -1444,7 +1444,7 @@ function statusFallback(status: number, statusText: string): string {
     case 422:
       return 'Missing or invalid form fields';
     case 500:
-      return 'QualiCall server error';
+      return 'Service error';
     default:
       return statusText || `Request failed (${status})`;
   }

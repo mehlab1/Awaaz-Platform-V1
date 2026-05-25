@@ -66,7 +66,7 @@ export function DashboardShell({
       <div className="min-h-screen bg-background md:h-screen md:overflow-hidden">
         <aside
           className={cn(
-            'fixed inset-y-0 left-0 z-40 hidden h-screen flex-col border-r border-border bg-muted/30 transition-[width] duration-200 ease-out md:flex',
+            'fixed inset-y-0 left-0 z-40 hidden h-screen flex-col border-r border-border/70 bg-muted/20 transition-[width] duration-200 ease-out md:flex',
             sidebarCollapsed ? 'w-16' : 'w-56',
           )}
         >
@@ -109,7 +109,7 @@ export function DashboardShell({
 
         <main
           className={cn(
-            'min-w-0 p-4 sm:p-6 md:h-screen md:overflow-y-auto md:p-6 md:transition-[margin-left] md:duration-200 md:ease-out',
+            'min-w-0 p-4 sm:p-6 md:h-screen md:overflow-y-auto md:p-7 md:transition-[margin-left] md:duration-200 md:ease-out',
             sidebarCollapsed ? 'md:ml-16' : 'md:ml-56',
           )}
         >
@@ -134,8 +134,8 @@ function SidebarContent({
   return (
     <div
       className={cn(
-        'flex h-full min-h-0 flex-col gap-4 p-4',
-        collapsed && 'items-center gap-3 p-3',
+        'flex h-full min-h-0 flex-col gap-3.5 p-3.5',
+        collapsed && 'items-center gap-2.5 p-2.5',
       )}
     >
       <div
@@ -221,8 +221,8 @@ function SidebarNavLink({
       aria-label={collapsed ? item.label : undefined}
       onClick={onNavigate}
       className={cn(
-        'flex shrink-0 items-center rounded-md border border-transparent text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        active && 'border-border bg-muted font-medium text-foreground shadow-sm',
+        'flex shrink-0 items-center rounded-md text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        active && 'bg-background font-medium text-foreground shadow-sm',
         collapsed
           ? 'size-9 justify-center'
           : 'h-9 w-full justify-between gap-2 px-2.5',

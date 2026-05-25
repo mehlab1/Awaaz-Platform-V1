@@ -11,7 +11,6 @@ import {
 
 import { format } from 'date-fns';
 import { ChevronRight } from 'lucide-react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 import { Badge } from '@/components/ui/badge';
@@ -435,11 +434,7 @@ export function CallHistoryClient() {
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
           <div>
             <CardTitle>Recent calls</CardTitle>
-            <CardDescription>
-              <Link href="/agents" className="text-primary hover:underline">
-                ← Agents
-              </Link>
-            </CardDescription>
+            <CardDescription>Open any row to review transcript and recording.</CardDescription>
           </div>
           {payload !== null && !loading ? (
             <p className="text-muted-foreground text-xs">
@@ -457,7 +452,7 @@ export function CallHistoryClient() {
           ) : rows.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border p-10 text-center text-muted-foreground text-sm">
               {filterActive
-                ? 'No calls match these filters — try widening the date range or relaxing phone text.'
+                ? 'No calls match these filters. Try widening the date range or broadening phone search.'
                 : 'No recorded calls yet for this organization.'}
             </div>
           ) : (
@@ -467,8 +462,8 @@ export function CallHistoryClient() {
                   <TableRow className="text-muted-foreground">
                     <TableHead>Date / time</TableHead>
                     <TableHead>Direction</TableHead>
-                    <TableHead>From</TableHead>
-                    <TableHead>To</TableHead>
+                    <TableHead>Caller</TableHead>
+                    <TableHead>Callee</TableHead>
                     <TableHead>Agent</TableHead>
                     <TableHead>Duration</TableHead>
                     <TableHead>Status</TableHead>
@@ -490,29 +485,29 @@ export function CallHistoryClient() {
                         role="link"
                         tabIndex={0}
                         aria-label={`Open call from ${from.display} to ${to.display}`}
-                        className="cursor-pointer hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        className="group cursor-pointer border-l-2 border-l-transparent transition hover:border-l-primary/40 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                         onClick={(event) => openCallFromMouse(event, r.id)}
                         onAuxClick={(event) => openCallFromMouse(event, r.id)}
                         onKeyDown={(event) => openCallFromKeyboard(event, r.id)}
                       >
-                        <TableCell className="whitespace-nowrap">
+                        <TableCell className="whitespace-nowrap text-muted-foreground">
                           {formatCreatedAt(r.createdAt)}
                         </TableCell>
                         <TableCell>
                           <DirectionBadge value={String(r.direction)} />
                         </TableCell>
-                        <TableCell className="max-w-[140px] font-mono text-xs">
+                        <TableCell className="max-w-[140px] font-medium text-sm">
                           <span title={from.title}>
                             {from.display}
                           </span>
                         </TableCell>
-                        <TableCell className="max-w-[140px] font-mono text-xs">
+                        <TableCell className="max-w-[140px] text-muted-foreground text-sm">
                           <span title={to.title}>
                             {to.display}
                           </span>
                         </TableCell>
-                        <TableCell>{r.agent?.name ?? '—'}</TableCell>
-                        <TableCell className="whitespace-nowrap tabular-nums">
+                        <TableCell className="font-medium">{r.agent?.name ?? '—'}</TableCell>
+                        <TableCell className="whitespace-nowrap font-medium tabular-nums">
                           {formatDuration(r.durationSeconds)}
                         </TableCell>
                         <TableCell>
@@ -530,7 +525,7 @@ export function CallHistoryClient() {
                         </TableCell>
                         <TableCell className="text-right">
                           <ChevronRight
-                            className="ml-auto size-4 text-muted-foreground"
+                            className="ml-auto size-4 text-muted-foreground transition group-hover:text-foreground"
                             aria-hidden
                           />
                         </TableCell>

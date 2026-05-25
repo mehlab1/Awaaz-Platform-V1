@@ -224,11 +224,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       : selectedVersion
         ? `Viewing ${selectedVersionLabel}`
         : 'No version selected';
-  const draftStatusText = hasUnsavedChanges
-    ? 'Draft changes not live yet'
-    : selectedVersion && !isSelectedLive
-      ? 'Selected version not live'
-    : 'No unpublished changes';
+  const quickStateText = hasUnsavedChanges
+    ? 'Unsaved edits in progress'
+    : isSelectedLive
+      ? 'Live version selected'
+      : 'Previewing a saved version';
   const previewVersions = versions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT);
   const pinnedLiveVersion =
     !showAllVersions && liveVersion
@@ -471,7 +471,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVoiceId(version.voiceId);
       setDraftPrompt('');
       setToast(
-        `Viewing V${version.versionNumber}. Update this version in place or create V${nextVersionNumber} for a checkpoint.`,
+        `Viewing V${version.versionNumber}. Update this version or save V${nextVersionNumber} as a new version.`,
       );
     },
     [hasUnsavedChanges, nextVersionNumber, selectedVersionId, setDraftPrompt],
@@ -928,8 +928,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         key={options.pinnedLive ? `${v.id}-pinned` : v.id}
         className={cn(
           'group/version relative rounded-md px-2 py-2 text-xs transition-colors',
-          v.isLive ? 'bg-primary/5' : 'hover:bg-muted/50',
-          isSelected && 'bg-muted ring-1 ring-border',
+          v.isLive ? 'bg-primary/5' : 'hover:bg-muted/40',
+          isSelected && 'bg-muted',
         )}
       >
         <div className="flex items-start gap-2">
@@ -946,9 +946,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <Badge variant={v.isLive ? 'default' : 'secondary'}>
                 {status}
               </Badge>
-              {isSelected ? <Badge variant="outline">Viewing</Badge> : null}
+              {isSelected ? <Badge variant="outline">Open</Badge> : null}
               {isLatest ? <Badge variant="outline">Latest</Badge> : null}
-              {options.pinnedLive ? <Badge variant="outline">Pinned</Badge> : null}
             </div>
             <p className="mt-1 text-[11px] text-muted-foreground">
               {safeRelativeTime(timestamp)}
@@ -1039,7 +1038,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           <Badge>Live</Badge>
         </div>
         <p className="mt-2 text-muted-foreground text-xs">
-          Currently serving Test Agent and production calls.
+          Currently serving preview and production calls.
         </p>
       </button>
     );
@@ -1079,7 +1078,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   }
 
   return (
-    <div className="-m-4 min-h-screen bg-muted/20 sm:-m-6">
+    <div className="-m-4 min-h-screen bg-muted/10 sm:-m-6">
       {toast ? (
         <div
           role="status"
@@ -1123,27 +1122,24 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 {editorStatusText}
               </span>
               <span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">
-                {draftStatusText}
-              </span>
-              <span className="rounded-md bg-muted px-2 py-1 text-muted-foreground">
-                Test Agent uses the published live version.
+                {quickStateText}
               </span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2 xl:justify-end">
             <Button
               type="button"
-              variant="secondary"
+              variant="outline"
               disabled={!canTest}
               title={testCallBlockedReason ?? 'Run a browser preview.'}
               onClick={() => setTestCallOpen(true)}
             >
               <Play className="size-4" aria-hidden />
-              Test Agent
+              Preview Call
             </Button>
             <Button
               type="button"
-              variant="outline"
+              variant="ghost"
               disabled={!canUpdateCurrentVersion}
               title={
                 selectedVersion
@@ -1157,13 +1153,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               ) : (
                 <Save className="size-4" aria-hidden />
               )}
-              Update Current Version
+              Update Version
             </Button>
             <Button
               type="button"
-              variant="outline"
+              variant="default"
               disabled={!canCreateNewVersion}
-              title="Create a new rollback checkpoint."
+              title="Save a new version from your current edits."
               onClick={() => void createVersionFlow()}
             >
               {saveBusy === 'create' ? (
@@ -1171,11 +1167,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               ) : (
                 <Plus className="size-4" aria-hidden />
               )}
-              Create New Version
+              Save as New Version
             </Button>
             <Button
               type="button"
-              variant="default"
+              variant="outline"
               disabled={!canPublishLive}
               title={
                 hasUnsavedChanges
@@ -1187,7 +1183,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               onClick={() => selectedVersion && setPublishTarget(selectedVersion)}
             >
               <Rocket className="size-4" aria-hidden />
-              Publish Live
+              Publish Version
             </Button>
           </div>
         </div>
@@ -1226,7 +1222,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </div>
             <CardDescription>
               Write assistant behavior, tone, boundaries, call goals, and escalation rules.
-              Update small edits in place, or create a new version for bigger changes.
+              Save polished changes as a new version, then publish when you are ready.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1235,20 +1231,20 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
                 <p>
                   You are editing the live version currently serving calls. Updating
-                  it in place changes what callers and Test Agent use.
+                  it in place changes what callers and preview calls use.
                 </p>
               </div>
             ) : null}
             {isViewingHistoricalVersion ? (
               <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-muted-foreground text-sm">
-                You are viewing an older version. Test Agent still uses the
+                You are viewing an older version. Preview calls still use the
                 published live version.
               </div>
             ) : null}
             {hasUnsavedChanges ? (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-800 text-sm dark:text-amber-300">
                 Draft changes are not live yet. Update V{selectedVersion?.versionNumber ?? 'current'}
-                {' '}or create V{nextVersionNumber}, then publish when ready.
+                {' '}or save V{nextVersionNumber}, then publish when ready.
               </div>
             ) : null}
             {promptHydrated ? (
@@ -1365,11 +1361,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </CardContent>
           </Card>
 
-          <Card className="border-border/70 bg-background shadow-sm">
+          <Card className="bg-background shadow-sm">
             <CardHeader className="pb-2">
               <CardTitle>Version history</CardTitle>
               <CardDescription>
-                The live version stays pinned. Older versions stay stored.
+                Recent versions are highlighted. Open full history only when needed.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -1380,23 +1376,23 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     <p className="mb-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
                       Recent versions
                     </p>
-                    <ul className="max-h-[28rem] divide-y divide-border/70 overflow-auto pr-1">
+                    <ul className="max-h-[28rem] space-y-1 overflow-auto pr-1">
                       {displayedVersions.map((v) => renderVersionRow(v))}
                     </ul>
                   </div>
                   {shouldRenderPinnedLive && pinnedLiveVersion ? (
-                    <div className="space-y-2 border-border border-t pt-3">
+                    <div className="space-y-2 pt-1">
                       <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
                         Also live
                       </p>
-                      <ul className="divide-y divide-border/70">
+                      <ul className="space-y-1">
                         {renderVersionRow(pinnedLiveVersion, {
                           pinnedLive: true,
                         })}
                       </ul>
                     </div>
                   ) : null}
-                  <div className="flex items-center justify-between gap-2 border-border border-t pt-3">
+                  <div className="flex items-center justify-between gap-2 pt-2">
                     <p className="text-muted-foreground text-xs">
                       {showAllVersions
                         ? `Showing all ${versions.length} versions.`
@@ -1412,17 +1408,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         size="xs"
                         onClick={() => setShowAllVersions(false)}
                       >
-                        Show latest 5
+                        Show recent only
                       </Button>
                     ) : canRevealAllVersions ? (
                       <Button
                         type="button"
-                        variant="outline"
+                        variant="ghost"
                         size="xs"
                         disabled={versionHistoryBusy}
                         onClick={() => void loadFullVersionHistory()}
                       >
-                        {versionHistoryBusy ? 'Loading...' : 'View all versions'}
+                        {versionHistoryBusy ? 'Loading...' : 'View full history'}
                       </Button>
                     ) : null}
                   </div>
@@ -1570,7 +1566,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             <DialogHeader>
               <DialogTitle>Publish version {publishTarget.versionNumber}?</DialogTitle>
               <DialogDescription>
-                Marks this version live for Test Agent and production calls. Draft
+                Marks this version live for preview and production calls. Draft
                 snapshots remain stored in history.
               </DialogDescription>
             </DialogHeader>

@@ -62,7 +62,7 @@ export function OrganizationSettingsClient() {
       <Card>
         <CardHeader>
           <CardTitle>General</CardTitle>
-          <CardDescription>Name only for Phase 7.6.</CardDescription>
+          <CardDescription>Update your workspace name.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="max-w-xl space-y-4" onSubmit={save}>

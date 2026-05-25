@@ -170,9 +170,9 @@ export default function AgentsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Agents</h1>
           <p className="mt-1 max-w-xl text-muted-foreground text-sm">
-            Organization{' '}
+            Viewing organization{' '}
             <span className="font-mono text-xs">{activeOrgId ?? '—'}</span>.
-            Switch org in the sidebar to refresh tenant data.
+            Switch organizations to view another workspace.
           </p>
         </div>
         <CreateAgentDialog
@@ -201,8 +201,7 @@ export default function AgentsPage() {
 
       {!loading && activeOrgId && agents.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No agents found. Create one with New Agent or seed the Sirius agent
-          from the API package.
+          No agents found yet. Create your first agent to get started.
         </p>
       ) : null}
 

@@ -89,7 +89,7 @@ export function InviteMemberDialog({
             <DialogHeader>
               <DialogTitle>Invite member</DialogTitle>
               <DialogDescription>
-                Send an organization invitation.
+                Send a workspace invitation.
               </DialogDescription>
             </DialogHeader>
             <label className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -130,7 +130,7 @@ export function InviteMemberDialog({
                 Cancel
               </Button>
               <Button type="submit" disabled={busy}>
-                {busy ? 'Sending...' : 'Send Invite'}
+                {busy ? 'Sending...' : 'Send invitation'}
               </Button>
             </DialogFooter>
           </form>

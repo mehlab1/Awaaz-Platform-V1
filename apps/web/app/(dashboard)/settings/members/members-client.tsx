@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import { format } from 'date-fns';
 
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +39,7 @@ export function MembersClient() {
   const membersApi = useMembers();
   const members = membersApi.members.data ?? [];
   const invitations = membersApi.invitations.data ?? [];
+  const [feedback, setFeedback] = useState<string | null>(null);
 
   if (!membersApi.activeOrgId) {
     return (
@@ -48,6 +51,27 @@ export function MembersClient() {
 
   const invite = async (input: InviteMemberInput) => {
     await membersApi.inviteMember.mutateAsync(input);
+    setFeedback(`Invitation sent to ${input.email.trim()}.`);
+  };
+
+  const resend = async (id: string) => {
+    const pending = invitations.find((item) => item.id === id);
+    await membersApi.resendInvitation.mutateAsync(id);
+    setFeedback(
+      pending
+        ? `Invitation resent to ${pending.email}.`
+        : 'Invitation resent.',
+    );
+  };
+
+  const cancel = async (id: string) => {
+    const pending = invitations.find((item) => item.id === id);
+    await membersApi.cancelInvitation.mutateAsync(id);
+    setFeedback(
+      pending
+        ? `Invitation canceled for ${pending.email}.`
+        : 'Invitation canceled.',
+    );
   };
 
   return (
@@ -56,7 +80,7 @@ export function MembersClient() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Organization users and pending invitations.
+            Team members and outstanding invitations.
           </p>
         </div>
         <InviteMemberDialog
@@ -66,7 +90,7 @@ export function MembersClient() {
         />
       </header>
 
-      <StatusLine error={firstError(membersApi)} />
+      <StatusLine error={firstError(membersApi)} message={feedback} />
 
       <MembersTable members={members} isLoading={membersApi.members.isLoading} />
 
@@ -76,17 +100,23 @@ export function MembersClient() {
           isLoading={membersApi.invitations.isLoading}
           resendId={membersApi.resendInvitation.variables}
           cancelId={membersApi.cancelInvitation.variables}
-          onResend={(id) => membersApi.resendInvitation.mutate(id)}
-          onCancel={(id) => membersApi.cancelInvitation.mutate(id)}
+          onResend={resend}
+          onCancel={cancel}
         />
       ) : null}
     </div>
   );
 }
 
-function StatusLine({ error }: { error: string | null }) {
+function StatusLine({
+  error,
+  message,
+}: {
+  error: string | null;
+  message: string | null;
+}) {
   if (!error) {
-    return null;
+    return message ? <p className="text-sm text-emerald-700">{message}</p> : null;
   }
   return <p className="text-sm text-destructive">{error}</p>;
 }
@@ -183,9 +213,10 @@ function InvitationsTable({
             <TableHeader>
               <TableRow>
                 <TableHead>Email</TableHead>
+                <TableHead>Status</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Created</TableHead>
-                <TableHead>Clerk invite</TableHead>
+                <TableHead>Invitation</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -225,6 +256,9 @@ function InvitationTableRow({
     <TableRow>
       <TableCell>{invitation.email}</TableCell>
       <TableCell>
+        <Badge variant="outline">Pending</Badge>
+      </TableCell>
+      <TableCell>
         <Badge variant="secondary">{invitation.role}</Badge>
       </TableCell>
       <TableCell>{formatDate(invitation.createdAt)}</TableCell>
@@ -234,7 +268,7 @@ function InvitationTableRow({
       <TableCell className="space-x-2 text-right">
         <Button
           type="button"
-          variant="outline"
+          variant="ghost"
           size="sm"
           disabled={isResending || isCancelling}
           onClick={() => onResend(invitation.id)}
@@ -243,7 +277,7 @@ function InvitationTableRow({
         </Button>
         <Button
           type="button"
-          variant="destructive"
+          variant="outline"
           size="sm"
           disabled={isResending || isCancelling}
           onClick={() => onCancel(invitation.id)}
