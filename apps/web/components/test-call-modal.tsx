@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from 'react';
 
 import '@livekit/components-styles';
 
@@ -136,18 +143,48 @@ function addEventLogger(
   return () => emitter?.off?.(event, handler);
 }
 
+function decodeControlPayload(payload: unknown): Record<string, unknown> | null {
+  try {
+    const text =
+      payload instanceof Uint8Array
+        ? new TextDecoder().decode(payload)
+        : typeof payload === 'string'
+          ? payload
+          : '';
+    if (!text) {
+      return null;
+    }
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** User-visible session states for the ribbon badge */
 export type BrowserTestPhaseBadge =
   | 'connecting'
   | 'active'
+  | 'ending'
   | 'ended'
   | 'fetch_error';
 
 interface BrowserTestSession {
+  callId: string;
   serverUrl: string;
   participantToken: string;
   roomName: string;
 }
+
+type BrowserSessionPhase =
+  | 'CONNECTING'
+  | 'LIVE'
+  | 'LISTENING'
+  | 'SPEAKING'
+  | 'ENDING'
+  | 'DISCONNECTED';
 
 export interface TestCallModalProps {
   agentId: string;
@@ -246,16 +283,18 @@ function readSessionDto(body: unknown): BrowserTestSession {
         ? o.token
         : '';
   const roomName = typeof o.roomName === 'string' ? o.roomName : '';
-  if (typeof serverUrl !== 'string' || !participantToken || !serverUrl) {
+  const callId = typeof o.callId === 'string' ? o.callId : '';
+  if (typeof serverUrl !== 'string' || !participantToken || !serverUrl || !callId) {
     throw new Error('Unexpected test-call response.');
   }
-  return { serverUrl, participantToken, roomName };
+  return { callId, serverUrl, participantToken, roomName };
 }
 
 function phaseLabel(p: BrowserTestPhaseBadge): string {
   const labels: Record<BrowserTestPhaseBadge, string> = {
     connecting: 'Connecting',
     active: 'Live',
+    ending: 'Ending',
     ended: 'Ended',
     fetch_error: 'Unavailable',
   };
@@ -427,24 +466,49 @@ function VoiceOrb({
   );
 }
 
-function EndCallToolbar({ className }: { className?: string }) {
+function EndCallToolbar({
+  className,
+  isEnding,
+  onEndSession,
+}: {
+  className?: string;
+  isEnding: boolean;
+  onEndSession: () => Promise<void>;
+}) {
   const { buttonProps } = useDisconnectButton({ stopTracks: true });
   const safeButtonProps = { ...buttonProps } as typeof buttonProps & {
     stopTracks?: unknown;
   };
   delete safeButtonProps.stopTracks;
-  const { disabled, ...rest } = safeButtonProps;
+  const { disabled, onClick, ...rest } = safeButtonProps;
+
+  const handleClick = async (event: MouseEvent<HTMLButtonElement>): Promise<void> => {
+    logTestCallDebug('call_end_requested', { source: 'frontend' });
+    try {
+      await onEndSession();
+    } catch (error: unknown) {
+      logTestCallDebug('call_end_frontend_fallback_disconnect', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      onClick?.(event);
+    }
+  };
 
   return (
     <Button
       type="button"
       variant="destructive"
       {...rest}
-      disabled={!!disabled}
+      disabled={!!disabled || isEnding}
+      onClick={(event) => void handleClick(event)}
       className={cn(rest.className, 'gap-2 rounded-full px-6', className)}
     >
-      <PhoneOff className="h-4 w-4" aria-hidden />
-      End session
+      {isEnding ? (
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+      ) : (
+        <PhoneOff className="h-4 w-4" aria-hidden />
+      )}
+      {isEnding ? 'Ending...' : 'End session'}
     </Button>
   );
 }
@@ -546,12 +610,20 @@ function TranscriptPanel({
 
 interface RoomChromeProps {
   showEndButton: boolean;
+  isEnding: boolean;
   onSessionActive: () => void;
+  onSessionMode: (mode: VoiceUiMode) => void;
+  onRemoteEndRequested: () => void;
+  onEndSession: () => Promise<void>;
 }
 
 function BrowserTestRoomChrome({
   showEndButton,
+  isEnding,
   onSessionActive,
+  onSessionMode,
+  onRemoteEndRequested,
+  onEndSession,
 }: RoomChromeProps) {
   const room = useRoomContext();
   const {
@@ -719,6 +791,10 @@ function BrowserTestRoomChrome({
   }, [agent, detectedAgent, remoteParticipants]);
 
   useEffect(() => {
+    onSessionMode(mode);
+  }, [mode, onSessionMode]);
+
+  useEffect(() => {
     logTestCallDebug(
       isMicrophonePublished
         ? 'microphone_publish_ready'
@@ -757,6 +833,18 @@ function BrowserTestRoomChrome({
       }),
       addEventLogger(room, RoomEvent.Disconnected, (reason) => {
         logTestCallDebug('room_disconnected', { reason });
+      }),
+      addEventLogger(room, RoomEvent.DataReceived, (payload, participant, kind, topic) => {
+        void participant;
+        void kind;
+        const message = decodeControlPayload(payload);
+        if (topic === 'awaaz.call.control' && message?.type === 'end_call') {
+          logTestCallDebug('call_end_frontend_synced', {
+            source: 'livekit_data',
+            reason: message.reason,
+          });
+          onRemoteEndRequested();
+        }
       }),
       addEventLogger(room, RoomEvent.ParticipantConnected, (participant) => {
         logTestCallDebug('participant_connected', describeParticipant(participant));
@@ -821,7 +909,7 @@ function BrowserTestRoomChrome({
     ];
 
     return () => cleanups.forEach((cleanup) => cleanup());
-  }, [localParticipant, room]);
+  }, [localParticipant, onRemoteEndRequested, room]);
 
   useEffect(() => {
     if (isRoomConnected && isMicrophonePublished) {
@@ -988,7 +1076,12 @@ function BrowserTestRoomChrome({
               )}
               {isMicrophoneEnabled ? 'Mute' : 'Unmute'}
             </Button>
-            {showEndButton ? <EndCallToolbar /> : null}
+            {showEndButton ? (
+              <EndCallToolbar
+                isEnding={isEnding}
+                onEndSession={onEndSession}
+              />
+            ) : null}
           </div>
         </section>
 
@@ -1006,13 +1099,35 @@ export function TestCallModal(props: TestCallModalProps) {
   const [session, setSession] = useState<BrowserTestSession | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  /** After LiveKit mounts: tracks WebRTC handshake + teardown */
-  const [rtcPhase, setRtcPhase] = useState<
-    'connecting' | 'active' | 'ended' | null
-  >(null);
+  /** Mirrored session state from backend end requests + LiveKit room events. */
+  const [sessionPhase, setSessionPhase] =
+    useState<BrowserSessionPhase | null>(null);
 
   const markRtcActive = useCallback(() => {
-    setRtcPhase((phase) => (phase === 'ended' ? phase : 'active'));
+    setSessionPhase((phase) =>
+      phase === 'ENDING' || phase === 'DISCONNECTED' ? phase : 'LIVE',
+    );
+  }, []);
+
+  const markSessionMode = useCallback((mode: VoiceUiMode) => {
+    setSessionPhase((phase) => {
+      if (phase === 'ENDING' || phase === 'DISCONNECTED') {
+        return phase;
+      }
+      if (mode === 'speaking') {
+        return 'SPEAKING';
+      }
+      if (mode === 'listening') {
+        return 'LISTENING';
+      }
+      return phase === null || phase === 'CONNECTING' ? 'LIVE' : phase;
+    });
+  }, []);
+
+  const markRemoteEndRequested = useCallback(() => {
+    setSessionPhase((phase) =>
+      phase === 'DISCONNECTED' ? phase : 'ENDING',
+    );
   }, []);
 
   useEffect(() => {
@@ -1020,7 +1135,7 @@ export function TestCallModal(props: TestCallModalProps) {
       setSession(null);
       setErrorMessage(null);
       setFetchFailed(false);
-      setRtcPhase(null);
+      setSessionPhase(null);
       return undefined;
     }
 
@@ -1028,7 +1143,7 @@ export function TestCallModal(props: TestCallModalProps) {
     setSession(null);
     setErrorMessage(null);
     setFetchFailed(false);
-    setRtcPhase(null);
+    setSessionPhase(null);
 
     void (async () => {
       try {
@@ -1057,7 +1172,7 @@ export function TestCallModal(props: TestCallModalProps) {
         } catch {
           /* ignore */
         }
-        setRtcPhase('connecting');
+        setSessionPhase('CONNECTING');
       } catch (e) {
         if (aborted) {
           return;
@@ -1066,7 +1181,7 @@ export function TestCallModal(props: TestCallModalProps) {
         setErrorMessage(msg);
         setFetchFailed(true);
         setSession(null);
-        setRtcPhase(null);
+        setSessionPhase(null);
       }
     })();
 
@@ -1075,6 +1190,27 @@ export function TestCallModal(props: TestCallModalProps) {
     };
   }, [open, agentId, apiCall, reloadKey]);
 
+  const requestEndSession = useCallback(async (): Promise<void> => {
+    if (!session) {
+      return;
+    }
+    setSessionPhase((phase) =>
+      phase === 'DISCONNECTED' ? phase : 'ENDING',
+    );
+    const res = await apiCall(
+      `/api/v1/agents/${agentId}/test-call/${session.callId}/end`,
+      { method: 'POST' },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text.trim() || res.statusText);
+    }
+    logTestCallDebug('call_end_frontend_synced', {
+      source: 'api',
+      callId: session.callId,
+    });
+  }, [agentId, apiCall, session]);
+
   const badgePhase = useMemo((): BrowserTestPhaseBadge => {
     if (fetchFailed) {
       return 'fetch_error';
@@ -1082,26 +1218,30 @@ export function TestCallModal(props: TestCallModalProps) {
     if (!session) {
       return 'connecting';
     }
-    switch (rtcPhase) {
-      case 'ended':
+    switch (sessionPhase) {
+      case 'DISCONNECTED':
         return 'ended';
-      case 'active':
+      case 'ENDING':
+        return 'ending';
+      case 'LIVE':
+      case 'LISTENING':
+      case 'SPEAKING':
         return 'active';
-      case 'connecting':
+      case 'CONNECTING':
       default:
         return 'connecting';
     }
-  }, [fetchFailed, rtcPhase, session]);
+  }, [fetchFailed, sessionPhase, session]);
 
   useEffect(() => {
-    if (rtcPhase === 'ended') {
+    if (sessionPhase === 'DISCONNECTED') {
       try {
         window.dispatchEvent(new CustomEvent('awaaz:call-ended'));
       } catch {
         /* ignore */
       }
     }
-  }, [rtcPhase]);
+  }, [sessionPhase]);
 
   const badgeVariant =
     badgePhase === 'active'
@@ -1177,7 +1317,7 @@ export function TestCallModal(props: TestCallModalProps) {
             </Button>
           </div>
         </div>
-      ) : session && rtcPhase !== 'ended' ? (
+      ) : session && sessionPhase !== 'DISCONNECTED' ? (
         <LiveKitRoom
           key={`${reloadKey}:${session.roomName}`}
           data-lk-theme="default"
@@ -1190,7 +1330,11 @@ export function TestCallModal(props: TestCallModalProps) {
           onConnected={markRtcActive}
           onDisconnected={(reason?: DisconnectReason) => {
             logTestCallDebug('livekit_room_disconnected', { reason });
-            setRtcPhase('ended');
+            logTestCallDebug('call_end_frontend_synced', {
+              source: 'room_disconnected',
+              reason,
+            });
+            setSessionPhase('DISCONNECTED');
           }}
           onError={(error) => {
             logTestCallDebug('livekit_room_error', { message: error.message });
@@ -1201,11 +1345,15 @@ export function TestCallModal(props: TestCallModalProps) {
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           <BrowserTestRoomChrome
-            showEndButton={rtcPhase === 'active'}
+            showEndButton={sessionPhase !== 'CONNECTING'}
+            isEnding={sessionPhase === 'ENDING'}
             onSessionActive={markRtcActive}
+            onSessionMode={markSessionMode}
+            onRemoteEndRequested={markRemoteEndRequested}
+            onEndSession={requestEndSession}
           />
         </LiveKitRoom>
-      ) : session && rtcPhase === 'ended' ? (
+      ) : session && sessionPhase === 'DISCONNECTED' ? (
         <div className="grid flex-1 place-items-center px-6 text-center">
           <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-sm">
             <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-muted text-muted-foreground">
@@ -1247,12 +1395,12 @@ export function TestCallModal(props: TestCallModalProps) {
         </div>
       )}
 
-      {session !== null && rtcPhase === 'connecting' && !fetchFailed ? (
+      {session !== null && sessionPhase === 'CONNECTING' && !fetchFailed ? (
         <footer className="border-t border-border bg-muted/30 px-8 py-3 text-center text-muted-foreground text-xs">
           Allow microphone access when the browser asks.
         </footer>
       ) : null}
-      {/* rtcPhase changes are observed via effect to dispatch call-ended events */}
+      {/* sessionPhase changes are observed via effect to dispatch call-ended events */}
     </div>
   );
 }

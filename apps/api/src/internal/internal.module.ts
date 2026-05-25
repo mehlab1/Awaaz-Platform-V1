@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { LiveKitModule } from '../livekit/livekit.module';
 import { QueuesModule } from '../queues/queues.module';
 import { VoicesModule } from '../voices/voices.module';
 import { InternalAuthGuard } from './internal-auth.guard';
@@ -7,7 +8,7 @@ import { InternalController } from './internal.controller';
 import { InternalService } from './internal.service';
 
 @Module({
-  imports: [QueuesModule, VoicesModule],
+  imports: [LiveKitModule, QueuesModule, VoicesModule],
   controllers: [InternalController],
   providers: [InternalAuthGuard, InternalService],
 })

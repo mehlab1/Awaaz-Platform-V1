@@ -2,6 +2,10 @@ import { IsEnum, IsObject, IsOptional, IsString } from 'class-validator';
 import { CallDirection } from '@prisma/client';
 
 export class StartCallDto {
+  @IsOptional()
+  @IsString()
+  callId?: string;
+
   @IsString()
   liveKitRoomId!: string;
 

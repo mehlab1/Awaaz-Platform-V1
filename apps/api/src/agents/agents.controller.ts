@@ -68,6 +68,20 @@ export class AgentsController {
     );
   }
 
+  @Post(':id/test-call/:callId/end')
+  @Roles(Role.BUILDER)
+  endBrowserTestCall(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Param('callId') callId: string,
+  ) {
+    return this.agents.endBrowserTestCall(
+      organizationIdFromRequest(req),
+      id,
+      callId,
+    );
+  }
+
   @Get(':id')
   @Roles(Role.VIEWER)
   get(@Req() req: Request, @Param('id') id: string) {

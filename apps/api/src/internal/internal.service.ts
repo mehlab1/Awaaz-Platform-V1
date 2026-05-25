@@ -7,6 +7,7 @@ import {
 } from '@prisma/client';
 import type { Queue } from 'bullmq';
 
+import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
 import {
@@ -28,6 +29,7 @@ export class InternalService {
     private readonly transcriptQueue: Queue<TranscriptJobData>,
     private readonly transcriptAssembly: TranscriptAssemblyService,
     private readonly voices: VoicesService,
+    private readonly liveKitBrowserTest: LiveKitBrowserTestService,
   ) {}
 
   async getAgentConfig(agentId: string) {
@@ -75,25 +77,57 @@ export class InternalService {
       throw new NotFoundException('Agent not found');
     }
 
+    const startedAt = new Date();
+    const metadata = this.toJson(dto.metadata);
     const data = {
       agentId: dto.agentId,
       agentVersionId: agent.currentVersionId,
       status: CallStatus.IN_PROGRESS,
       fromNumber: dto.fromNumber,
       toNumber: dto.toNumber,
-      metadata: this.toJson(dto.metadata),
+      metadata,
     };
     const roomName = dto.liveKitRoomName?.trim();
+    const canonicalCallId = dto.callId?.trim();
+    if (canonicalCallId) {
+      const existing = await this.prisma.call.findUnique({
+        where: { id: canonicalCallId },
+        select: { id: true, metadata: true, liveKitRoomId: true, startedAt: true },
+      });
+      if (existing) {
+        const reconciled = await this.prisma.call.update({
+          where: { id: existing.id },
+          data: {
+            ...data,
+            liveKitRoomId: dto.liveKitRoomId,
+            startedAt: existing.startedAt ?? startedAt,
+            metadata: this.mergeMetadata(existing.metadata, dto.metadata),
+          },
+        });
+        this.logger.log(
+          `call_identity_reconciled call_id=${existing.id} liveKitRoomId=${dto.liveKitRoomId} roomName=${roomName ?? '(none)'}`,
+        );
+        return reconciled;
+      }
+      this.logger.warn(
+        `call_identity_existing_missing call_id=${canonicalCallId}; falling back to room reconciliation`,
+      );
+    }
+
     if (roomName && roomName !== dto.liveKitRoomId) {
       const existingBySid = await this.prisma.call.findUnique({
         where: { liveKitRoomId: dto.liveKitRoomId },
         select: { id: true },
       });
       if (existingBySid) {
-        return this.prisma.call.update({
+        const reconciled = await this.prisma.call.update({
           where: { id: existingBySid.id },
           data,
         });
+        this.logger.log(
+          `call_identity_existing call_id=${existingBySid.id} liveKitRoomId=${dto.liveKitRoomId}`,
+        );
+        return reconciled;
       }
 
       const placeholder = await this.prisma.call.findFirst({
@@ -106,34 +140,44 @@ export class InternalService {
         select: { id: true },
       });
       if (placeholder) {
-        return this.prisma.call.update({
+        const reconciled = await this.prisma.call.update({
           where: { id: placeholder.id },
           data: {
             ...data,
             liveKitRoomId: dto.liveKitRoomId,
-            startedAt: new Date(),
+            startedAt,
           },
         });
+        this.logger.log(
+          `call_identity_reconciled call_id=${placeholder.id} liveKitRoomId=${dto.liveKitRoomId} roomName=${roomName}`,
+        );
+        return reconciled;
       }
     }
 
-    return this.prisma.call.upsert({
+    const created = await this.prisma.call.upsert({
       where: { liveKitRoomId: dto.liveKitRoomId },
       create: {
         organizationId: dto.organizationId,
         ...data,
         liveKitRoomId: dto.liveKitRoomId,
         direction: dto.direction,
-        startedAt: new Date(),
+        startedAt,
       },
       update: data,
     });
+    this.logger.log(
+      `call_identity_created call_id=${created.id} liveKitRoomId=${dto.liveKitRoomId}`,
+    );
+    return created;
   }
 
   async endCall(callId: string, dto: EndCallDto): Promise<{ ok: true }> {
     const call = await this.prisma.call.findUnique({
       where: { id: callId },
       select: {
+        id: true,
+        status: true,
         startedAt: true,
         liveKitRoomId: true,
         fromNumber: true,
@@ -142,6 +186,18 @@ export class InternalService {
     });
     if (!call) {
       throw new NotFoundException('Call not found');
+    }
+    if (call.status === CallStatus.COMPLETED) {
+      this.logger.log(`call_end_existing call_id=${callId}`);
+      const roomName = this.browserRoomName(call);
+      if (this.isBrowserPreviewCall(call) && roomName) {
+        await this.liveKitBrowserTest.closeBrowserRoom({
+          roomName,
+          callId,
+          reason: dto.reason ?? 'duplicate end call',
+        });
+      }
+      return { ok: true };
     }
 
     const endedAt = new Date();
@@ -168,6 +224,14 @@ export class InternalService {
     const enqueued = await this.enqueueTranscriptJob(callId, call.liveKitRoomId);
     if (!enqueued && this.isBrowserPreviewCall(updatedCall)) {
       await this.assembleTranscriptFallback(callId, call.liveKitRoomId);
+    }
+    const roomName = this.browserRoomName(updatedCall);
+    if (this.isBrowserPreviewCall(updatedCall) && roomName) {
+      await this.liveKitBrowserTest.closeBrowserRoom({
+        roomName,
+        callId,
+        reason: dto.reason ?? 'call completed',
+      });
     }
     return { ok: true };
   }
@@ -323,5 +387,21 @@ export class InternalService {
       ...base,
       ...(update ?? {}),
     } as Prisma.InputJsonObject;
+  }
+
+  private browserRoomName(call: {
+    liveKitRoomId: string | null;
+    metadata: Prisma.JsonValue | null;
+  }): string | null {
+    const metadata =
+      call.metadata && typeof call.metadata === 'object' && !Array.isArray(call.metadata)
+        ? (call.metadata as Record<string, unknown>)
+        : {};
+    const roomName = metadata.liveKitRoomName;
+    if (typeof roomName === 'string' && roomName.trim()) {
+      return roomName.trim();
+    }
+    const liveKitRoomId = call.liveKitRoomId?.trim();
+    return liveKitRoomId?.startsWith('test-') ? liveKitRoomId : null;
   }
 }

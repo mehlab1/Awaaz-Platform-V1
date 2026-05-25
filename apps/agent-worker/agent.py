@@ -6,6 +6,7 @@ import re
 import time
 from datetime import datetime, timezone
 from collections.abc import AsyncIterable, Mapping
+from dataclasses import dataclass
 
 from livekit.agents import AutoSubscribe, JobContext, llm
 from livekit.agents.llm import ChatContext, LLMStream
@@ -42,6 +43,7 @@ class CallLifecycle:
         self._speech_events = None
         self._end_requested = False
         self._end_requested_at: float | None = None
+        self._wait_for_final_playback = True
         self._playback_active = False
         self._playbacks_after_end_request = 0
         self._shutdown_started = False
@@ -56,7 +58,12 @@ class CallLifecycle:
     def set_speech_events(self, speech_events: object) -> None:
         self._speech_events = speech_events
 
-    async def request_end(self, reason: str) -> None:
+    async def request_end(
+        self,
+        reason: str,
+        *,
+        wait_for_final_playback: bool = True,
+    ) -> None:
         if self._shutdown_started:
             logger.info(
                 "call_end_request_ignored_after_shutdown call_id=%s reason=%s",
@@ -68,15 +75,25 @@ class CallLifecycle:
         if not self._end_requested:
             self._end_requested = True
             self._end_requested_at = time.monotonic()
+            self._wait_for_final_playback = wait_for_final_playback
             self._playbacks_after_end_request = 0
             logger.info(
-                "call_end_requested call_id=%s reason=%s playback_active=%s timeout_seconds=%s",
+                "call_end_requested call_id=%s reason=%s playback_active=%s "
+                "wait_for_final_playback=%s timeout_seconds=%s",
                 self._call_id,
                 reason,
                 self._playback_active,
+                self._wait_for_final_playback,
                 self._timeout_seconds,
             )
+            logger.info(
+                "call_end_authoritative call_id=%s reason=%s owner=worker",
+                self._call_id,
+                reason,
+            )
             self._timeout_task = asyncio.create_task(self._finish_after_timeout())
+            if not self._wait_for_final_playback and not self._playback_active:
+                self._schedule_finish("end requested while idle")
             return
 
         logger.info(
@@ -110,7 +127,10 @@ class CallLifecycle:
         if (
             self._end_requested
             and not interrupted
-            and self._playbacks_after_end_request > 0
+            and (
+                self._playbacks_after_end_request > 0
+                or not self._wait_for_final_playback
+            )
         ):
             self._schedule_finish("final response playback completed")
         elif self._end_requested and not interrupted:
@@ -155,6 +175,11 @@ class CallLifecycle:
             elapsed_ms(self._end_requested_at, time.monotonic()),
         )
         await asyncio.sleep(self._drain_seconds)
+        logger.info(
+            "call_end_playback_drained call_id=%s reason=%s",
+            self._call_id,
+            reason,
+        )
 
         flush = getattr(self._speech_events, "flush", None)
         if callable(flush):
@@ -218,6 +243,15 @@ class AwaazAgent:
         timing = PipelineTiming()
         lifecycle = CallLifecycle(ctx, call_id)
         assistant = create_assistant(config, rime, AwaazTools(lifecycle), timing)
+        register_call_control_events(ctx.room, lifecycle, call_id)
+        if room_metadata.get("endRequestedAt"):
+            asyncio.create_task(
+                lifecycle.request_end(
+                    string_value(room_metadata, "endRequestedReason", "frontend end session")
+                    or "frontend end session",
+                    wait_for_final_playback=False,
+                )
+            )
         speech_events = register_events(
             assistant,
             api,
@@ -390,72 +424,89 @@ class SpeechEventSink:
             logger.warning("Failed to emit speech event", exc_info=error)
 
 
+@dataclass
+class UserTurnTiming:
+    turn_id: int
+    started_at: float
+    started_at_iso: str
+    stopped_at: float | None = None
+    stopped_at_iso: str | None = None
+    final_transcript_at: float | None = None
+    final_transcript_at_iso: str | None = None
+
+
+@dataclass
+class ResponseTiming:
+    response_id: int
+    turn_id: int
+    user_started_at: float | None
+    user_started_at_iso: str | None
+    user_stopped_at: float | None
+    user_stopped_at_iso: str | None
+    final_transcript_at: float | None
+    final_transcript_at_iso: str | None
+    llm_started_at: float | None = None
+    llm_started_at_iso: str | None = None
+    first_llm_token_at: float | None = None
+    first_llm_token_at_iso: str | None = None
+    llm_finished_at: float | None = None
+    llm_finished_at_iso: str | None = None
+    tts_text_started_at: float | None = None
+    tts_text_started_at_iso: str | None = None
+    tts_text_finished_at_iso: str | None = None
+    playback_started_at: float | None = None
+    playback_started_at_iso: str | None = None
+    playback_stopped_at: float | None = None
+    playback_stopped_at_iso: str | None = None
+    interrupted: bool = False
+
+    def response_reference_at(self) -> float | None:
+        return self.user_stopped_at or self.final_transcript_at or self.user_started_at
+
+
 class PipelineTiming:
     def __init__(self) -> None:
         self.turn_id = 0
-        self.user_started_at: float | None = None
-        self.user_stopped_at: float | None = None
-        self.user_started_at_iso: str | None = None
-        self.user_stopped_at_iso: str | None = None
-        self.final_transcript_at: float | None = None
-        self.final_transcript_at_iso: str | None = None
-        self.llm_started_at: float | None = None
-        self.llm_started_at_iso: str | None = None
-        self.first_llm_token_at: float | None = None
-        self.first_llm_token_at_iso: str | None = None
-        self.llm_finished_at: float | None = None
-        self.llm_finished_at_iso: str | None = None
-        self.tts_text_started_at: float | None = None
-        self.tts_text_started_at_iso: str | None = None
-        self.tts_text_finished_at_iso: str | None = None
-        self.playback_started_at: float | None = None
-        self.playback_stopped_at: float | None = None
-        self.playback_started_at_iso: str | None = None
-        self.playback_stopped_at_iso: str | None = None
+        self.response_id = 0
+        self.current_user: UserTurnTiming | None = None
+        self.active_response: ResponseTiming | None = None
+        self.last_response: ResponseTiming | None = None
         self.barge_in_requested_at: float | None = None
         self.barge_in_reason: str | None = None
 
     def mark_user_started(self) -> None:
         self.turn_id += 1
-        self.user_started_at = time.monotonic()
-        self.user_started_at_iso = utc_now_iso()
-        self.user_stopped_at = None
-        self.user_stopped_at_iso = None
-        self.final_transcript_at = None
-        self.final_transcript_at_iso = None
-        self.llm_started_at = None
-        self.llm_started_at_iso = None
-        self.first_llm_token_at = None
-        self.first_llm_token_at_iso = None
-        self.llm_finished_at = None
-        self.llm_finished_at_iso = None
-        self.tts_text_started_at = None
-        self.tts_text_started_at_iso = None
-        self.tts_text_finished_at_iso = None
-        self.playback_started_at = None
-        self.playback_stopped_at = None
-        self.playback_started_at_iso = None
-        self.playback_stopped_at_iso = None
+        self.current_user = UserTurnTiming(
+            turn_id=self.turn_id,
+            started_at=time.monotonic(),
+            started_at_iso=utc_now_iso(),
+        )
         logger.info("voice_turn_started turn=%s", self.turn_id)
 
     def mark_user_stopped(self) -> None:
-        self.user_stopped_at = time.monotonic()
-        self.user_stopped_at_iso = utc_now_iso()
+        if self.current_user is None:
+            self.mark_user_started()
+        assert self.current_user is not None
+        self.current_user.stopped_at = time.monotonic()
+        self.current_user.stopped_at_iso = utc_now_iso()
         logger.info(
             "voice_user_stopped turn=%s speech_ms=%s",
-            self.turn_id,
-            elapsed_ms(self.user_started_at, self.user_stopped_at),
+            self.current_user.turn_id,
+            elapsed_ms(self.current_user.started_at, self.current_user.stopped_at),
         )
 
     def mark_final_transcript(self, text: str) -> None:
-        self.final_transcript_at = time.monotonic()
-        self.final_transcript_at_iso = utc_now_iso()
+        if self.current_user is None:
+            self.mark_user_started()
+        assert self.current_user is not None
+        self.current_user.final_transcript_at = time.monotonic()
+        self.current_user.final_transcript_at_iso = utc_now_iso()
         logger.info(
             "voice_stt_final turn=%s chars=%s since_user_start_ms=%s since_user_stop_ms=%s text=%r",
-            self.turn_id,
+            self.current_user.turn_id,
             len(text),
-            elapsed_ms(self.user_started_at, self.final_transcript_at),
-            elapsed_ms(self.user_stopped_at, self.final_transcript_at),
+            elapsed_ms(self.current_user.started_at, self.current_user.final_transcript_at),
+            elapsed_ms(self.current_user.stopped_at, self.current_user.final_transcript_at),
             text[:120],
         )
 
@@ -464,17 +515,19 @@ class PipelineTiming:
         assistant: VoiceAssistant,
         chat_ctx: ChatContext,
     ) -> LLMStream:
-        self.llm_started_at = time.monotonic()
-        self.llm_started_at_iso = utc_now_iso()
+        response = self._new_response()
+        response.llm_started_at = time.monotonic()
+        response.llm_started_at_iso = utc_now_iso()
         user_text = ""
         if chat_ctx.messages:
             user_text = message_text(chat_ctx.messages[-1])
         logger.info(
-            "voice_llm_start turn=%s user_chars=%s since_final_ms=%s since_user_stop_ms=%s",
-            self.turn_id,
+            "voice_llm_start turn=%s response=%s user_chars=%s since_final_ms=%s since_user_stop_ms=%s",
+            response.turn_id,
+            response.response_id,
             len(user_text),
-            elapsed_ms(self.final_transcript_at, self.llm_started_at),
-            elapsed_ms(self.user_stopped_at, self.llm_started_at),
+            elapsed_ms(response.final_transcript_at, response.llm_started_at),
+            elapsed_ms(response.user_stopped_at, response.llm_started_at),
         )
         stream = assistant.llm.chat(
             chat_ctx=chat_ctx,
@@ -482,94 +535,106 @@ class PipelineTiming:
             temperature=0.3,
             parallel_tool_calls=False,
         )
-        return TimedLLMStream(stream, self)
+        return TimedLLMStream(stream, self, response)
 
     def before_tts(
         self,
         _assistant: VoiceAssistant,
         text: str | AsyncIterable[str],
     ) -> str | AsyncIterable[str]:
+        response = self._ensure_response()
         if isinstance(text, str):
-            self.mark_tts_text_started(text)
-            self.mark_tts_text_finished(len(text))
+            self.mark_tts_text_started(response, text)
+            self.mark_tts_text_finished(response, len(text))
             return text
-        return self._timed_tts_text(text)
+        return self._timed_tts_text(text, response)
 
     async def _timed_tts_text(
         self,
         source: AsyncIterable[str],
+        response: ResponseTiming,
     ) -> AsyncIterable[str]:
         chars = 0
         async for segment in source:
-            if segment and self.tts_text_started_at is None:
-                self.mark_tts_text_started(segment)
+            if segment and response.tts_text_started_at is None:
+                self.mark_tts_text_started(response, segment)
             chars += len(segment)
             yield segment
-        self.mark_tts_text_finished(chars)
+        self.mark_tts_text_finished(response, chars)
 
-    def mark_first_llm_token(self) -> None:
-        self.first_llm_token_at = time.monotonic()
-        self.first_llm_token_at_iso = utc_now_iso()
+    def mark_first_llm_token(self, response: ResponseTiming) -> None:
+        response.first_llm_token_at = time.monotonic()
+        response.first_llm_token_at_iso = utc_now_iso()
         logger.info(
-            "voice_llm_first_token turn=%s llm_first_token_ms=%s since_user_stop_ms=%s",
-            self.turn_id,
-            elapsed_ms(self.llm_started_at, self.first_llm_token_at),
-            elapsed_ms(self.user_stopped_at, self.first_llm_token_at),
+            "voice_llm_first_token turn=%s response=%s llm_first_token_ms=%s since_user_stop_ms=%s",
+            response.turn_id,
+            response.response_id,
+            elapsed_ms(response.llm_started_at, response.first_llm_token_at),
+            elapsed_ms(response.user_stopped_at, response.first_llm_token_at),
         )
 
-    def mark_llm_finished(self) -> None:
-        self.llm_finished_at = time.monotonic()
-        self.llm_finished_at_iso = utc_now_iso()
+    def mark_llm_finished(self, response: ResponseTiming) -> None:
+        response.llm_finished_at = time.monotonic()
+        response.llm_finished_at_iso = utc_now_iso()
         logger.info(
-            "voice_llm_done turn=%s llm_total_ms=%s since_user_stop_ms=%s",
-            self.turn_id,
-            elapsed_ms(self.llm_started_at, self.llm_finished_at),
-            elapsed_ms(self.user_stopped_at, self.llm_finished_at),
+            "voice_llm_done turn=%s response=%s llm_total_ms=%s since_user_stop_ms=%s",
+            response.turn_id,
+            response.response_id,
+            elapsed_ms(response.llm_started_at, response.llm_finished_at),
+            elapsed_ms(response.user_stopped_at, response.llm_finished_at),
         )
 
-    def mark_tts_text_started(self, text: str) -> None:
-        self.tts_text_started_at = time.monotonic()
-        self.tts_text_started_at_iso = utc_now_iso()
+    def mark_tts_text_started(self, response: ResponseTiming, text: str) -> None:
+        response.tts_text_started_at = time.monotonic()
+        response.tts_text_started_at_iso = utc_now_iso()
         logger.info(
-            "voice_tts_text_start turn=%s since_llm_start_ms=%s since_first_llm_token_ms=%s preview=%r",
-            self.turn_id,
-            elapsed_ms(self.llm_started_at, self.tts_text_started_at),
-            elapsed_ms(self.first_llm_token_at, self.tts_text_started_at),
+            "voice_tts_text_start turn=%s response=%s since_llm_start_ms=%s since_first_llm_token_ms=%s preview=%r",
+            response.turn_id,
+            response.response_id,
+            elapsed_ms(response.llm_started_at, response.tts_text_started_at),
+            elapsed_ms(response.first_llm_token_at, response.tts_text_started_at),
             text[:80],
         )
 
-    def mark_tts_text_finished(self, chars: int) -> None:
-        self.tts_text_finished_at_iso = utc_now_iso()
+    def mark_tts_text_finished(self, response: ResponseTiming, chars: int) -> None:
+        response.tts_text_finished_at_iso = utc_now_iso()
         logger.info(
-            "voice_tts_text_done turn=%s chars=%s since_tts_text_start_ms=%s",
-            self.turn_id,
+            "voice_tts_text_done turn=%s response=%s chars=%s since_tts_text_start_ms=%s",
+            response.turn_id,
+            response.response_id,
             chars,
-            elapsed_ms(self.tts_text_started_at, time.monotonic()),
+            elapsed_ms(response.tts_text_started_at, time.monotonic()),
         )
 
     def mark_playback_started(self) -> None:
-        self.playback_started_at = time.monotonic()
-        self.playback_started_at_iso = utc_now_iso()
+        response = self._ensure_response()
+        response.playback_started_at = time.monotonic()
+        response.playback_started_at_iso = utc_now_iso()
         logger.info(
-            "voice_playback_started turn=%s total_from_user_stop_ms=%s total_from_final_ms=%s since_llm_start_ms=%s",
-            self.turn_id,
-            elapsed_ms(self.user_stopped_at, self.playback_started_at),
-            elapsed_ms(self.final_transcript_at, self.playback_started_at),
-            elapsed_ms(self.llm_started_at, self.playback_started_at),
+            "voice_playback_started turn=%s response=%s total_from_user_stop_ms=%s total_from_final_ms=%s since_llm_start_ms=%s",
+            response.turn_id,
+            response.response_id,
+            elapsed_ms(response.user_stopped_at, response.playback_started_at),
+            elapsed_ms(response.final_transcript_at, response.playback_started_at),
+            elapsed_ms(response.llm_started_at, response.playback_started_at),
         )
 
     def mark_playback_stopped(self, interrupted: bool = False) -> None:
-        self.playback_stopped_at = time.monotonic()
-        self.playback_stopped_at_iso = utc_now_iso()
+        response = self._ensure_response()
+        response.playback_stopped_at = time.monotonic()
+        response.playback_stopped_at_iso = utc_now_iso()
+        response.interrupted = interrupted
+        self.last_response = response
         logger.info(
-            "voice_playback_stopped turn=%s interrupted=%s first_audio_latency_ms=%s "
+            "voice_playback_stopped turn=%s response=%s interrupted=%s first_audio_latency_ms=%s "
             "playback_ms=%s total_response_ms=%s total_turn_ms=%s",
-            self.turn_id,
+            response.turn_id,
+            response.response_id,
             interrupted,
-            self.first_audio_latency_ms(),
-            elapsed_ms(self.playback_started_at, time.monotonic()),
-            self.total_response_ms(),
-            elapsed_ms(self.user_started_at, time.monotonic()),
+            self.first_audio_latency_ms(response),
+            elapsed_ms(response.playback_started_at, response.playback_stopped_at),
+            self.total_response_ms(response),
+            elapsed_ms(response.user_started_at, response.playback_stopped_at),
         )
 
     def mark_barge_in_requested(self, reason: str) -> None:
@@ -577,50 +642,106 @@ class PipelineTiming:
         self.barge_in_reason = reason
 
     def response_latency_ms(self) -> int | None:
-        return self.first_audio_latency_ms()
+        return self.first_audio_latency_ms(self._event_response())
 
-    def first_audio_latency_ms(self) -> int | None:
-        return elapsed_ms(self.user_response_reference_at(), self.playback_started_at)
+    def first_audio_latency_ms(self, response: ResponseTiming | None) -> int | None:
+        if response is None:
+            return None
+        return elapsed_ms(response.response_reference_at(), response.playback_started_at)
 
-    def playback_duration_ms(self) -> int | None:
-        return elapsed_ms(self.playback_started_at, self.playback_stopped_at)
+    def playback_duration_ms(self, response: ResponseTiming | None) -> int | None:
+        if response is None:
+            return None
+        return elapsed_ms(response.playback_started_at, response.playback_stopped_at)
 
-    def total_response_ms(self) -> int | None:
-        return elapsed_ms(self.user_response_reference_at(), self.playback_stopped_at)
-
-    def user_response_reference_at(self) -> float | None:
-        return self.user_stopped_at or self.final_transcript_at or self.user_started_at
+    def total_response_ms(self, response: ResponseTiming | None) -> int | None:
+        if response is None:
+            return None
+        return elapsed_ms(response.response_reference_at(), response.playback_stopped_at)
 
     def agent_response_metrics(self) -> dict[str, object]:
+        response = self._event_response()
         metrics: dict[str, object] = {}
-        first_audio_latency_ms = self.first_audio_latency_ms()
-        playback_duration_ms = self.playback_duration_ms()
-        total_response_ms = self.total_response_ms()
+        first_audio_latency_ms = self.first_audio_latency_ms(response)
+        playback_duration_ms = self.playback_duration_ms(response)
+        total_response_ms = self.total_response_ms(response)
         if first_audio_latency_ms is not None:
             metrics["firstAudioLatencyMs"] = first_audio_latency_ms
         if playback_duration_ms is not None:
             metrics["playbackDurationMs"] = playback_duration_ms
         if total_response_ms is not None:
             metrics["totalResponseMs"] = total_response_ms
+        if response is not None:
+            metrics["turnId"] = response.turn_id
+            metrics["responseId"] = response.response_id
         return metrics
 
     def user_speech_payload(self) -> dict[str, object]:
+        turn = self.current_user
+        if turn is None:
+            return {}
         return self._payload_window(
-            self.user_started_at_iso,
-            self.final_transcript_at_iso or self.user_stopped_at_iso,
-            self.user_started_at,
-            self.final_transcript_at or self.user_stopped_at,
+            turn.started_at_iso,
+            turn.final_transcript_at_iso or turn.stopped_at_iso,
+            turn.started_at,
+            turn.final_transcript_at or turn.stopped_at,
         )
 
     def agent_speech_payload(self) -> dict[str, object]:
-        start_iso = self.playback_started_at_iso or self.tts_text_started_at_iso or self.llm_started_at_iso
-        end_iso = self.playback_stopped_at_iso or self.tts_text_finished_at_iso or utc_now_iso()
+        response = self._event_response()
+        if response is None:
+            return {}
+        start_iso = (
+            response.playback_started_at_iso
+            or response.tts_text_started_at_iso
+            or response.llm_started_at_iso
+        )
+        end_iso = (
+            response.playback_stopped_at_iso
+            or response.tts_text_finished_at_iso
+            or utc_now_iso()
+        )
         return self._payload_window(
             start_iso,
             end_iso,
-            self.playback_started_at or self.tts_text_started_at or self.llm_started_at,
-            self.playback_stopped_at or self.tts_text_started_at or self.llm_started_at,
+            response.playback_started_at
+            or response.tts_text_started_at
+            or response.llm_started_at,
+            response.playback_stopped_at
+            or response.tts_text_started_at
+            or response.llm_started_at,
         )
+
+    def agent_played_audio(self) -> bool:
+        response = self._event_response()
+        return bool(response and response.playback_started_at is not None)
+
+    def consume_agent_response(self) -> None:
+        self.last_response = None
+
+    def _new_response(self) -> ResponseTiming:
+        self.response_id += 1
+        turn = self.current_user
+        response = ResponseTiming(
+            response_id=self.response_id,
+            turn_id=turn.turn_id if turn else 0,
+            user_started_at=turn.started_at if turn else None,
+            user_started_at_iso=turn.started_at_iso if turn else None,
+            user_stopped_at=turn.stopped_at if turn else None,
+            user_stopped_at_iso=turn.stopped_at_iso if turn else None,
+            final_transcript_at=turn.final_transcript_at if turn else None,
+            final_transcript_at_iso=turn.final_transcript_at_iso if turn else None,
+        )
+        self.active_response = response
+        return response
+
+    def _ensure_response(self) -> ResponseTiming:
+        if self.active_response is not None:
+            return self.active_response
+        return self._new_response()
+
+    def _event_response(self) -> ResponseTiming | None:
+        return self.last_response or self.active_response
 
     def _payload_window(
         self,
@@ -641,10 +762,16 @@ class PipelineTiming:
 
 
 class TimedLLMStream(LLMStream):
-    def __init__(self, inner: LLMStream, timing: PipelineTiming) -> None:
+    def __init__(
+        self,
+        inner: LLMStream,
+        timing: PipelineTiming,
+        response: ResponseTiming,
+    ) -> None:
         super().__init__(chat_ctx=inner.chat_ctx, fnc_ctx=inner.fnc_ctx)
         self._inner = inner
         self._timing = timing
+        self._response = response
         self._saw_first_token = False
         self._finished = False
 
@@ -662,13 +789,13 @@ class TimedLLMStream(LLMStream):
         except StopAsyncIteration:
             if not self._finished:
                 self._finished = True
-                self._timing.mark_llm_finished()
+                self._timing.mark_llm_finished(self._response)
             raise
 
         content = chunk.choices[0].delta.content if chunk.choices else None
         if content and not self._saw_first_token:
             self._saw_first_token = True
-            self._timing.mark_first_llm_token()
+            self._timing.mark_first_llm_token(self._response)
         return chunk
 
 
@@ -718,6 +845,80 @@ def register_room_debug_events(room: object) -> None:
     on("track_unsubscribed", lambda track, publication, participant: log_publication("livekit_track_unsubscribed", publication, participant))
     on("track_muted", lambda participant, publication: log_publication("livekit_track_muted", publication, participant))
     on("track_unmuted", lambda participant, publication: log_publication("livekit_track_unmuted", publication, participant))
+
+
+def register_call_control_events(
+    room: object,
+    lifecycle: CallLifecycle,
+    call_id: str | None,
+) -> None:
+    on = getattr(room, "on", None)
+    if not callable(on):
+        logger.warning("Call control could not attach; room has no on()")
+        return
+
+    def on_data_received(*args: object) -> None:
+        packet = args[0] if args else None
+        topic = getattr(packet, "topic", None)
+        raw = getattr(packet, "data", None)
+
+        # LiveKit Python event payloads have varied across releases. Support
+        # both a packet object and the JS-like payload, participant, kind, topic
+        # shape so call-ending control messages do not depend on one SDK minor.
+        if topic is None and len(args) >= 4:
+            topic = args[3]
+        if raw is None and packet is not None:
+            raw = packet
+
+        if topic != "awaaz.call.control":
+            return
+
+        try:
+            if isinstance(raw, bytes):
+                payload = json.loads(raw.decode("utf-8"))
+            elif isinstance(raw, str):
+                payload = json.loads(raw)
+            else:
+                logger.warning("call_control_unreadable_payload call_id=%s", call_id)
+                return
+        except Exception:
+            logger.warning("call_control_invalid_json call_id=%s", call_id, exc_info=True)
+            return
+
+        if not isinstance(payload, dict):
+            return
+        if payload.get("type") != "end_call":
+            return
+
+        incoming_call_id = payload.get("callId")
+        if (
+            call_id
+            and isinstance(incoming_call_id, str)
+            and incoming_call_id
+            and incoming_call_id != call_id
+        ):
+            logger.warning(
+                "call_control_call_id_mismatch expected=%s received=%s",
+                call_id,
+                incoming_call_id,
+            )
+            return
+
+        reason = payload.get("reason")
+        reason_text = reason if isinstance(reason, str) and reason else "frontend end session"
+        logger.info(
+            "call_end_requested call_id=%s reason=%s source=livekit_data",
+            call_id,
+            reason_text,
+        )
+        asyncio.create_task(
+            lifecycle.request_end(
+                reason_text,
+                wait_for_final_playback=False,
+            )
+        )
+
+    on("data_received", on_data_received)
 
 
 def register_timing_events(
@@ -992,6 +1193,13 @@ def register_events(
             asyncio.create_task(lifecycle.request_end("user closing utterance"))
 
     def on_agent_speech(message: llm.ChatMessage) -> None:
+        if not timing.agent_played_audio():
+            logger.info(
+                "voice_agent_speech_not_persisted_no_playback turn=%s chars=%s",
+                timing.turn_id,
+                len(message_text(message)),
+            )
+            return
         latency_ms = timing.response_latency_ms()
         metrics = timing.agent_response_metrics()
         logger.info(
@@ -1007,8 +1215,16 @@ def register_events(
             timing.agent_speech_payload(),
             {"metrics": metrics} if metrics else None,
         )
+        timing.consume_agent_response()
 
     def on_agent_speech_interrupted(message: llm.ChatMessage) -> None:
+        if not timing.agent_played_audio():
+            logger.info(
+                "voice_agent_interrupted_not_persisted_no_playback turn=%s chars=%s",
+                timing.turn_id,
+                len(message_text(message)),
+            )
+            return
         latency_ms = timing.response_latency_ms()
         metrics = timing.agent_response_metrics()
         logger.warning(
@@ -1028,6 +1244,7 @@ def register_events(
             timing.agent_speech_payload(),
             metadata,
         )
+        timing.consume_agent_response()
 
     assistant.on("user_speech_committed", on_user_speech)
     assistant.on("agent_speech_committed", on_agent_speech)
@@ -1041,6 +1258,7 @@ async def start_call_payload(
     room_metadata: Mapping[str, object],
 ) -> dict[str, object]:
     payload: dict[str, object] = {
+        "callId": string_value(room_metadata, "callId", ""),
         "liveKitRoomId": await ctx.room.sid,
         "agentId": string_value(config, "agentId"),
         "organizationId": string_value(config, "organizationId"),

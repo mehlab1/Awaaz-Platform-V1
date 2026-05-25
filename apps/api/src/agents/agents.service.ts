@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto';
+
 import {
   BadRequestException,
   Injectable,
@@ -359,47 +361,85 @@ export class AgentsService {
       );
     }
 
+    const callId = randomUUID();
+    await this.prisma.call.create({
+      data: {
+        id: callId,
+        organizationId,
+        agentId,
+        agentVersionId: agent.currentVersion.id,
+        direction: 'INBOUND',
+        status: CallStatus.INITIATED,
+        fromNumber: 'browser-preview',
+        toNumber: null,
+        metadata: {
+          source: 'awaaz_browser_test_call',
+          callId,
+          isTest: true,
+          isTestCall: true,
+          identityStatus: 'created',
+        },
+      },
+    });
+    /* eslint-disable no-console */
+    console.info(
+      `call_identity_created call_id=${callId} agent=${agentId} organization=${organizationId}`,
+    );
+    /* eslint-enable no-console */
+
     try {
       const session = await this.liveKitBrowserTest.issueBrowserParticipantSession({
+        callId,
         agentId,
         organizationId,
       });
 
-      // Persist an initial call row so the Calls UI can show the test call immediately.
-      try {
-        await this.prisma.call.create({
-          data: {
-            organizationId,
-            agentId,
-            agentVersionId: agent.currentVersion?.id ?? null,
-            liveKitRoomId: session.roomName,
-            direction: 'INBOUND',
-            status: CallStatus.INITIATED,
-            fromNumber: 'browser-preview',
-            toNumber: null,
-            metadata: {
-              source: 'awaaz_browser_test_call',
-              isTest: true,
-              isTestCall: true,
-              liveKitRoomName: session.roomName,
-              ...(session.recordingObjectKey
-                ? {
-                    recordingProvider: 'livekit-egress',
-                    recordingObjectKey: session.recordingObjectKey,
-                  }
-                : {}),
-            },
+      await this.prisma.call.update({
+        where: { id: callId },
+        data: {
+          metadata: {
+            source: 'awaaz_browser_test_call',
+            callId,
+            isTest: true,
+            isTestCall: true,
+            identityStatus: 'room_ready',
+            liveKitRoomName: session.roomName,
+            ...(session.recordingObjectKey
+              ? {
+                  recordingProvider: 'livekit-egress',
+                  recordingObjectKey: session.recordingObjectKey,
+                }
+              : {}),
           },
-        });
-      } catch (error) {
-        // Non-fatal: log and continue. Worker startCall upsert will reconcile.
-        /* eslint-disable no-console */
-        console.warn('Could not persist initial test call row:', error instanceof Error ? error.message : String(error));
-        /* eslint-enable no-console */
-      }
+        },
+      });
+      await this.prisma.call.updateMany({
+        where: { id: callId, liveKitRoomId: null },
+        data: { liveKitRoomId: session.roomName },
+      });
+      /* eslint-disable no-console */
+      console.info(
+        `call_identity_reconciled call_id=${callId} room=${session.roomName}`,
+      );
+      /* eslint-enable no-console */
 
       return session;
     } catch (error: unknown) {
+      await this.prisma.call.update({
+        where: { id: callId },
+        data: {
+          status: CallStatus.FAILED,
+          endedAt: new Date(),
+          metadata: {
+            source: 'awaaz_browser_test_call',
+            callId,
+            isTest: true,
+            isTestCall: true,
+            identityStatus: 'failed',
+            failureReason: error instanceof Error ? error.message : String(error),
+          },
+        },
+      });
       if (error instanceof ServiceUnavailableException) {
         throw error;
       }
@@ -408,6 +448,117 @@ export class AgentsService {
         `Unable to prepare browser test room: ${message}`,
       );
     }
+  }
+
+  async endBrowserTestCall(
+    organizationId: string,
+    agentId: string,
+    callId: string,
+  ): Promise<{ ok: true; state: 'ending' | 'already_ended' }> {
+    const call = await this.prisma.call.findFirst({
+      where: { id: callId, organizationId, agentId },
+      select: {
+        id: true,
+        status: true,
+        liveKitRoomId: true,
+        fromNumber: true,
+        metadata: true,
+      },
+    });
+    if (!call || !this.isBrowserPreviewCall(call)) {
+      throw new NotFoundException('Browser test call not found');
+    }
+
+    const roomName = this.browserRoomName(call);
+    await this.prisma.call.update({
+      where: { id: call.id },
+      data: {
+        metadata: this.mergeBrowserCallMetadata(call.metadata, {
+          endRequestedAt: new Date().toISOString(),
+          endRequestedBy: 'frontend',
+        }),
+      },
+    });
+
+    if (call.status === CallStatus.COMPLETED) {
+      if (roomName) {
+        await this.liveKitBrowserTest.closeBrowserRoom({
+          roomName,
+          callId,
+          reason: 'frontend requested end for completed call',
+        });
+      }
+      return { ok: true, state: 'already_ended' };
+    }
+
+    if (roomName) {
+      try {
+        await this.liveKitBrowserTest.requestBrowserCallEnd({
+          roomName,
+          callId,
+          reason: 'frontend end session',
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        /* eslint-disable no-console */
+        console.warn(
+          `call_end_authoritative_signal_failed call_id=${callId} room=${roomName}: ${message}`,
+        );
+        /* eslint-enable no-console */
+        await this.liveKitBrowserTest.closeBrowserRoom({
+          roomName,
+          callId,
+          reason: 'frontend end session signal failed',
+        });
+      }
+    }
+
+    return { ok: true, state: 'ending' };
+  }
+
+  private isBrowserPreviewCall(call: {
+    fromNumber: string | null;
+    metadata: Prisma.JsonValue | null;
+  }): boolean {
+    if (call.fromNumber === 'browser-preview') {
+      return true;
+    }
+    if (!call.metadata || typeof call.metadata !== 'object' || Array.isArray(call.metadata)) {
+      return false;
+    }
+    const metadata = call.metadata as Record<string, unknown>;
+    return (
+      metadata.source === 'awaaz_browser_test_call' ||
+      metadata.isTest === true ||
+      metadata.isTestCall === true
+    );
+  }
+
+  private browserRoomName(call: {
+    liveKitRoomId: string | null;
+    metadata: Prisma.JsonValue | null;
+  }): string | null {
+    const metadata =
+      call.metadata && typeof call.metadata === 'object' && !Array.isArray(call.metadata)
+        ? (call.metadata as Record<string, unknown>)
+        : {};
+    const roomName = metadata.liveKitRoomName;
+    if (typeof roomName === 'string' && roomName.trim()) {
+      return roomName.trim();
+    }
+    const liveKitRoomId = call.liveKitRoomId?.trim();
+    return liveKitRoomId?.startsWith('test-') ? liveKitRoomId : null;
+  }
+
+  private mergeBrowserCallMetadata(
+    metadata: Prisma.JsonValue | null,
+    update: Record<string, unknown>,
+  ): Prisma.InputJsonValue {
+    const base =
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? { ...(metadata as Record<string, unknown>) }
+        : {};
+    return { ...base, ...update } as Prisma.InputJsonObject;
   }
 
   private async ensureAgent(
