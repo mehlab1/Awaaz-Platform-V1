@@ -8,12 +8,14 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   AlertTriangle,
   ArrowLeft,
+  BookOpen,
   ChevronRight,
   Clock,
   Copy,
   Eye,
   GitCompare,
   History,
+  Info,
   Loader2,
   MoreVertical,
   Pause,
@@ -23,6 +25,7 @@ import {
   RotateCcw,
   Save,
   Settings2,
+  Sparkles,
   type LucideIcon,
   Volume2,
 } from 'lucide-react';
@@ -52,7 +55,48 @@ const TestCallModal = dynamic(
   { ssr: false },
 );
 
-const VERSION_HISTORY_PREVIEW_LIMIT = 3;
+const VERSION_HISTORY_PREVIEW_LIMIT = 5;
+
+const BLUEPRINTS = [
+  {
+    id: 'support',
+    name: 'Customer Support',
+    description: 'Friendly agent focused on answering questions, billing help, and graceful human escalation.',
+    template: `You are a friendly and helpful customer support agent for Acme Corp. Your goals are:
+1. Resolve user issues and answer questions about billing and services.
+2. Escalate to a human agent ONLY if specifically requested or if unresolved after 3 attempts.
+3. Keep answers concise (under 2 sentences) and maintain a polite, empathetic tone.`
+  },
+  {
+    id: 'scheduler',
+    name: 'Appointment Booking',
+    description: 'Dental/medical scheduling assistant collecting preferred days, times, and customer info.',
+    template: `You are a scheduling assistant for Dr. Smith's Dental Office. Your goals are:
+1. Book patients for checkups, cleanings, or urgent care.
+2. Ask for their preferred day (Monday-Friday) and time (morning/afternoon).
+3. Confirm patient name, phone number, and reason for visit before finishing.
+4. Keep the tone professional, structured, and friendly.`
+  },
+  {
+    id: 'qualifier',
+    name: 'Sales Lead Qualifier',
+    description: 'Persuasive outbound agent qualifying leads based on volume, timeline, and decision power.',
+    template: `You are an outbound sales representative for Awaaz AI. Your goals are:
+1. Qualify inbound leads by asking: call volume, timeline, and decision role.
+2. If qualified (calls > 100/day, timeline < 1 month), schedule a product demo.
+3. Maintain an energetic, confident, and persuasive tone.`
+  },
+  {
+    id: 'screener',
+    name: 'Interview Screener',
+    description: 'HR recruiter screening candidates on experience, salary expectation, and start date.',
+    template: `You are an HR recruiter screening candidates for the Software Engineer role. Your goals are:
+1. Verify candidate's years of experience with React/Node.
+2. Confirm their salary expectations and notice period.
+3. Note their availability for a technical interview.
+4. Keep the tone professional, welcoming, and objective.`
+  }
+];
 
 interface AgentVersion {
   id: string;
@@ -154,6 +198,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [previewingVersion, setPreviewingVersion] = useState<AgentVersion | null>(null);
   const [fullHistoryOpen, setFullHistoryOpen] = useState(false);
   const [navVoicePlaying, setNavVoicePlaying] = useState(false);
+  const [promptViewMode, setPromptViewMode] = useState<'edit' | 'diff'>('edit');
+  const [blueprintDrawerOpen, setBlueprintDrawerOpen] = useState(false);
+  const [hoveredVersionBtn, setHoveredVersionBtn] = useState<'update' | 'save' | 'publish' | null>(null);
 
   useEffect(() => {
     setPromptHydrated(false);
@@ -243,9 +290,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const hasUnsavedChanges =
     promptHydrated &&
     (selectedVersion
-      ? prompt !== selectedVersion.systemPrompt ||
-        selectedVoiceId !== selectedVersion.voiceId
-      : prompt.trim().length > 0 || selectedVoiceId.trim().length > 0);
+      ? prompt !== selectedVersion.systemPrompt
+      : prompt.trim().length > 0);
   const promptIsValid = prompt.trim().length > 0 && selectedVoiceId.trim().length > 0;
   const versionPanelBusy = versionMutating !== null;
   const canUpdateCurrentVersion =
@@ -687,6 +733,54 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     } finally {
       saveInFlightRef.current = false;
       setSaveBusy(null);
+    }
+  };
+
+  const onVoiceSelect = async (voiceId: string) => {
+    setSelectedVoiceId(voiceId);
+    setVoiceModalOpen(false);
+    setVoiceSearchQuery('');
+
+    if (!selectedVersion || !activeOrgId) {
+      return;
+    }
+
+    try {
+      const res = await apiCall(
+        `/api/v1/agents/${agentId}/versions/${selectedVersion.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemPrompt: selectedVersion.systemPrompt,
+            voiceId: voiceId,
+            model: selectedVersion.model,
+            temperature: selectedVersion.temperature,
+            maxTokens: selectedVersion.maxTokens,
+            firstMessage: selectedVersion.firstMessage,
+            endCallPhrases: selectedVersion.endCallPhrases,
+          }),
+        },
+      );
+
+      if (!res.ok) {
+        throw new Error(await res.text() || res.statusText);
+      }
+
+      const updated = (await res.json()) as AgentVersion;
+      setVersions((current) =>
+        current.map((v) => (v.id === updated.id ? updated : v))
+      );
+      if (agent && agent.currentVersion && agent.currentVersion.id === updated.id) {
+        setAgent({
+          ...agent,
+          currentVersion: updated,
+        });
+      }
+      setToast('Voice setting saved.');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setToast(`Failed to update voice: ${message}`);
     }
   };
 
@@ -1203,7 +1297,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 {previewBusy && navVoicePlaying ? (
                   <Loader2 className="size-3 animate-spin text-primary" />
                 ) : navVoicePlaying ? (
-                  <Pause className="size-3 text-primary" />
+                  <div className="flex items-end gap-[1.5px] h-3 px-0.5" title="Pause preview">
+                    <style dangerouslySetInnerHTML={{__html: `
+                      @keyframes eq-bar-1 { 0%, 100% { height: 4px; } 50% { height: 12px; } }
+                      @keyframes eq-bar-2 { 0%, 100% { height: 12px; } 50% { height: 6.5px; } }
+                      @keyframes eq-bar-3 { 0%, 100% { height: 6.5px; } 50% { height: 10px; } }
+                      .eq-bar-1 { animation: eq-bar-1 0.8s ease-in-out infinite; }
+                      .eq-bar-2 { animation: eq-bar-2 0.8s ease-in-out infinite; }
+                      .eq-bar-3 { animation: eq-bar-3 0.8s ease-in-out infinite; }
+                    `}} />
+                    <span className="w-[1.5px] bg-primary rounded-full eq-bar-1" />
+                    <span className="w-[1.5px] bg-primary rounded-full eq-bar-2" />
+                    <span className="w-[1.5px] bg-primary rounded-full eq-bar-3" />
+                  </div>
                 ) : (
                   <Play className="size-2.5 text-muted-foreground fill-muted-foreground" />
                 )}
@@ -1332,6 +1438,49 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 </span>
               ) : null}
             </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1 bg-muted/40 p-0.5 rounded-lg border border-border/20">
+                <button
+                  type="button"
+                  className={cn(
+                    "px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider rounded-md transition-colors",
+                    promptViewMode === 'edit'
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setPromptViewMode('edit')}
+                >
+                  Write
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider rounded-md transition-colors",
+                    promptViewMode === 'diff'
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  disabled={!selectedVersion}
+                  onClick={() => setPromptViewMode('diff')}
+                  title={selectedVersion ? "Compare changes with active version" : "No baseline version to compare"}
+                >
+                  Compare Diff
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border/30 bg-background hover:bg-muted/50 transition-colors",
+                  blueprintDrawerOpen && "border-primary/20 bg-primary/[0.03] text-primary"
+                )}
+                onClick={() => setBlueprintDrawerOpen((prev) => !prev)}
+              >
+                <Sparkles className="size-3 text-amber-500" />
+                Blueprints
+              </button>
+            </div>
           </div>
 
           {/* Contextual alerts — kept slim */}
@@ -1348,17 +1497,57 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </div>
           ) : null}
 
-          {/* The actual editor */}
-          {promptHydrated ? (
-            <AgentSystemPromptEditor
-              value={prompt}
-              onChange={setPrompt}
-              disabled={saveBusy !== null}
-              helperLabel={hasUnsavedChanges ? 'Draft changes saved locally' : undefined}
-            />
-          ) : (
-            <div className="min-h-[480px] rounded-xl border border-dashed border-border/40 bg-muted/10 flex-1 animate-pulse" />
-          )}
+          {/* The actual editor & blueprint drawer side-by-side */}
+          <div className="flex items-start gap-4">
+            <div className="flex-1 min-w-0">
+              {promptHydrated ? (
+                <AgentSystemPromptEditor
+                  value={prompt}
+                  onChange={setPrompt}
+                  disabled={saveBusy !== null}
+                  helperLabel={hasUnsavedChanges ? 'Draft changes saved locally' : undefined}
+                  viewMode={promptViewMode}
+                  oldValue={selectedVersion?.systemPrompt ?? ''}
+                />
+              ) : (
+                <div className="h-[580px] rounded-xl border border-dashed border-border/40 bg-muted/10 flex-1 animate-pulse" />
+              )}
+            </div>
+
+            {blueprintDrawerOpen && (
+              <div className="w-[260px] h-[580px] shrink-0 flex flex-col rounded-xl border border-border/30 bg-background shadow-sm overflow-hidden animate-in slide-in-from-right duration-250">
+                <div className="p-3.5 border-b border-border/20 bg-muted/[0.02] shrink-0">
+                  <h3 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <Sparkles className="size-3.5 text-amber-500" />
+                    Prompt Blueprints
+                  </h3>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">Click to insert pre-built prompt templates</p>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                  {BLUEPRINTS.map((bp) => (
+                    <div
+                      key={bp.id}
+                      className="p-2.5 rounded-lg border border-transparent hover:bg-muted/50 transition-colors cursor-pointer group"
+                      onClick={() => {
+                        if (confirm(`Replace current prompt instructions with the "${bp.name}" template?`)) {
+                          setPrompt(bp.template);
+                          setPromptViewMode('edit');
+                          setToast(`Applied ${bp.name} blueprint.`);
+                        }
+                      }}
+                    >
+                      <h4 className="text-[11px] font-semibold text-foreground group-hover:text-primary transition-colors">
+                        {bp.name}
+                      </h4>
+                      <p className="text-[9px] text-muted-foreground line-clamp-3 mt-0.5 leading-relaxed">
+                        {bp.description}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ─── RIGHT COLUMN: Version Control Center ─── */}
@@ -1370,18 +1559,42 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 <Rocket className="size-3 text-muted-foreground" />
                 Version Control
               </h3>
-              {selectedVersion && (
-                <Badge
-                  variant={hasUnsavedChanges ? 'outline' : isSelectedLive ? 'default' : 'secondary'}
-                  className="text-[9px] px-1.5 h-[18px]"
-                >
-                  {hasUnsavedChanges
-                    ? 'Draft'
-                    : isSelectedLive
-                      ? 'Live'
-                      : `V${selectedVersion.versionNumber}`}
-                </Badge>
-              )}
+              
+              {/* Pulse status indicator */}
+              <div className="flex items-center gap-1.5">
+                {selectedVersion && (
+                  <>
+                    <span className="relative flex h-2 w-2">
+                      {isSelectedLive && !hasUnsavedChanges ? (
+                        <>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                        </>
+                      ) : hasUnsavedChanges ? (
+                        <>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                        </>
+                      )}
+                    </span>
+                    <Badge
+                      variant={hasUnsavedChanges ? 'outline' : isSelectedLive ? 'default' : 'secondary'}
+                      className="text-[9px] px-1.5 h-[18px]"
+                    >
+                      {hasUnsavedChanges
+                        ? 'Draft'
+                        : isSelectedLive
+                          ? 'Live'
+                          : `V${selectedVersion.versionNumber}`}
+                    </Badge>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Status line */}
@@ -1389,7 +1602,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               {hasUnsavedChanges
                 ? `Unsaved changes based on ${draftBaseLabel}`
                 : isSelectedLive && selectedVersion
-                  ? `V${selectedVersion.versionNumber} is live and serving calls`
+                  ? `V${selectedVersion.versionNumber} is live and serving active calls`
                   : selectedVersion
                     ? `Viewing V${selectedVersion.versionNumber}`
                     : 'No versions yet — write a prompt to begin'}
@@ -1402,7 +1615,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   type="button"
                   variant="default"
                   size="sm"
-                  className="w-full h-9 text-xs font-semibold rounded-lg"
+                  className="w-full h-9 text-xs font-semibold rounded-lg transition-all"
+                  onMouseEnter={() => setHoveredVersionBtn('publish')}
+                  onMouseLeave={() => setHoveredVersionBtn(null)}
                   onClick={() => selectedVersion && setPublishTarget(selectedVersion)}
                 >
                   <Rocket className="size-3.5 mr-1.5" aria-hidden />
@@ -1414,13 +1629,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="flex-1 h-8 text-[11px] px-2.5 rounded-lg"
+                  className="flex-1 h-8 text-[11px] px-2.5 rounded-lg transition-all"
                   disabled={!canUpdateCurrentVersion}
-                  title={
-                    selectedVersion
-                      ? 'Save edits into the selected version.'
-                      : 'Select a version before updating.'
-                  }
+                  onMouseEnter={() => setHoveredVersionBtn('update')}
+                  onMouseLeave={() => setHoveredVersionBtn(null)}
                   onClick={() => void updateCurrentVersionFlow()}
                 >
                   {saveBusy === 'update' ? (
@@ -1434,9 +1646,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   type="button"
                   variant="secondary"
                   size="sm"
-                  className="flex-1 h-8 text-[11px] px-2.5 rounded-lg"
+                  className="flex-1 h-8 text-[11px] px-2.5 rounded-lg transition-all"
                   disabled={!canCreateNewVersion}
-                  title="Save a new version from your current edits."
+                  onMouseEnter={() => setHoveredVersionBtn('save')}
+                  onMouseLeave={() => setHoveredVersionBtn(null)}
                   onClick={() => void createVersionFlow()}
                 >
                   {saveBusy === 'create' ? (
@@ -1447,6 +1660,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   Save V{nextVersionNumber}
                 </Button>
               </div>
+            </div>
+
+            {/* Hover explanation block */}
+            <div className="pt-2 pb-0.5 border-t border-border/10 flex items-start gap-2 text-[10px] text-muted-foreground/80 min-h-[38px] leading-normal select-none">
+              <Info className="size-3.5 text-muted-foreground/60 shrink-0 mt-0.5" />
+              <p className="flex-1">
+                {hoveredVersionBtn === 'publish' && "Publish Live: Activates this version for all phone routing. Changes take effect instantly."}
+                {hoveredVersionBtn === 'update' && "Update: Saves edits directly into the selected version without creating a new checkpoint."}
+                {hoveredVersionBtn === 'save' && `Save V${nextVersionNumber}: Creates a new separate version checkpoint. You can review or revert to this point later.`}
+                {!hoveredVersionBtn && "Hover over any action button to understand what it does."}
+              </p>
             </div>
           </div>
 
@@ -1466,24 +1690,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             {versions.length > 0 ? (
               <div className="space-y-1.5">
                 <ul className="space-y-0.5">
-                  {(showAllVersions
-                    ? displayedVersions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT)
-                    : displayedVersions
-                  ).map((v) => renderVersionRow(v))}
+                  {versions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT).map((v) => renderVersionRow(v))}
                 </ul>
-
-                {showAllVersions && displayedVersions.length > VERSION_HISTORY_PREVIEW_LIMIT ? (
-                  <div className="space-y-0.5 pt-1.5 border-t border-border/20">
-                    <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider px-1 py-0.5">
-                      Older
-                    </p>
-                    <ul className="space-y-0.5 border-l-2 border-border/20 pl-2 ml-1.5">
-                      {displayedVersions
-                        .slice(VERSION_HISTORY_PREVIEW_LIMIT)
-                        .map((v) => renderVersionRow(v))}
-                    </ul>
-                  </div>
-                ) : null}
 
                 {shouldRenderPinnedLive && pinnedLiveVersion ? (
                   <div className="space-y-0.5 pt-1.5 border-t border-border/20">
@@ -1743,9 +1951,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   <div
                     key={v.id}
                     onClick={() => {
-                      setSelectedVoiceId(v.rimeVoiceId);
-                      setVoiceModalOpen(false);
-                      setVoiceSearchQuery('');
+                      void onVoiceSelect(v.rimeVoiceId);
                     }}
                     className={cn(
                       "flex items-center justify-between gap-3 p-2 rounded-lg border border-transparent hover:bg-muted/75 cursor-pointer transition-all",
