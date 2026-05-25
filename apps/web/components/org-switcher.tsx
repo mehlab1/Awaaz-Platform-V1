@@ -3,7 +3,11 @@
 import { useOrgContext } from '@/components/org-context';
 import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
 
-export function OrgSwitcher() {
+interface OrgSwitcherProps {
+  compact?: boolean;
+}
+
+export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
   const {
     orgs,
     activeOrgId,
@@ -11,6 +15,38 @@ export function OrgSwitcher() {
     loadingOrgs,
   } = useOrgContext();
   const activeOrg = orgs.find((org) => org.id === activeOrgId);
+  const title = activeOrg?.name ?? activeOrgId ?? 'No organization selected';
+
+  if (compact) {
+    return (
+      <div
+        className="rounded-lg border border-border bg-background p-1.5 text-xs shadow-sm"
+        title={title}
+      >
+        <span className="sr-only">Organization</span>
+        {orgs.length > 0 ? (
+          <select
+            className="h-8 w-full rounded-md border border-input bg-background px-1 text-[10px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={activeOrgId ?? ''}
+            onChange={(e) =>
+              setActiveOrgId(e.target.value.length > 0 ? e.target.value : undefined)
+            }
+            aria-label="Switch organization"
+          >
+            {orgs.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div className="flex h-8 items-center justify-center rounded-md border border-dashed border-border text-[10px] text-muted-foreground">
+            Org
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-border bg-background p-2.5 text-sm shadow-sm">
@@ -19,7 +55,7 @@ export function OrgSwitcher() {
       </div>
       <div
         className="mt-1 truncate font-medium text-xs"
-        title={activeOrg?.name ?? activeOrgId ?? undefined}
+        title={title}
       >
         {loadingOrgs
           ? 'Loading...'

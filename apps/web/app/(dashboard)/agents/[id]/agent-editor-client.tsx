@@ -38,6 +38,8 @@ const TestCallModal = dynamic(
   { ssr: false },
 );
 
+const VERSION_HISTORY_PREVIEW_LIMIT = 5;
+
 interface AgentVersion {
   id: string;
   versionNumber: number;
@@ -94,6 +96,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [versions, setVersions] = useState<AgentVersion[]>([]);
+  const [allVersionsLoaded, setAllVersionsLoaded] = useState(false);
+  const [showAllVersions, setShowAllVersions] = useState(false);
+  const [versionHistoryBusy, setVersionHistoryBusy] = useState(false);
   const [voices, setVoices] = useState<VoiceDto[]>([]);
   const [phones, setPhones] = useState<PhoneDto[]>([]);
 
@@ -118,6 +123,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   } | null>(null);
   const [restoreTarget, setRestoreTarget] = useState<AgentVersion | null>(null);
   const [publishTarget, setPublishTarget] = useState<AgentVersion | null>(null);
+  const [tinyChangeIntent, setTinyChangeIntent] = useState<{
+    publish: boolean;
+    message: string;
+  } | null>(null);
   const [versionMutating, setVersionMutating] = useState<
     | { kind: 'restore' | 'publish'; versionId: string }
     | null
@@ -129,6 +138,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setPrompt('');
     setSelectedVoiceId('');
     setSelectedVersionId(null);
+    setAllVersionsLoaded(false);
+    setShowAllVersions(false);
   }, [agentId]);
 
   useEffect(() => {
@@ -139,7 +150,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return () => window.clearTimeout(t);
   }, [toast]);
 
-  const latestVersion = versions[0] ?? agent?.currentVersion ?? null;
+  const liveVersion = agent?.currentVersion ?? null;
+  const latestVersion = versions[0] ?? liveVersion;
   const selectedVersion =
     selectedVersionId !== null
       ? versions.find((version) => version.id === selectedVersionId) ??
@@ -158,6 +170,47 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     hasUnsavedChanges &&
     saveBusy === null &&
     !versionPanelBusy;
+  const selectedVersionLabel = selectedVersion
+    ? `V${selectedVersion.versionNumber}`
+    : null;
+  const liveVersionLabel = liveVersion
+    ? `V${liveVersion.versionNumber}`
+    : 'None';
+  const draftBaseLabel =
+    selectedVersionLabel ?? (liveVersion ? liveVersionLabel : 'a new prompt');
+  const isSelectedLive =
+    selectedVersion != null &&
+    liveVersion != null &&
+    selectedVersion.id === liveVersion.id;
+  const isViewingHistoricalVersion =
+    selectedVersion != null &&
+    !isSelectedLive &&
+    latestVersion != null &&
+    selectedVersion.versionNumber < latestVersion.versionNumber;
+  const editorStatusText = hasUnsavedChanges
+    ? `Editing Draft Based on ${draftBaseLabel}`
+    : isSelectedLive && selectedVersion
+      ? `Viewing Live ${selectedVersionLabel}`
+      : selectedVersion
+        ? `Viewing ${selectedVersionLabel}`
+        : 'No version selected';
+  const draftStatusText = hasUnsavedChanges
+    ? 'Editing draft changes'
+    : 'No unpublished changes';
+  const previewVersions = versions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT);
+  const pinnedLiveVersion =
+    !showAllVersions && liveVersion
+      ? versions.find((version) => version.id === liveVersion.id) ??
+        liveVersion
+      : null;
+  const shouldRenderPinnedLive =
+    pinnedLiveVersion != null &&
+    !previewVersions.some((version) => version.id === pinnedLiveVersion.id);
+  const displayedVersions = showAllVersions ? versions : previewVersions;
+  const canRevealAllVersions =
+    !showAllVersions &&
+    (versions.length > VERSION_HISTORY_PREVIEW_LIMIT ||
+      (!allVersionsLoaded && versions.length >= VERSION_HISTORY_PREVIEW_LIMIT));
 
   useEffect(() => {
     if (!agent || promptHydrated) {
@@ -199,10 +252,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [hasUnsavedChanges, prompt, setDraftPrompt]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (loadAllVersions = false) => {
     if (!activeOrgId) {
       setLoading(false);
       setAgent(null);
+      setVersions([]);
+      setAllVersionsLoaded(false);
+      setShowAllVersions(false);
       return;
     }
     setPageError(null);
@@ -217,7 +273,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         apiCall(`/api/v1/agents/${agentId}`, { method: 'GET' }),
         apiCall('/api/v1/voices', { method: 'GET' }),
         apiCall('/api/v1/phone-numbers', { method: 'GET' }),
-        apiCall(`/api/v1/agents/${agentId}/versions`, { method: 'GET' }),
+        apiCall(
+          loadAllVersions
+            ? `/api/v1/agents/${agentId}/versions`
+            : `/api/v1/agents/${agentId}/versions?limit=${VERSION_HISTORY_PREVIEW_LIMIT}`,
+          { method: 'GET' },
+        ),
       ]);
 
       if (!agentRes.ok) {
@@ -241,11 +302,15 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       const voicesBody = (await voicesRes.json()) as VoiceDto[];
       const phonesBody = (await phonesRes.json()) as PhoneDto[];
       const versionsBody = (await versionsRes.json()) as AgentVersion[];
-      const sortedVersions = [...versionsBody].sort(
-        (a, b) => b.versionNumber - a.versionNumber,
+      const sortedVersions = sortVersionsDesc(
+        loadAllVersions
+          ? versionsBody
+          : mergeVersions(versionsBody, agentBody.currentVersion),
       );
 
       setVersions(sortedVersions);
+      setAllVersionsLoaded(loadAllVersions);
+      setShowAllVersions(loadAllVersions);
       setAgent(agentBody);
       setVoices(voicesBody);
       setPhones(phonesBody);
@@ -261,6 +326,36 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     void loadData();
   }, [loadData]);
 
+  const loadFullVersionHistory = async () => {
+    if (!activeOrgId || versionHistoryBusy) {
+      return;
+    }
+    if (allVersionsLoaded) {
+      setShowAllVersions(true);
+      return;
+    }
+    setVersionHistoryBusy(true);
+    setPageError(null);
+    try {
+      const res = await apiCall(`/api/v1/agents/${agentId}/versions`, {
+        method: 'GET',
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || res.statusText);
+      }
+      const versionsBody = (await res.json()) as AgentVersion[];
+      setVersions(sortVersionsDesc(versionsBody));
+      setAllVersionsLoaded(true);
+      setShowAllVersions(true);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setPageError(message);
+    } finally {
+      setVersionHistoryBusy(false);
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (previewObjectUrl) {
@@ -269,31 +364,66 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     };
   }, [previewObjectUrl]);
 
-  const openPromptDiff = useCallback((v: AgentVersion) => {
-    const successor = versions.find(
-      (o) => o.versionNumber === v.versionNumber + 1,
-    );
-    if (successor) {
-      setPromptDiff({
-        title: `V${v.versionNumber} -> V${successor.versionNumber}`,
-        oldValue: v.systemPrompt,
-        newValue: successor.systemPrompt,
-      });
+  const openPromptDiff = useCallback(async (v: AgentVersion) => {
+    let diffVersions = versions;
+
+    const applyDiff = (candidateVersions: AgentVersion[]) => {
+      const successor = candidateVersions.find(
+        (o) => o.versionNumber === v.versionNumber + 1,
+      );
+      if (successor) {
+        setPromptDiff({
+          title: `V${v.versionNumber} -> V${successor.versionNumber}`,
+          oldValue: v.systemPrompt,
+          newValue: successor.systemPrompt,
+        });
+        return true;
+      }
+      const pred = candidateVersions.find(
+        (o) => o.versionNumber === v.versionNumber - 1,
+      );
+      if (pred) {
+        setPromptDiff({
+          title: `V${pred.versionNumber} -> V${v.versionNumber}`,
+          oldValue: pred.systemPrompt,
+          newValue: v.systemPrompt,
+        });
+        return true;
+      }
+      return false;
+    };
+
+    if (applyDiff(diffVersions)) {
       return;
     }
-    const pred = versions.find(
-      (o) => o.versionNumber === v.versionNumber - 1,
-    );
-    if (pred) {
-      setPromptDiff({
-        title: `V${pred.versionNumber} -> V${v.versionNumber}`,
-        oldValue: pred.systemPrompt,
-        newValue: v.systemPrompt,
-      });
+
+    if (!allVersionsLoaded) {
+      setVersionHistoryBusy(true);
+      try {
+        const res = await apiCall(`/api/v1/agents/${agentId}/versions`, {
+          method: 'GET',
+        });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(txt || res.statusText);
+        }
+        diffVersions = sortVersionsDesc((await res.json()) as AgentVersion[]);
+        setVersions(diffVersions);
+        setAllVersionsLoaded(true);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        setPageError(message);
+        return;
+      } finally {
+        setVersionHistoryBusy(false);
+      }
+    }
+
+    if (applyDiff(diffVersions)) {
       return;
     }
     setToast('Nothing to compare for this snapshot.');
-  }, [versions]);
+  }, [agentId, allVersionsLoaded, apiCall, versions]);
 
   const loadVersionIntoEditor = useCallback(
     (version: AgentVersion) => {
@@ -309,7 +439,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVoiceId(version.voiceId);
       setDraftPrompt('');
       setToast(
-        `Viewing V${version.versionNumber}. Edits will save as V${nextVersionNumber}.`,
+        `Viewing V${version.versionNumber}. Edits become draft changes until saved or published as V${nextVersionNumber}.`,
       );
     },
     [hasUnsavedChanges, nextVersionNumber, selectedVersionId, setDraftPrompt],
@@ -341,8 +471,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVoiceId(restored.voiceId);
       setDraftPrompt('');
       setRestoreTarget(null);
-      setToast(`Restored snapshot as version ${restored.versionNumber}.`);
-      await loadData();
+      setToast(`Restored snapshot as draft V${restored.versionNumber}.`);
+      await loadData(showAllVersions && allVersionsLoaded);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setPageError(message);
@@ -368,8 +498,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         throw new Error(txt || res.statusText);
       }
       setPublishTarget(null);
-      setToast(`Published version ${publishedNumber} as live.`);
-      await loadData();
+      setToast(`Published live V${publishedNumber}.`);
+      await loadData(showAllVersions && allVersionsLoaded);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setPageError(message);
@@ -395,7 +525,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return body;
   }, [agent?.currentVersion, prompt, selectedVersion, selectedVoiceId]);
 
-  const saveVersionFlow = async (publish: boolean) => {
+  const saveVersionFlow = async (
+    publish: boolean,
+    options: { confirmedTinyChange?: boolean } = {},
+  ) => {
     if (saveInFlightRef.current || saveBusy !== null || versionPanelBusy) {
       return;
     }
@@ -412,6 +545,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     if (!hasUnsavedChanges) {
       setToast('No prompt changes to save.');
+      return;
+    }
+    const tinyChangeWarning =
+      selectedVersion && prompt !== selectedVersion.systemPrompt
+        ? getTinyChangeWarning(
+            selectedVersion.systemPrompt,
+            prompt,
+            selectedVersion.versionNumber,
+          )
+        : null;
+    if (tinyChangeWarning && !options.confirmedTinyChange) {
+      setTinyChangeIntent({ publish, message: tinyChangeWarning });
       return;
     }
 
@@ -464,10 +609,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
       setToast(
         publish
-          ? `Saved & published version ${created.versionNumber}.`
-          : `Saved as V${created.versionNumber}.`,
+          ? `Published live V${created.versionNumber}.`
+          : `Saved draft V${created.versionNumber}.`,
       );
-      await loadData();
+      await loadData(showAllVersions && allVersionsLoaded);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setPageError(message);
@@ -478,7 +623,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
-  const liveVersion = agent?.currentVersion ?? null;
   const hasUsableLiveConfig =
     liveVersion != null &&
     liveVersion.systemPrompt.trim().length > 0 &&
@@ -640,6 +784,80 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
   };
 
+  const renderVersionCard = (
+    v: AgentVersion,
+    options: { pinnedLive?: boolean } = {},
+  ) => {
+    const isSelected = selectedVersion?.id === v.id;
+    const isLatest = latestVersion?.id === v.id;
+    const snippet = v.systemPrompt.trim() || 'Empty prompt';
+
+    return (
+      <li
+        key={options.pinnedLive ? `${v.id}-pinned` : v.id}
+        className={cn(
+          'rounded-lg border bg-background p-2.5 text-xs transition',
+          v.isLive ? 'border-primary/35 bg-primary/5' : 'border-border',
+          isSelected
+            ? 'shadow-sm ring-2 ring-primary/10'
+            : 'hover:border-muted-foreground/30',
+        )}
+      >
+        <button
+          type="button"
+          className="block w-full text-left"
+          disabled={versionPanelBusy}
+          onClick={() => loadVersionIntoEditor(v)}
+        >
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-sm font-semibold leading-none">
+              V{v.versionNumber}
+            </span>
+            {isSelected ? <Badge variant="secondary">Viewing</Badge> : null}
+            {v.isLive ? <Badge variant="outline">Live</Badge> : null}
+            {isLatest ? <Badge variant="outline">Latest</Badge> : null}
+            {options.pinnedLive ? <Badge variant="outline">Pinned</Badge> : null}
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Created {safeFormatDt(v.createdAt)}
+          </p>
+          <p className="mt-1.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+            &quot;{snippet}&quot;
+          </p>
+        </button>
+        <div className="mt-2 flex flex-wrap gap-1.5 border-border border-t pt-2 sm:justify-end">
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            disabled={versionPanelBusy || versionHistoryBusy}
+            onClick={() => void openPromptDiff(v)}
+          >
+            Diff
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="xs"
+            disabled={versionPanelBusy || v.isLive}
+            onClick={() => setPublishTarget(v)}
+          >
+            Publish
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            disabled={versionPanelBusy}
+            onClick={() => setRestoreTarget(v)}
+          >
+            Restore
+          </Button>
+        </div>
+      </li>
+    );
+  };
+
   const fieldClass =
     'mt-1 w-full max-w-md rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -684,8 +902,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-semibold text-2xl tracking-tight">{agent.name}</h1>
             <Badge variant="outline">{agent.isActive ? 'Active' : 'Inactive'}</Badge>
@@ -708,53 +926,67 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           >
             ← Agents
           </Link>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <span className="rounded-md border border-border bg-background px-2 py-1 font-medium text-foreground">
+              {editorStatusText}
+            </span>
+            <span className="rounded-md border border-border bg-muted/40 px-2 py-1 text-muted-foreground">
+              Published Live Version: {liveVersionLabel}
+            </span>
+            <span className="rounded-md border border-border bg-muted/40 px-2 py-1 text-muted-foreground">
+              {draftStatusText}
+            </span>
+          </div>
           <p className="mt-2 text-muted-foreground text-xs">
-            {selectedVersion
-              ? `Viewing V${selectedVersion.versionNumber}. Saving creates V${nextVersionNumber}.`
-              : `No version selected. Saving creates V${nextVersionNumber}.`}
-            {hasUnsavedChanges ? ' Unsaved changes.' : ' No unsaved changes.'}
+            Test Agent and production calls always use the published live version.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={!canTest}
-            title={testCallBlockedReason ?? 'Run a browser preview over LiveKit.'}
-            onClick={() => setTestCallOpen(true)}
-          >
-            Test Agent
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!canSaveVersion}
-            onClick={() => void saveVersionFlow(false)}
-          >
-            {saveBusy === 'version' ? (
-              <>
-                <Loader2 className="animate-spin" />
-                Saving...
-              </>
-            ) : (
-              `Save Version V${nextVersionNumber}`
-            )}
-          </Button>
-          <Button
-            type="button"
-            variant="default"
-            disabled={!canSaveVersion}
-            onClick={() => void saveVersionFlow(true)}
-          >
-            {saveBusy === 'publish' ? (
-              <>
-                <Loader2 className="animate-spin" />
-                Publishing...
-              </>
-            ) : (
-              `Save & Publish V${nextVersionNumber}`
-            )}
-          </Button>
+        <div className="flex flex-col gap-2 sm:items-end">
+          <div className="flex flex-wrap gap-2 sm:justify-end">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!canTest}
+              title={testCallBlockedReason ?? 'Run a browser preview over LiveKit.'}
+              onClick={() => setTestCallOpen(true)}
+            >
+              Test Agent
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!canSaveVersion}
+              onClick={() => void saveVersionFlow(false)}
+            >
+              {saveBusy === 'version' ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                `Save Draft V${nextVersionNumber}`
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="default"
+              disabled={!canSaveVersion}
+              onClick={() => void saveVersionFlow(true)}
+            >
+              {saveBusy === 'publish' ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  Publishing...
+                </>
+              ) : (
+                `Publish Live V${nextVersionNumber}`
+              )}
+            </Button>
+          </div>
+          <p className="max-w-sm text-muted-foreground text-xs sm:text-right">
+            Save Draft stores a historical version. Publish Live deploys that new
+            version for Test Agent and production calls.
+          </p>
         </div>
       </div>
 
@@ -778,21 +1010,30 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               {selectedVersion ? (
                 <Badge variant={hasUnsavedChanges ? 'outline' : 'secondary'}>
                   {hasUnsavedChanges
-                    ? `Editing from V${selectedVersion.versionNumber}`
-                    : `Viewing V${selectedVersion.versionNumber}`}
+                    ? `Draft from V${selectedVersion.versionNumber}`
+                    : isSelectedLive
+                      ? `Viewing Live V${selectedVersion.versionNumber}`
+                      : `Viewing V${selectedVersion.versionNumber}`}
                 </Badge>
               ) : null}
             </div>
             <CardDescription>
               Write assistant behavior, tone, boundaries, call goals, and escalation
-              rules in natural language. Save creates a new version and keeps older
-              versions intact.
+              rules in natural language. Save Draft creates a non-live version.
+              Publish Live creates a version and deploys it.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {isViewingHistoricalVersion ? (
+              <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-muted-foreground text-sm">
+                You are viewing an older version. Test Agent still uses the
+                published live version.
+              </div>
+            ) : null}
             {hasUnsavedChanges ? (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-800 text-sm dark:text-amber-300">
-                Unsaved prompt changes. Use Save Version to create V{nextVersionNumber}.
+                Editing draft changes. Use Save Draft to create V{nextVersionNumber},
+                or Publish Live to deploy V{nextVersionNumber}.
               </div>
             ) : null}
             {promptHydrated ? (
@@ -890,77 +1131,59 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             <CardHeader className="pb-2">
               <CardTitle>Version history</CardTitle>
               <CardDescription>
-                Prompt snapshots are newest first. Select any version to view it, then edit and save as a new snapshot.
+                Showing the newest versions first. Older versions stay stored and
+                are available from View all versions.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
               {versions.length > 0 ? (
-                <ul className="max-h-[32rem] space-y-3 overflow-auto pr-1 text-xs">
-                  {versions.map((v, index) => {
-                    const isSelected = selectedVersion?.id === v.id;
-                    const isLatest = index === 0;
-                    return (
-                      <li
-                        key={v.id}
-                        className={cn(
-                          'rounded-xl border bg-background p-3 transition',
-                          isSelected
-                            ? 'border-primary/50 shadow-sm ring-2 ring-primary/10'
-                            : 'border-border hover:border-muted-foreground/30',
-                        )}
+                <>
+                  <ul className="max-h-[32rem] space-y-2 overflow-auto pr-1">
+                    {displayedVersions.map((v) => renderVersionCard(v))}
+                  </ul>
+                  {shouldRenderPinnedLive && pinnedLiveVersion ? (
+                    <div className="space-y-2 border-border border-t pt-3">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        Pinned live version
+                      </p>
+                      <ul className="space-y-2">
+                        {renderVersionCard(pinnedLiveVersion, {
+                          pinnedLive: true,
+                        })}
+                      </ul>
+                    </div>
+                  ) : null}
+                  <div className="flex items-center justify-between gap-2 border-border border-t pt-3">
+                    <p className="text-muted-foreground text-xs">
+                      {showAllVersions
+                        ? `Showing all ${versions.length} versions.`
+                        : `Showing latest ${Math.min(
+                            VERSION_HISTORY_PREVIEW_LIMIT,
+                            previewVersions.length,
+                          )} versions.`}
+                    </p>
+                    {showAllVersions ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => setShowAllVersions(false)}
                       >
-                        <button
-                          type="button"
-                          className="block w-full text-left"
-                          disabled={versionPanelBusy}
-                          onClick={() => loadVersionIntoEditor(v)}
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold">V{v.versionNumber}</span>
-                            {isSelected ? <Badge variant="secondary">Viewing</Badge> : null}
-                            {v.isLive ? <Badge variant="outline">Live</Badge> : null}
-                            {isLatest ? <Badge variant="outline">Latest</Badge> : null}
-                          </div>
-                          <p className="mt-1 text-muted-foreground">
-                            Created {safeFormatDt(v.createdAt)}
-                          </p>
-                          <p className="mt-2 line-clamp-2 text-muted-foreground">
-                            {v.systemPrompt.trim() || 'Empty prompt'}
-                          </p>
-                        </button>
-                        <div className="mt-3 flex flex-wrap justify-end gap-1.5 border-border border-t pt-3">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="xs"
-                            disabled={versionPanelBusy}
-                            onClick={() => openPromptDiff(v)}
-                          >
-                            Diff
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="xs"
-                            disabled={versionPanelBusy || v.isLive}
-                            onClick={() => setPublishTarget(v)}
-                          >
-                            Publish
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="xs"
-                            disabled={versionPanelBusy}
-                            onClick={() => setRestoreTarget(v)}
-                          >
-                            Restore
-                          </Button>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
+                        Show latest 5
+                      </Button>
+                    ) : canRevealAllVersions ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={versionHistoryBusy}
+                        onClick={() => void loadFullVersionHistory()}
+                      >
+                        {versionHistoryBusy ? 'Loading...' : 'View all versions'}
+                      </Button>
+                    ) : null}
+                  </div>
+                </>
               ) : (
                 <p className="rounded-lg border border-dashed border-border p-4 text-muted-foreground text-sm">
                   No versions yet. Write the first prompt and save it as V1.
@@ -1052,6 +1275,50 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       </Dialog>
 
       <Dialog
+        open={tinyChangeIntent !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setTinyChangeIntent(null);
+          }
+        }}
+      >
+        {tinyChangeIntent ? (
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Create new version anyway?</DialogTitle>
+              <DialogDescription>{tinyChangeIntent.message}</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={saveBusy !== null}
+                onClick={() => setTinyChangeIntent(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                disabled={saveBusy !== null}
+                onClick={() => {
+                  const intent = tinyChangeIntent;
+                  setTinyChangeIntent(null);
+                  void saveVersionFlow(intent.publish, {
+                    confirmedTinyChange: true,
+                  });
+                }}
+              >
+                {tinyChangeIntent.publish
+                  ? 'Publish live anyway'
+                  : 'Save draft anyway'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
+      <Dialog
         open={publishTarget !== null}
         onOpenChange={(next) => {
           if (!next) {
@@ -1064,7 +1331,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             <DialogHeader>
               <DialogTitle>Publish version {publishTarget.versionNumber}?</DialogTitle>
               <DialogDescription>
-                Marks this version live and clears the live flag from other snapshots.
+                Marks this version live for Test Agent and production calls. Draft
+                snapshots remain stored in history.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
@@ -1095,12 +1363,133 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   );
 }
 
+function sortVersionsDesc(versions: AgentVersion[]): AgentVersion[] {
+  return [...versions].sort((a, b) => b.versionNumber - a.versionNumber);
+}
+
+function mergeVersions(
+  versions: AgentVersion[],
+  extraVersion: AgentVersion | null,
+): AgentVersion[] {
+  if (!extraVersion) {
+    return versions;
+  }
+  if (versions.some((version) => version.id === extraVersion.id)) {
+    return versions;
+  }
+  return [extraVersion, ...versions];
+}
+
+function getTinyChangeWarning(
+  previousValue: string,
+  nextValue: string,
+  previousVersionNumber: number,
+): string | null {
+  const before = previousValue.trim();
+  const after = nextValue.trim();
+  if (before === after) {
+    return previousValue === nextValue
+      ? null
+      : `This version only changes whitespace from V${previousVersionNumber}. Create new version anyway?`;
+  }
+
+  if (before.replace(/\s+/g, '') === after.replace(/\s+/g, '')) {
+    return `This version only changes whitespace from V${previousVersionNumber}. Create new version anyway?`;
+  }
+
+  const punctuationAndWhitespace =
+    /[\s!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]+/g;
+  if (
+    before.replace(punctuationAndWhitespace, '').toLowerCase() ===
+    after.replace(punctuationAndWhitespace, '').toLowerCase()
+  ) {
+    return `This version only changes punctuation or spacing from V${previousVersionNumber}. Create new version anyway?`;
+  }
+
+  const maxLength = Math.max(before.length, after.length);
+  if (maxLength < 40) {
+    return null;
+  }
+
+  const changed = getChangedSegment(before, after);
+  const changedLength = Math.max(changed.before.length, changed.after.length);
+  if (changedLength > 256) {
+    return null;
+  }
+
+  const threshold = Math.max(3, Math.min(16, Math.ceil(maxLength * 0.02)));
+  const distance = boundedLevenshtein(changed.before, changed.after, threshold);
+  if (distance > 0 && distance <= threshold) {
+    return `This version differs only slightly from V${previousVersionNumber}. Create new version anyway?`;
+  }
+
+  return null;
+}
+
+function getChangedSegment(
+  before: string,
+  after: string,
+): { before: string; after: string } {
+  let start = 0;
+  while (
+    start < before.length &&
+    start < after.length &&
+    before[start] === after[start]
+  ) {
+    start += 1;
+  }
+
+  let beforeEnd = before.length - 1;
+  let afterEnd = after.length - 1;
+  while (
+    beforeEnd >= start &&
+    afterEnd >= start &&
+    before[beforeEnd] === after[afterEnd]
+  ) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
+  }
+
+  return {
+    before: before.slice(start, beforeEnd + 1),
+    after: after.slice(start, afterEnd + 1),
+  };
+}
+
+function boundedLevenshtein(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) {
+    return limit + 1;
+  }
+
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    let rowMinimum = current[0];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const value = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost,
+      );
+      current[j] = value;
+      rowMinimum = Math.min(rowMinimum, value);
+    }
+    if (rowMinimum > limit) {
+      return limit + 1;
+    }
+    previous = current;
+  }
+
+  return previous[b.length] ?? limit + 1;
+}
+
 function safeFormatDt(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) {
     return iso;
   }
-  return format(d, 'MMM d yyyy HH:mm');
+  return format(d, "MMM d, yyyy 'at' h:mm a");
 }
 
 async function readApiError(res: Response): Promise<string> {

@@ -250,7 +250,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
             setRecordingState({
               phase: 'unavailable',
               reason: 'not_ready',
-              detail: responseDetail || 'Recording was not available in storage yet.',
+              detail: responseDetail || 'Recording is still processing.',
             });
             return;
           }
@@ -384,11 +384,6 @@ export function CallDetailClient({ callId }: { callId: string }) {
     (costParts.ttsUsd ?? 0) +
     (costParts.telephonyUsd ?? 0);
   const totalStored = detail.totalCostUsd;
-  const sumMatchesTotal =
-    totalStored !== null &&
-    totalStored !== undefined &&
-    !Number.isNaN(sumParts) &&
-    Math.abs(sumParts - totalStored) < 0.01;
 
   return (
     <div className="space-y-6">
@@ -474,7 +469,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
             <RecordingProcessingState
               message={
                 recordingState.detail ??
-                'Recording is still processing. Retrying playback URL…'
+                'Recording is still processing. Trying again...'
               }
               attempt={recordingState.attempt}
             />
@@ -498,15 +493,14 @@ export function CallDetailClient({ callId }: { callId: string }) {
         <CardHeader>
           <CardTitle>Transcript</CardTitle>
           <CardDescription>
-            Timestamps derive from persisted turn spans. Selecting a timestamp seeks the
-            player when waveform audio exists.
+            Select a timestamp to jump to that moment in the recording.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {transcriptTurns.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              Transcript assembly runs after calls end via the transcript queue. Completed
-              calls with speech events will populate here automatically.
+              The transcript will appear here after the call finishes and speech is
+              processed.
             </p>
           ) : (
             <ul className="space-y-3">
@@ -567,7 +561,6 @@ export function CallDetailClient({ callId }: { callId: string }) {
           breakdown={costParts}
           totalStored={totalStored ?? null}
           sumParts={sumParts}
-          sumMatchesTotal={sumMatchesTotal}
         />
         <LatencyCard stats={latencyStats} />
       </div>
@@ -736,6 +729,9 @@ function stringOrMdash(val: string | null): string {
   if (!val || val.trim() === '') {
     return '—';
   }
+  if (val === 'browser-preview') {
+    return 'Browser Preview';
+  }
   return val;
 }
 
@@ -827,12 +823,11 @@ function CostCard(props: {
   breakdown: CostParts;
   totalStored: number | null;
   sumParts: number;
-  sumMatchesTotal: boolean;
 }) {
   const rows: { label: string; value?: number }[] = [
     { label: 'Speech-to-text', value: props.breakdown.sttUsd },
-    { label: 'LLM', value: props.breakdown.llmUsd },
-    { label: 'TTS', value: props.breakdown.ttsUsd },
+    { label: 'Language model', value: props.breakdown.llmUsd },
+    { label: 'Voice generation', value: props.breakdown.ttsUsd },
     { label: 'Telephony (estimated)', value: props.breakdown.telephonyUsd },
   ];
 
@@ -843,13 +838,13 @@ function CostCard(props: {
       <CardHeader>
         <CardTitle>Cost breakdown</CardTitle>
         <CardDescription>
-          Mirrors `costBreakdown` persisted by transcript worker.
+          Cost details appear as they become available.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {!hasAny && props.totalStored == null ? (
           <p className="text-muted-foreground text-sm">
-            Costs are aggregated after transcripts finish assembling.
+            Cost details are still being calculated.
           </p>
         ) : (
           <>
@@ -866,7 +861,7 @@ function CostCard(props: {
                   </tr>
                 ))}
                 <tr>
-                  <td className="py-2 pr-4 font-medium">Stored total USD</td>
+                  <td className="py-2 pr-4 font-medium">Total</td>
                   <td className="py-2 text-right font-medium tabular-nums">
                     {props.totalStored == null ? '—' : formatUsd(props.totalStored)}
                   </td>
@@ -875,22 +870,12 @@ function CostCard(props: {
             </table>
             {props.totalStored != null ? (
               <p className="text-muted-foreground text-xs">
-                Sum of line items (${formatUsd(props.sumParts)}){' '}
-                {props.sumMatchesTotal ? (
-                  <span className="text-emerald-600 dark:text-emerald-400">
-                    matches stored totalCostUsd
-                  </span>
-                ) : (
-                  <span className="text-amber-600 dark:text-amber-400">
-                    differs from stored total by more than $0.01 — inspect JSON in DB
-                  </span>
-                )}
-                .
+                Line items total ${formatUsd(props.sumParts)} before rounding.
               </p>
             ) : null}
             {props.breakdown.durationMinutes != null ? (
               <p className="text-muted-foreground text-xs">
-                Modelled duration:&nbsp;
+                Estimated duration:&nbsp;
                 <strong className="text-foreground">
                   {props.breakdown.durationMinutes.toFixed(4)} min
                 </strong>
@@ -899,10 +884,10 @@ function CostCard(props: {
             {(props.breakdown.llmTokens != null ||
               props.breakdown.ttsCharacters != null) && (
               <p className="text-muted-foreground text-xs">
-                LLM tokens:{' '}
+                Language model tokens:{' '}
                 <strong>{props.breakdown.llmTokens ?? '—'}</strong>
                 {' · '}
-                TTS chars:&nbsp;
+                Voice characters:&nbsp;
                 <strong>{props.breakdown.ttsCharacters ?? '—'}</strong>
               </p>
             )}
@@ -931,7 +916,7 @@ function LatencyCard(props: { stats: LatencyStats }) {
       <CardContent className="space-y-4">
         {!has ? (
           <p className="text-muted-foreground text-sm">
-            No per-turn voice timing is available for this transcript yet.
+            Voice timing is not available for this transcript yet.
           </p>
         ) : (
           <>
@@ -954,13 +939,13 @@ function LatencyCard(props: { stats: LatencyStats }) {
             </div>
             {props.stats.usedLegacyLatency ? (
               <p className="text-muted-foreground text-xs">
-                Some turns use legacy latency samples because first-audio timing was
-                not present on older events.
+                Some older turns only include basic timing, so first-audio detail
+                may be approximate.
               </p>
             ) : null}
             <details className="text-xs">
               <summary className="cursor-pointer text-muted-foreground">
-                View raw first-audio samples
+                View timing samples
               </summary>
               <pre className="mt-3 max-h-40 overflow-auto rounded bg-muted px-3 py-2 font-mono text-[11px]">
                 {props.stats.firstAudio.values.join(', ')}
@@ -1013,7 +998,7 @@ function UnavailableRecording({
     state.reason === 'none'
       ? 'No recording for this call'
       : state.reason === 'storage'
-        ? 'Recording storage unavailable'
+        ? 'Recording unavailable'
         : state.reason === 'broken'
           ? 'Recording could not be played'
           : state.reason === 'not_ready'
@@ -1022,12 +1007,12 @@ function UnavailableRecording({
 
   const body =
     state.reason === 'none'
-      ? 'This call does not have a stored recording. Transcript and cost data may still be available.'
+      ? 'This call does not have a recording. Transcript and cost data may still be available.'
       : state.reason === 'not_ready'
-        ? 'The recording may still be uploading or finalizing. Refresh the page in a moment.'
+        ? 'The recording may still be processing. Refresh the page in a moment.'
         : state.reason === 'storage'
-          ? 'Object storage is not configured or temporarily unavailable.'
-          : 'Try refreshing the page. If the problem persists, run another test call.';
+          ? 'Recording playback is temporarily unavailable.'
+          : 'Try refreshing the page in a moment.';
 
   return (
     <div className="space-y-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-8 text-center text-sm">
@@ -1080,6 +1065,11 @@ function sanitizeRecordingMessage(raw: string | undefined | null): string {
   }
   if (text === 'RECORDING_NOT_READY') {
     return 'Recording not ready yet.';
+  }
+  if (
+    /object storage|bucket|r2|s3|presign|signed url|blob|storage/i.test(text)
+  ) {
+    return 'Recording playback is temporarily unavailable.';
   }
   return text;
 }

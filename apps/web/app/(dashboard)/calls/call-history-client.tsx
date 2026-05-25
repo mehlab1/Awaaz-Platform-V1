@@ -1,9 +1,18 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
 
 import { format } from 'date-fns';
+import { ChevronRight } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -78,6 +87,7 @@ interface FilterState {
 
 export function CallHistoryClient() {
   const { activeOrgId, apiCall } = useOrgContext();
+  const router = useRouter();
   const [agents, setAgents] = useState<AgentOption[]>([]);
 
   const [filters, setFilters] = useState<FilterState>({
@@ -238,6 +248,47 @@ export function CallHistoryClient() {
     setPhoneQuery('');
   };
 
+  const openCall = useCallback(
+    (
+      callId: string,
+      event?: MouseEvent<HTMLTableRowElement> | KeyboardEvent<HTMLTableRowElement>,
+    ) => {
+      const href = `/calls/${callId}`;
+      if (event?.metaKey || event?.ctrlKey) {
+        window.open(href, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      router.push(href);
+    },
+    [router],
+  );
+
+  const openCallFromKeyboard = useCallback(
+    (event: KeyboardEvent<HTMLTableRowElement>, callId: string) => {
+      if (event.key !== 'Enter') {
+        return;
+      }
+      event.preventDefault();
+      openCall(callId, event);
+    },
+    [openCall],
+  );
+
+  const openCallFromMouse = useCallback(
+    (event: MouseEvent<HTMLTableRowElement>, callId: string) => {
+      if (event.button !== 0 && event.button !== 1) {
+        return;
+      }
+      if (event.button === 1) {
+        event.preventDefault();
+        window.open(`/calls/${callId}`, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      openCall(callId, event);
+    },
+    [openCall],
+  );
+
   const fieldClass =
     'rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -268,8 +319,7 @@ export function CallHistoryClient() {
         <CardHeader>
           <CardTitle>Filters</CardTitle>
           <CardDescription className="text-muted-foreground text-xs">
-            Direction and status enums match Postgres; PSTN-normalized DID
-            fields may be sparse until Phase 9.
+            Filter calls by agent, direction, status, date, or phone number.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -308,7 +358,7 @@ export function CallHistoryClient() {
                 <option value="">Any</option>
                 {CALL_DIRECTIONS.map((d) => (
                   <option key={d} value={d}>
-                    {d}
+                    {formatEnumLabel(d)}
                   </option>
                 ))}
               </select>
@@ -329,7 +379,7 @@ export function CallHistoryClient() {
                 <option value="">Any</option>
                 {CALL_STATUSES.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {formatEnumLabel(s)}
                   </option>
                 ))}
               </select>
@@ -337,7 +387,7 @@ export function CallHistoryClient() {
           </div>
           <div className="flex flex-wrap items-end gap-4">
             <label className="flex flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              From date (UTC day)
+              From date
               <input
                 type="date"
                 className={fieldClass}
@@ -349,7 +399,7 @@ export function CallHistoryClient() {
               />
             </label>
             <label className="flex flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              To date (UTC day)
+              To date
               <input
                 type="date"
                 className={fieldClass}
@@ -364,7 +414,7 @@ export function CallHistoryClient() {
               Phone number
               <input
                 type="search"
-                placeholder="Substring on From / To…"
+                placeholder="Search from or to..."
                 className={cn(fieldClass, 'font-mono text-xs')}
                 value={phoneDraft}
                 onChange={(e) => setPhoneDraft(e.target.value)}
@@ -424,14 +474,27 @@ export function CallHistoryClient() {
                     <TableHead>Status</TableHead>
                     <TableHead>Cost</TableHead>
                     <TableHead>Test</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead className="w-10 text-right">
+                      <span className="sr-only">Open call</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {rows.map((r) => {
                     const test = isTestMeta(r.metadata);
+                    const from = formatCallParty(r.fromNumber);
+                    const to = formatCallParty(r.toNumber);
                     return (
-                      <TableRow key={r.id}>
+                      <TableRow
+                        key={r.id}
+                        role="link"
+                        tabIndex={0}
+                        aria-label={`Open call from ${from.display} to ${to.display}`}
+                        className="cursor-pointer hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                        onClick={(event) => openCallFromMouse(event, r.id)}
+                        onAuxClick={(event) => openCallFromMouse(event, r.id)}
+                        onKeyDown={(event) => openCallFromKeyboard(event, r.id)}
+                      >
                         <TableCell className="whitespace-nowrap">
                           {formatCreatedAt(r.createdAt)}
                         </TableCell>
@@ -439,13 +502,13 @@ export function CallHistoryClient() {
                           <DirectionBadge value={String(r.direction)} />
                         </TableCell>
                         <TableCell className="max-w-[140px] font-mono text-xs">
-                          <span title={stringOrDash(r.fromNumber)}>
-                            {stringOrDash(r.fromNumber)}
+                          <span title={from.title}>
+                            {from.display}
                           </span>
                         </TableCell>
                         <TableCell className="max-w-[140px] font-mono text-xs">
-                          <span title={stringOrDash(r.toNumber)}>
-                            {stringOrDash(r.toNumber)}
+                          <span title={to.title}>
+                            {to.display}
                           </span>
                         </TableCell>
                         <TableCell>{r.agent?.name ?? '—'}</TableCell>
@@ -466,12 +529,10 @@ export function CallHistoryClient() {
                           )}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Link
-                            href={`/calls/${r.id}`}
-                            className="text-primary text-sm underline-offset-4 hover:underline"
-                          >
-                            View
-                          </Link>
+                          <ChevronRight
+                            className="ml-auto size-4 text-muted-foreground"
+                            aria-hidden
+                          />
                         </TableCell>
                       </TableRow>
                     );
@@ -525,6 +586,25 @@ function formatCreatedAt(iso: string): string {
     return iso;
   }
   return format(d, 'MMM d yyyy HH:mm');
+}
+
+function formatEnumLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function formatCallParty(value: string | null): { display: string; title: string } {
+  if (value === null || value.trim() === '') {
+    return { display: '—', title: 'No phone number' };
+  }
+  if (value === 'browser-preview') {
+    return { display: 'Browser Preview', title: 'Browser Preview' };
+  }
+  const display = stringOrDash(value);
+  return { display, title: display };
 }
 
 function stringOrDash(value: string | null): string {

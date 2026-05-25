@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Delete,
   ForbiddenException,
@@ -7,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
@@ -24,6 +26,17 @@ function organizationIdFromRequest(req: Request): string {
     throw new ForbiddenException('Missing organization context');
   }
   return organizationId;
+}
+
+function parsePositiveLimit(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    throw new BadRequestException('limit must be a positive integer');
+  }
+  return Math.min(parsed, 100);
 }
 
 @Controller('api/v1/agents')
@@ -84,8 +97,16 @@ export class AgentsController {
 
   @Get(':id/versions')
   @Roles(Role.VIEWER)
-  listVersions(@Req() req: Request, @Param('id') id: string) {
-    return this.agents.listVersions(organizationIdFromRequest(req), id);
+  listVersions(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.agents.listVersions(
+      organizationIdFromRequest(req),
+      id,
+      { limit: parsePositiveLimit(limit) },
+    );
   }
 
   @Post(':id/versions')

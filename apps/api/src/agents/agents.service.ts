@@ -178,11 +178,16 @@ export class AgentsService {
     return { ok: true };
   }
 
-  async listVersions(organizationId: string, agentId: string) {
+  async listVersions(
+    organizationId: string,
+    agentId: string,
+    options: { limit?: number } = {},
+  ) {
     await this.ensureAgent(organizationId, agentId);
     return this.prisma.agentVersion.findMany({
       where: { agentId },
       orderBy: { versionNumber: 'desc' },
+      take: options.limit,
     });
   }
 
