@@ -312,13 +312,25 @@ export class LiveKitBrowserTestService {
     try {
       const [room] = await rooms.listRooms([input.roomName]);
       const metadata = this.parseRoomMetadata(room?.metadata);
+      const requestedAt = new Date().toISOString();
+      const lifecycle =
+        metadata.lifecycle && typeof metadata.lifecycle === 'object' && !Array.isArray(metadata.lifecycle)
+          ? { ...(metadata.lifecycle as Record<string, unknown>) }
+          : {};
       await rooms.updateRoomMetadata(
         input.roomName,
         JSON.stringify({
           ...metadata,
-          endRequestedAt: new Date().toISOString(),
+          endRequestedAt: requestedAt,
           endRequestedReason: input.reason,
           endRequestedBy: 'api',
+          endReason: input.reason,
+          endedBy: input.reason === 'manual_user_end' ? 'user' : 'agent',
+          lifecycle: {
+            ...lifecycle,
+            endRequestedAt: requestedAt,
+            endRequestedBy: 'api',
+          },
           callId: input.callId,
         }),
       );

@@ -21,6 +21,43 @@ from tools.transfer_to_human import transfer_to_human
 
 logger = logging.getLogger(__name__)
 
+IDLE_WARNING_MESSAGE = "Are you still there?"
+IDLE_END_MESSAGE = "I'll go ahead and end the session now. Have a great day."
+MAX_DURATION_MESSAGE = (
+    "We've reached the maximum session time, so I'll end the call now. Thank you."
+)
+CONTROL_TOPIC = "awaaz.call.control"
+
+
+def canonical_end_reason(reason: str | None) -> str:
+    normalized = (reason or "").strip().lower().replace(" ", "_")
+    if normalized in {
+        "goal_completed",
+        "user_goodbye",
+        "idle_timeout",
+        "manual_user_end",
+        "max_duration",
+        "technical_disconnect",
+    }:
+        return normalized
+    if normalized in {"frontend_end_session", "frontend_requested_end", "manual_end"}:
+        return "manual_user_end"
+    if normalized in {"assistant_requested_end_call_tool", "assistant_end_call"}:
+        return "goal_completed"
+    if normalized in {"user_closing_utterance", "goodbye", "bye"}:
+        return "user_goodbye"
+    if normalized in {"room_shutdown", "worker_shutdown", "disconnect", "disconnected"}:
+        return "technical_disconnect"
+    return normalized or "technical_disconnect"
+
+
+def ended_by_for_reason(reason: str) -> str:
+    if reason == "manual_user_end":
+        return "user"
+    if reason == "technical_disconnect":
+        return "system"
+    return "agent"
+
 
 class AwaazTools(llm.FunctionContext):
     def __init__(self, lifecycle: "CallLifecycle") -> None:
@@ -29,59 +66,139 @@ class AwaazTools(llm.FunctionContext):
 
     @llm.ai_callable(description="End the current call when the user is done.")
     async def end_call(self) -> str:
-        return await end_call(self._lifecycle.request_end)
+        self._lifecycle.mark_tool_started("end_call")
+        try:
+            return await end_call(self._lifecycle.request_end)
+        finally:
+            self._lifecycle.mark_tool_finished("end_call")
 
     @llm.ai_callable(description="Transfer the current call to a human team member.")
     async def transfer_to_human(self) -> str:
-        return await transfer_to_human()
+        self._lifecycle.mark_tool_started("transfer_to_human")
+        try:
+            return await transfer_to_human()
+        finally:
+            self._lifecycle.mark_tool_finished("transfer_to_human")
 
 
 class CallLifecycle:
     def __init__(self, ctx: JobContext, call_id: str | None) -> None:
         self._ctx = ctx
         self._call_id = call_id
+        self._room_name = room_name_from_context(ctx) or ""
         self._speech_events = None
+        self._assistant: VoiceAssistant | None = None
         self._end_requested = False
         self._end_requested_at: float | None = None
+        self._end_requested_iso: str | None = None
+        self._end_reason_code: str | None = None
+        self._end_reason_text: str | None = None
+        self._ended_by: str | None = None
+        self._room_disconnected_iso: str | None = None
         self._wait_for_final_playback = True
         self._playback_active = False
         self._playbacks_after_end_request = 0
+        self._llm_active = False
+        self._tts_active = False
+        self._stt_pending = False
+        self._stt_pending_since: float | None = None
+        self._tool_active_count = 0
+        self._reconnecting = False
+        self._policy_prompt_active = False
+        self._idle_warning_active = False
+        self._idle_warning_at: float | None = None
+        self._idle_warning_iso: str | None = None
         self._shutdown_started = False
         self._finish_task: asyncio.Task[None] | None = None
         self._timeout_task: asyncio.Task[None] | None = None
+        self._idle_task: asyncio.Task[None] | None = None
+        self._max_duration_task: asyncio.Task[None] | None = None
+        self._started_at = time.monotonic()
+        self._last_activity_at = self._started_at
+        self._last_activity_name = "call_started"
         self._drain_seconds = float_env("LIVEKIT_FINAL_PLAYBACK_DRAIN_SECONDS", 0.75)
         self._timeout_seconds = float_env(
             "LIVEKIT_FINAL_RESPONSE_TIMEOUT_SECONDS",
             18.0,
         )
+        self._idle_warning_seconds = max(
+            1.0,
+            float_env("LIVEKIT_IDLE_WARNING_SECONDS", 20.0),
+        )
+        self._idle_end_seconds = max(
+            self._idle_warning_seconds + 1.0,
+            float_env("LIVEKIT_IDLE_END_SECONDS", 30.0),
+        )
+        self._max_call_seconds = max(
+            1.0,
+            float_env("LIVEKIT_MAX_CALL_SECONDS", 1800.0),
+        )
+        self._stt_finalization_timeout_seconds = max(
+            1.0,
+            float_env("LIVEKIT_STT_FINALIZATION_TIMEOUT_SECONDS", 8.0),
+        )
 
     def set_speech_events(self, speech_events: object) -> None:
         self._speech_events = speech_events
+
+    def set_assistant(self, assistant: VoiceAssistant) -> None:
+        self._assistant = assistant
+
+    def start_policies(self) -> None:
+        if self._idle_task is None or self._idle_task.done():
+            self._idle_task = asyncio.create_task(self._idle_loop())
+        if self._max_duration_task is None or self._max_duration_task.done():
+            self._max_duration_task = asyncio.create_task(self._max_duration_loop())
+        logger.info(
+            "idle_warning_scheduled callId=%s room=%s warning_seconds=%s end_seconds=%s max_seconds=%s",
+            self._call_id,
+            self._room_name,
+            self._idle_warning_seconds,
+            self._idle_end_seconds,
+            self._max_call_seconds,
+        )
 
     async def request_end(
         self,
         reason: str,
         *,
         wait_for_final_playback: bool = True,
-    ) -> None:
+        ended_by: str | None = None,
+    ) -> bool:
         if self._shutdown_started:
             logger.info(
                 "call_end_request_ignored_after_shutdown call_id=%s reason=%s",
                 self._call_id,
                 reason,
             )
-            return
+            return False
 
         if not self._end_requested:
+            reason_code = canonical_end_reason(reason)
+            phase_at_request = self.current_phase()
             self._end_requested = True
             self._end_requested_at = time.monotonic()
+            self._end_requested_iso = utc_now_iso()
+            self._end_reason_code = reason_code
+            self._end_reason_text = reason
+            self._ended_by = ended_by or ended_by_for_reason(reason_code)
             self._wait_for_final_playback = wait_for_final_playback
             self._playbacks_after_end_request = 0
+            self._cancel_policy_tasks()
+            self._publish_session_state(
+                "ENDING",
+                "Ending session...",
+                reason=reason_code,
+            )
             logger.info(
-                "call_end_requested call_id=%s reason=%s playback_active=%s "
-                "wait_for_final_playback=%s timeout_seconds=%s",
+                "call_end_requested callId=%s room=%s reason=%s phase=%s "
+                "elapsed_seconds=%s playback_active=%s wait_for_final_playback=%s "
+                "timeout_seconds=%s",
                 self._call_id,
-                reason,
+                self._room_name,
+                reason_code,
+                phase_at_request,
+                round(time.monotonic() - self._started_at, 3),
                 self._playback_active,
                 self._wait_for_final_playback,
                 self._timeout_seconds,
@@ -94,7 +211,7 @@ class CallLifecycle:
             self._timeout_task = asyncio.create_task(self._finish_after_timeout())
             if not self._wait_for_final_playback and not self._playback_active:
                 self._schedule_finish("end requested while idle")
-            return
+            return True
 
         logger.info(
             "call_end_request_already_pending call_id=%s reason=%s playback_active=%s",
@@ -102,11 +219,78 @@ class CallLifecycle:
             reason,
             self._playback_active,
         )
+        return False
+
+    def mark_activity(self, name: str) -> None:
+        if self._end_requested or self._shutdown_started:
+            return
+        self._last_activity_at = time.monotonic()
+        self._last_activity_name = name
+        if self._idle_warning_active:
+            self._idle_warning_active = False
+            self._publish_session_state("LIVE", None)
+        logger.info(
+            "conversation_activity_detected callId=%s room=%s phase=%s activity=%s elapsed_seconds=%s",
+            self._call_id,
+            self._room_name,
+            self.current_phase(),
+            name,
+            round(self._last_activity_at - self._started_at, 3),
+        )
+
+    def mark_user_started(self) -> None:
+        self._stt_pending = True
+        self._stt_pending_since = time.monotonic()
+        self.mark_activity("user_speech_started")
+
+    def mark_user_finalized(self) -> None:
+        self._stt_pending = False
+        self._stt_pending_since = None
+        self.mark_activity("user_speech_finalized")
+
+    def mark_llm_started(self) -> None:
+        self._llm_active = True
+        self.mark_activity("llm_response_started")
+
+    def mark_llm_finished(self) -> None:
+        self._llm_active = False
+        self.mark_activity("llm_response_finished")
+
+    def mark_tts_started(self) -> None:
+        self._tts_active = True
+        if not self._policy_prompt_active:
+            self.mark_activity("tts_started")
+
+    def mark_tts_finished(self) -> None:
+        self._tts_active = False
+        if not self._policy_prompt_active:
+            self.mark_activity("tts_finished")
+
+    def mark_tool_started(self, tool_name: str) -> None:
+        self._tool_active_count += 1
+        self.mark_activity(f"tool_started:{tool_name}")
+
+    def mark_tool_finished(self, tool_name: str) -> None:
+        self._tool_active_count = max(0, self._tool_active_count - 1)
+        self.mark_activity(f"tool_finished:{tool_name}")
+
+    def mark_barge_in(self, reason: str) -> None:
+        self.mark_activity(f"barge_in:{reason}")
+
+    def mark_reconnecting(self) -> None:
+        self._reconnecting = True
+        self.mark_activity("room_reconnecting")
+
+    def mark_reconnected(self) -> None:
+        self._reconnecting = False
+        self.mark_activity("room_reconnected")
 
     def mark_playback_started(self) -> None:
         self._playback_active = True
         if self._end_requested:
             self._playbacks_after_end_request += 1
+        elif not self._policy_prompt_active:
+            self.mark_activity("agent_playback_started")
         logger.info(
             "playback_confirmed_started call_id=%s end_requested=%s "
             "playbacks_after_end_request=%s",
@@ -117,6 +301,10 @@ class CallLifecycle:
 
     def mark_playback_stopped(self, interrupted: bool) -> None:
         self._playback_active = False
+        if not self._end_requested and not self._policy_prompt_active:
+            self.mark_activity(
+                "agent_playback_interrupted" if interrupted else "agent_playback_finished"
+            )
         logger.info(
             "playback_confirmed_finished call_id=%s interrupted=%s end_requested=%s since_end_request_ms=%s",
             self._call_id,
@@ -162,6 +350,7 @@ class CallLifecycle:
         if self._shutdown_started:
             return
         self._shutdown_started = True
+        self._cancel_policy_tasks()
 
         current_task = asyncio.current_task()
         if self._timeout_task is not None and self._timeout_task is not current_task:
@@ -188,10 +377,13 @@ class CallLifecycle:
         logger.info("room_close_requested call_id=%s reason=%s", self._call_id, reason)
         try:
             await self._ctx.room.disconnect()
+            self._room_disconnected_iso = utc_now_iso()
             logger.info(
-                "room_disconnected_by_lifecycle call_id=%s reason=%s",
+                "call_end_room_disconnected callId=%s room=%s reason=%s elapsed_seconds=%s",
                 self._call_id,
-                reason,
+                self._room_name,
+                self._end_reason_code or canonical_end_reason(reason),
+                round(time.monotonic() - self._started_at, 3),
             )
         except Exception:
             logger.warning(
@@ -201,6 +393,230 @@ class CallLifecycle:
                 exc_info=True,
             )
         self._ctx.shutdown(reason)
+
+    def end_call_payload(self, fallback_reason: str) -> dict[str, object]:
+        reason = self._end_reason_code or canonical_end_reason(fallback_reason)
+        ended_by = self._ended_by or ended_by_for_reason(reason)
+        lifecycle: dict[str, object] = {}
+        if self._idle_warning_iso:
+            lifecycle["idleWarningAt"] = self._idle_warning_iso
+        if self._end_requested_iso:
+            lifecycle["endRequestedAt"] = self._end_requested_iso
+        if self._room_disconnected_iso:
+            lifecycle["roomDisconnectedAt"] = self._room_disconnected_iso
+        if self._end_reason_text:
+            lifecycle["endReasonText"] = self._end_reason_text
+        return {
+            "reason": reason,
+            "metadata": {
+                "endReason": reason,
+                "endedBy": ended_by,
+                "lifecycle": lifecycle,
+            },
+        }
+
+    def current_phase(self) -> str:
+        if self._end_requested:
+            return "ending"
+        if self._reconnecting:
+            return "reconnecting"
+        if self._playback_active:
+            return "speaking"
+        if self._llm_active:
+            return "generating"
+        if self._tts_active:
+            return "synthesizing"
+        if self._tool_active_count > 0:
+            return "tool_running"
+        if self._stt_pending:
+            return "stt_pending"
+        return "idle"
+
+    def _is_busy(self) -> bool:
+        if self._stt_pending and self._stt_pending_since is not None:
+            pending_for = time.monotonic() - self._stt_pending_since
+            if pending_for > self._stt_finalization_timeout_seconds:
+                logger.warning(
+                    "stt_finalization_timeout callId=%s pending_seconds=%s",
+                    self._call_id,
+                    round(pending_for, 3),
+                )
+                self._stt_pending = False
+                self._stt_pending_since = None
+        return (
+            self._playback_active
+            or self._llm_active
+            or self._tts_active
+            or self._tool_active_count > 0
+            or self._stt_pending
+            or self._reconnecting
+            or self._policy_prompt_active
+            or self._end_requested
+        )
+
+    def _cancel_policy_tasks(self) -> None:
+        current_task = asyncio.current_task()
+        for task in (self._idle_task, self._max_duration_task):
+            if task is not None and task is not current_task and not task.done():
+                task.cancel()
+
+    async def _idle_loop(self) -> None:
+        try:
+            while not self._end_requested and not self._shutdown_started:
+                await asyncio.sleep(0.5)
+                if self._is_busy():
+                    continue
+                now = time.monotonic()
+                idle_for = now - self._last_activity_at
+                if not self._idle_warning_active and idle_for >= self._idle_warning_seconds:
+                    self._idle_warning_active = True
+                    self._idle_warning_at = now
+                    self._idle_warning_iso = utc_now_iso()
+                    logger.info(
+                        "idle_warning_triggered callId=%s room=%s phase=%s elapsed_seconds=%s idle_seconds=%s",
+                        self._call_id,
+                        self._room_name,
+                        self.current_phase(),
+                        round(now - self._started_at, 3),
+                        round(idle_for, 3),
+                    )
+                    self._publish_session_state(
+                        "IDLE",
+                        "Agent is checking if you're still there.",
+                        reason="idle_warning",
+                    )
+                    await self._say_policy_prompt(
+                        IDLE_WARNING_MESSAGE,
+                        prompt_name="idle_warning",
+                        allow_interruptions=True,
+                    )
+                    continue
+                if idle_for >= self._idle_end_seconds:
+                    logger.warning(
+                        "idle_end_triggered callId=%s room=%s phase=%s elapsed_seconds=%s idle_seconds=%s",
+                        self._call_id,
+                        self._room_name,
+                        self.current_phase(),
+                        round(now - self._started_at, 3),
+                        round(idle_for, 3),
+                    )
+                    won = await self.request_end(
+                        "idle_timeout",
+                        wait_for_final_playback=True,
+                        ended_by="agent",
+                    )
+                    if won:
+                        await self._say_policy_prompt(
+                            IDLE_END_MESSAGE,
+                            prompt_name="idle_timeout",
+                            allow_interruptions=False,
+                        )
+                    return
+        except asyncio.CancelledError:
+            return
+
+    async def _max_duration_loop(self) -> None:
+        try:
+            await asyncio.sleep(self._max_call_seconds)
+            if self._end_requested or self._shutdown_started:
+                return
+            logger.warning(
+                "call_end_requested reason=max_duration callId=%s room=%s phase=%s elapsed_seconds=%s",
+                self._call_id,
+                self._room_name,
+                self.current_phase(),
+                round(time.monotonic() - self._started_at, 3),
+            )
+            won = await self.request_end(
+                "max_duration",
+                wait_for_final_playback=True,
+                ended_by="agent",
+            )
+            if won:
+                await self._wait_for_prompt_slot(timeout_seconds=30.0)
+                await self._say_policy_prompt(
+                    MAX_DURATION_MESSAGE,
+                    prompt_name="max_duration",
+                    allow_interruptions=False,
+                )
+        except asyncio.CancelledError:
+            return
+
+    async def _wait_for_prompt_slot(self, timeout_seconds: float) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if not (
+                self._playback_active
+                or self._llm_active
+                or self._tts_active
+                or self._tool_active_count > 0
+                or self._reconnecting
+            ):
+                return
+            await asyncio.sleep(0.2)
+
+    async def _say_policy_prompt(
+        self,
+        text: str,
+        *,
+        prompt_name: str,
+        allow_interruptions: bool,
+    ) -> None:
+        assistant = self._assistant
+        if assistant is None:
+            logger.warning(
+                "policy_prompt_skipped_no_assistant callId=%s prompt=%s",
+                self._call_id,
+                prompt_name,
+            )
+            return
+        self._policy_prompt_active = True
+        try:
+            await assistant.say(text, allow_interruptions=allow_interruptions)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "policy_prompt_failed callId=%s prompt=%s",
+                self._call_id,
+                prompt_name,
+                exc_info=True,
+            )
+        finally:
+            self._policy_prompt_active = False
+
+    def _publish_session_state(
+        self,
+        phase: str,
+        message: str | None,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        participant = getattr(self._ctx.room, "local_participant", None)
+        publish_data = getattr(participant, "publish_data", None)
+        if not callable(publish_data):
+            return
+
+        payload = {
+            "type": "session_state",
+            "phase": phase,
+            "message": message,
+            "reason": reason,
+            "callId": self._call_id,
+            "elapsedSeconds": round(time.monotonic() - self._started_at, 3),
+        }
+
+        async def publish() -> None:
+            try:
+                await publish_data(
+                    json.dumps(payload),
+                    reliable=True,
+                    topic=CONTROL_TOPIC,
+                )
+            except Exception:
+                logger.debug("session_state_publish_failed", exc_info=True)
+
+        asyncio.create_task(publish())
 
 
 class AwaazAgent:
@@ -242,14 +658,18 @@ class AwaazAgent:
         )
         timing = PipelineTiming()
         lifecycle = CallLifecycle(ctx, call_id)
+        timing.set_lifecycle(lifecycle)
         assistant = create_assistant(config, rime, AwaazTools(lifecycle), timing)
+        lifecycle.set_assistant(assistant)
         register_call_control_events(ctx.room, lifecycle, call_id)
+        register_lifecycle_room_events(ctx.room, lifecycle)
         if room_metadata.get("endRequestedAt"):
             asyncio.create_task(
                 lifecycle.request_end(
-                    string_value(room_metadata, "endRequestedReason", "frontend end session")
-                    or "frontend end session",
+                    string_value(room_metadata, "endRequestedReason", "manual_user_end")
+                    or "manual_user_end",
                     wait_for_final_playback=False,
+                    ended_by="user",
                 )
             )
         speech_events = register_events(
@@ -266,7 +686,15 @@ class AwaazAgent:
             logger.info("worker_shutdown_callback_started call_id=%s", call_id)
             await speech_events.flush()
             if call_id:
-                await api.end_call(call_id, {"reason": "room shutdown"})
+                await api.end_call(
+                    call_id,
+                    lifecycle.end_call_payload("technical_disconnect"),
+                )
+                logger.info(
+                    "call_end_backend_completed callId=%s reason=%s",
+                    call_id,
+                    lifecycle.end_call_payload("technical_disconnect").get("reason"),
+                )
             await rime.aclose()
             await api.aclose()
 
@@ -280,6 +708,7 @@ class AwaazAgent:
         )
         assistant.start(ctx.room, participant)
         register_timing_events(assistant, timing, lifecycle)
+        lifecycle.start_policies()
 
         first_message = string_value(config, "firstMessage")
         if first_message:
@@ -293,7 +722,17 @@ def create_assistant(
     timing: "PipelineTiming",
 ) -> VoiceAssistant:
     chat_ctx = ChatContext()
-    chat_ctx.append(text=string_value(config, "systemPrompt", ""), role="system")
+    base_prompt = string_value(config, "systemPrompt", "")
+    lifecycle_prompt = (
+        "When the conversation has clearly reached its goal, the user says goodbye, "
+        "or the user indicates they are done, politely close your final response and "
+        "call the end_call tool. Do not say you are ending the session unless you are "
+        "ready for the call to end."
+    )
+    chat_ctx.append(
+        text=f"{base_prompt}\n\n{lifecycle_prompt}" if base_prompt else lifecycle_prompt,
+        role="system",
+    )
     vad_min_speech = float_env("LIVEKIT_VAD_MIN_SPEECH_SECONDS", 0.04)
     vad_min_silence = float_env("LIVEKIT_VAD_MIN_SILENCE_SECONDS", 0.15)
     vad_padding = float_env("LIVEKIT_VAD_PADDING_SECONDS", 0.05)
@@ -473,6 +912,10 @@ class PipelineTiming:
         self.last_response: ResponseTiming | None = None
         self.barge_in_requested_at: float | None = None
         self.barge_in_reason: str | None = None
+        self._lifecycle: CallLifecycle | None = None
+
+    def set_lifecycle(self, lifecycle: CallLifecycle) -> None:
+        self._lifecycle = lifecycle
 
     def mark_user_started(self) -> None:
         self.turn_id += 1
@@ -481,6 +924,8 @@ class PipelineTiming:
             started_at=time.monotonic(),
             started_at_iso=utc_now_iso(),
         )
+        if self._lifecycle is not None:
+            self._lifecycle.mark_user_started()
         logger.info("voice_turn_started turn=%s", self.turn_id)
 
     def mark_user_stopped(self) -> None:
@@ -501,6 +946,8 @@ class PipelineTiming:
         assert self.current_user is not None
         self.current_user.final_transcript_at = time.monotonic()
         self.current_user.final_transcript_at_iso = utc_now_iso()
+        if self._lifecycle is not None:
+            self._lifecycle.mark_user_finalized()
         logger.info(
             "voice_stt_final turn=%s chars=%s since_user_start_ms=%s since_user_stop_ms=%s text=%r",
             self.current_user.turn_id,
@@ -518,6 +965,8 @@ class PipelineTiming:
         response = self._new_response()
         response.llm_started_at = time.monotonic()
         response.llm_started_at_iso = utc_now_iso()
+        if self._lifecycle is not None:
+            self._lifecycle.mark_llm_started()
         user_text = ""
         if chat_ctx.messages:
             user_text = message_text(chat_ctx.messages[-1])
@@ -555,12 +1004,19 @@ class PipelineTiming:
         response: ResponseTiming,
     ) -> AsyncIterable[str]:
         chars = 0
-        async for segment in source:
-            if segment and response.tts_text_started_at is None:
-                self.mark_tts_text_started(response, segment)
-            chars += len(segment)
-            yield segment
-        self.mark_tts_text_finished(response, chars)
+        finished = False
+        try:
+            async for segment in source:
+                if segment and response.tts_text_started_at is None:
+                    self.mark_tts_text_started(response, segment)
+                chars += len(segment)
+                yield segment
+            finished = True
+        finally:
+            if response.tts_text_started_at is not None and not finished:
+                self.mark_tts_text_finished(response, chars)
+        if response.tts_text_started_at is not None:
+            self.mark_tts_text_finished(response, chars)
 
     def mark_first_llm_token(self, response: ResponseTiming) -> None:
         response.first_llm_token_at = time.monotonic()
@@ -574,8 +1030,12 @@ class PipelineTiming:
         )
 
     def mark_llm_finished(self, response: ResponseTiming) -> None:
+        if response.llm_finished_at is not None:
+            return
         response.llm_finished_at = time.monotonic()
         response.llm_finished_at_iso = utc_now_iso()
+        if self._lifecycle is not None:
+            self._lifecycle.mark_llm_finished()
         logger.info(
             "voice_llm_done turn=%s response=%s llm_total_ms=%s since_user_stop_ms=%s",
             response.turn_id,
@@ -585,8 +1045,12 @@ class PipelineTiming:
         )
 
     def mark_tts_text_started(self, response: ResponseTiming, text: str) -> None:
+        if response.tts_text_started_at is not None:
+            return
         response.tts_text_started_at = time.monotonic()
         response.tts_text_started_at_iso = utc_now_iso()
+        if self._lifecycle is not None:
+            self._lifecycle.mark_tts_started()
         logger.info(
             "voice_tts_text_start turn=%s response=%s since_llm_start_ms=%s since_first_llm_token_ms=%s preview=%r",
             response.turn_id,
@@ -597,7 +1061,11 @@ class PipelineTiming:
         )
 
     def mark_tts_text_finished(self, response: ResponseTiming, chars: int) -> None:
+        if response.tts_text_finished_at_iso is not None:
+            return
         response.tts_text_finished_at_iso = utc_now_iso()
+        if self._lifecycle is not None:
+            self._lifecycle.mark_tts_finished()
         logger.info(
             "voice_tts_text_done turn=%s response=%s chars=%s since_tts_text_start_ms=%s",
             response.turn_id,
@@ -640,6 +1108,8 @@ class PipelineTiming:
     def mark_barge_in_requested(self, reason: str) -> None:
         self.barge_in_requested_at = time.monotonic()
         self.barge_in_reason = reason
+        if self._lifecycle is not None:
+            self._lifecycle.mark_barge_in(reason)
 
     def response_latency_ms(self) -> int | None:
         return self.first_audio_latency_ms(self._event_response())
@@ -779,17 +1249,26 @@ class TimedLLMStream(LLMStream):
     def function_calls(self):
         return self._inner.function_calls
 
+    def _mark_finished_once(self) -> None:
+        if not self._finished:
+            self._finished = True
+            self._timing.mark_llm_finished(self._response)
+
     async def aclose(self) -> None:
-        await self._inner.aclose()
-        await super().aclose()
+        try:
+            await self._inner.aclose()
+            await super().aclose()
+        finally:
+            self._mark_finished_once()
 
     async def __anext__(self):
         try:
             chunk = await self._inner.__anext__()
         except StopAsyncIteration:
-            if not self._finished:
-                self._finished = True
-                self._timing.mark_llm_finished(self._response)
+            self._mark_finished_once()
+            raise
+        except Exception:
+            self._mark_finished_once()
             raise
 
         content = chunk.choices[0].delta.content if chunk.choices else None
@@ -905,7 +1384,7 @@ def register_call_control_events(
             return
 
         reason = payload.get("reason")
-        reason_text = reason if isinstance(reason, str) and reason else "frontend end session"
+        reason_text = reason if isinstance(reason, str) and reason else "manual_user_end"
         logger.info(
             "call_end_requested call_id=%s reason=%s source=livekit_data",
             call_id,
@@ -915,10 +1394,37 @@ def register_call_control_events(
             lifecycle.request_end(
                 reason_text,
                 wait_for_final_playback=False,
+                ended_by="user",
             )
         )
 
     on("data_received", on_data_received)
+
+
+def register_lifecycle_room_events(room: object, lifecycle: CallLifecycle) -> None:
+    on = getattr(room, "on", None)
+    if not callable(on):
+        logger.warning("Call lifecycle could not attach to room events")
+        return
+
+    on("reconnecting", lambda: lifecycle.mark_reconnecting())
+    on("reconnected", lambda: lifecycle.mark_reconnected())
+
+    def on_disconnected(reason: object = None) -> None:
+        logger.warning(
+            "call_end_room_disconnected_observed reason=%s phase=%s",
+            reason,
+            lifecycle.current_phase(),
+        )
+        asyncio.create_task(
+            lifecycle.request_end(
+                "technical_disconnect",
+                wait_for_final_playback=False,
+                ended_by="system",
+            )
+        )
+
+    on("disconnected", on_disconnected)
 
 
 def register_timing_events(
@@ -1190,7 +1696,7 @@ def register_events(
                 len(text),
                 text[:120],
             )
-            asyncio.create_task(lifecycle.request_end("user closing utterance"))
+            asyncio.create_task(lifecycle.request_end("user_goodbye"))
 
     def on_agent_speech(message: llm.ChatMessage) -> None:
         if not timing.agent_played_audio():

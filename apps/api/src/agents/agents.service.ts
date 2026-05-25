@@ -251,6 +251,67 @@ export class AgentsService {
     );
   }
 
+  async updateVersion(
+    organizationId: string,
+    actorUserId: string,
+    agentId: string,
+    versionId: string,
+    dto: CreateAgentVersionDto,
+  ) {
+    const resolvedVoice = await this.voices.resolveForTts(dto.voiceId);
+    return this.prisma.$transaction(async (tx) => {
+      await this.ensureAgentInTransaction(tx, organizationId, agentId);
+      const existing = await tx.agentVersion.findFirst({
+        where: { id: versionId, agentId },
+        select: { id: true, versionNumber: true, isLive: true },
+      });
+      if (!existing) {
+        throw new NotFoundException('Agent version not found');
+      }
+
+      const version = await tx.agentVersion.update({
+        where: { id: versionId },
+        data: {
+          systemPrompt: dto.systemPrompt,
+          voiceId: resolvedVoice.rimeVoiceId,
+          model: dto.model,
+          temperature: dto.temperature,
+          maxTokens: dto.maxTokens,
+          firstMessage: dto.firstMessage,
+          endCallPhrases: dto.endCallPhrases,
+        },
+      });
+
+      await this.audit.record(
+        {
+          organizationId,
+          actorUserId,
+          action: AuditAction.UPDATED,
+          entityType: 'AgentVersion',
+          entityId: version.id,
+          metadata: {
+            agentId,
+            versionNumber: version.versionNumber,
+            updatedLiveVersion: existing.isLive,
+            requestedVoiceId: dto.voiceId,
+            voiceId: version.voiceId,
+            voiceModelId: resolvedVoice.modelId,
+            voiceLang: resolvedVoice.lang,
+            model: version.model,
+            temperature: version.temperature,
+            maxTokens: version.maxTokens,
+            systemPromptLength: version.systemPrompt.length,
+            hasFirstMessage: Boolean(version.firstMessage),
+            endCallPhraseCount: version.endCallPhrases.length,
+          },
+        },
+        tx,
+      );
+
+      return version;
+    });
+  }
+
   async publishVersion(
     organizationId: string,
     actorUserId: string,
@@ -470,12 +531,19 @@ export class AgentsService {
     }
 
     const roomName = this.browserRoomName(call);
+    const requestedAt = new Date().toISOString();
     await this.prisma.call.update({
       where: { id: call.id },
       data: {
         metadata: this.mergeBrowserCallMetadata(call.metadata, {
-          endRequestedAt: new Date().toISOString(),
+          endRequestedAt: requestedAt,
           endRequestedBy: 'frontend',
+          endReason: 'manual_user_end',
+          endedBy: 'user',
+          lifecycle: {
+            endRequestedAt: requestedAt,
+            endRequestedBy: 'frontend',
+          },
         }),
       },
     });
@@ -485,7 +553,7 @@ export class AgentsService {
         await this.liveKitBrowserTest.closeBrowserRoom({
           roomName,
           callId,
-          reason: 'frontend requested end for completed call',
+          reason: 'manual_user_end',
         });
       }
       return { ok: true, state: 'already_ended' };
@@ -496,7 +564,7 @@ export class AgentsService {
         await this.liveKitBrowserTest.requestBrowserCallEnd({
           roomName,
           callId,
-          reason: 'frontend end session',
+          reason: 'manual_user_end',
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -508,7 +576,7 @@ export class AgentsService {
         await this.liveKitBrowserTest.closeBrowserRoom({
           roomName,
           callId,
-          reason: 'frontend end session signal failed',
+          reason: 'manual_user_end',
         });
       }
     }
@@ -558,7 +626,22 @@ export class AgentsService {
       metadata && typeof metadata === 'object' && !Array.isArray(metadata)
         ? { ...(metadata as Record<string, unknown>) }
         : {};
-    return { ...base, ...update } as Prisma.InputJsonObject;
+    const baseLifecycle =
+      base.lifecycle && typeof base.lifecycle === 'object' && !Array.isArray(base.lifecycle)
+        ? { ...(base.lifecycle as Record<string, unknown>) }
+        : {};
+    const updateLifecycle =
+      update.lifecycle && typeof update.lifecycle === 'object' && !Array.isArray(update.lifecycle)
+        ? { ...(update.lifecycle as Record<string, unknown>) }
+        : {};
+    return {
+      ...base,
+      ...update,
+      lifecycle: {
+        ...baseLifecycle,
+        ...updateLifecycle,
+      },
+    } as Prisma.InputJsonObject;
   }
 
   private async ensureAgent(

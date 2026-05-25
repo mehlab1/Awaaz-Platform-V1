@@ -212,7 +212,7 @@ export class InternalService {
         status: CallStatus.COMPLETED,
         endedAt,
         durationSeconds: this.durationSeconds(call.startedAt, endedAt),
-        metadata: this.mergeMetadata(call.metadata, dto.metadata),
+        metadata: this.mergeEndMetadata(call.metadata, dto, endedAt),
       },
       select: {
         id: true,
@@ -221,6 +221,10 @@ export class InternalService {
         metadata: true,
       },
     });
+    const endReason = this.canonicalEndReason(dto.reason) ?? this.metadataString(updatedCall.metadata, 'endReason');
+    this.logger.log(
+      `call_end_backend_completed call_id=${callId} reason=${endReason ?? '(unspecified)'}`,
+    );
     const enqueued = await this.enqueueTranscriptJob(callId, call.liveKitRoomId);
     if (!enqueued && this.isBrowserPreviewCall(updatedCall)) {
       await this.assembleTranscriptFallback(callId, call.liveKitRoomId);
@@ -387,6 +391,106 @@ export class InternalService {
       ...base,
       ...(update ?? {}),
     } as Prisma.InputJsonObject;
+  }
+
+  private mergeEndMetadata(
+    existing: Prisma.JsonValue | null,
+    dto: EndCallDto,
+    endedAt: Date,
+  ): Prisma.InputJsonValue {
+    const base =
+      existing && typeof existing === 'object' && !Array.isArray(existing)
+        ? { ...(existing as Record<string, unknown>) }
+        : {};
+    const update = dto.metadata ?? {};
+    const baseLifecycle = this.objectValue(base.lifecycle);
+    const updateLifecycle = this.objectValue(update.lifecycle);
+    const incomingReason = this.canonicalEndReason(dto.reason);
+    const updateReason = this.canonicalEndReason(this.stringValue(update.endReason));
+    const existingReason = this.canonicalEndReason(this.stringValue(base.endReason));
+    const reason =
+      (incomingReason === 'technical_disconnect'
+        ? updateReason ?? existingReason ?? incomingReason
+        : incomingReason) ??
+      updateReason ??
+      existingReason ??
+      'technical_disconnect';
+    const endedBy =
+      this.stringValue(update.endedBy) ??
+      this.stringValue(base.endedBy) ??
+      this.endedByForReason(reason);
+    const lifecycle = {
+      ...baseLifecycle,
+      ...updateLifecycle,
+      backendCompletedAt: endedAt.toISOString(),
+    };
+
+    return {
+      ...base,
+      ...update,
+      endReason: reason,
+      endedBy,
+      lifecycle,
+    } as Prisma.InputJsonObject;
+  }
+
+  private objectValue(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? { ...(value as Record<string, unknown>) }
+      : {};
+  }
+
+  private stringValue(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  }
+
+  private metadataString(metadata: Prisma.JsonValue | null, key: string): string | undefined {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return undefined;
+    }
+    return this.stringValue((metadata as Record<string, unknown>)[key]);
+  }
+
+  private canonicalEndReason(reason: string | undefined): string | undefined {
+    const normalized = reason?.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!normalized) {
+      return undefined;
+    }
+    if (
+      [
+        'goal_completed',
+        'user_goodbye',
+        'idle_timeout',
+        'manual_user_end',
+        'max_duration',
+        'technical_disconnect',
+      ].includes(normalized)
+    ) {
+      return normalized;
+    }
+    if (['frontend_end_session', 'frontend_requested_end', 'manual_end'].includes(normalized)) {
+      return 'manual_user_end';
+    }
+    if (['assistant_requested_end_call_tool', 'assistant_end_call'].includes(normalized)) {
+      return 'goal_completed';
+    }
+    if (['user_closing_utterance', 'goodbye', 'bye'].includes(normalized)) {
+      return 'user_goodbye';
+    }
+    if (['room_shutdown', 'worker_shutdown', 'disconnect', 'disconnected'].includes(normalized)) {
+      return 'technical_disconnect';
+    }
+    return normalized;
+  }
+
+  private endedByForReason(reason: string): string {
+    if (reason === 'manual_user_end') {
+      return 'user';
+    }
+    if (reason === 'technical_disconnect') {
+      return 'system';
+    }
+    return 'agent';
   }
 
   private browserRoomName(call: {

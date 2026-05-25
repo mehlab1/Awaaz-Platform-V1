@@ -19,7 +19,7 @@ export function AgentSystemPromptEditor({
   const characterCount = value.length.toLocaleString();
 
   return (
-    <div className="rounded-2xl border border-border bg-muted/25 p-2 shadow-sm">
+    <div className="rounded-lg border border-border/70 bg-muted/20 p-2 shadow-sm">
       <label htmlFor={id} className="sr-only">
         System prompt
       </label>
@@ -31,7 +31,7 @@ export function AgentSystemPromptEditor({
         placeholder="Teach your AI assistant how to behave. Describe its role, tone, boundaries, call goals, escalation rules, and anything it must never say."
         onChange={(event) => onChange(event.target.value)}
         className={cn(
-          'min-h-[520px] w-full resize-y scroll-smooth rounded-xl border border-transparent bg-background/80 px-5 py-4 text-[0.95rem] leading-7 text-foreground shadow-inner outline-none transition',
+          'min-h-[60vh] w-full resize-y scroll-smooth rounded-md border border-transparent bg-background px-5 py-5 text-[0.96rem] leading-7 text-foreground outline-none transition',
           'placeholder:text-muted-foreground/70 focus:border-ring focus:bg-background focus:ring-3 focus:ring-ring/20',
           'disabled:cursor-not-allowed disabled:opacity-60',
         )}

@@ -138,6 +138,23 @@ export class AgentsController {
     );
   }
 
+  @Patch(':id/versions/:versionId')
+  @Roles(Role.BUILDER)
+  updateVersion(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Param('versionId') versionId: string,
+    @Body() dto: CreateAgentVersionDto,
+  ) {
+    return this.agents.updateVersion(
+      organizationIdFromRequest(req),
+      req.user!.id,
+      id,
+      versionId,
+      dto,
+    );
+  }
+
   @Post(':id/versions/:versionId/publish')
   @Roles(Role.BUILDER)
   publishVersion(
