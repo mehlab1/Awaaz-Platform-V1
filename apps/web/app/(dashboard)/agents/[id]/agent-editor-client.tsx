@@ -8,15 +8,21 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   AlertTriangle,
   ArrowLeft,
+  ChevronRight,
+  Clock,
   Copy,
+  Eye,
   GitCompare,
+  History,
   Loader2,
   MoreVertical,
+  Pause,
   Play,
   Plus,
   Rocket,
   RotateCcw,
   Save,
+  Settings2,
   type LucideIcon,
   Volume2,
 } from 'lucide-react';
@@ -136,7 +142,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     message: string;
   } | null>(null);
   const [openVersionMenuId, setOpenVersionMenuId] = useState<string | null>(null);
-  const [phoneEditOpen, setPhoneEditOpen] = useState(false);
   const [versionMutating, setVersionMutating] = useState<
     | { kind: 'restore' | 'publish'; versionId: string }
     | null
@@ -146,6 +151,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
   const [phoneDropdownOpen, setPhoneDropdownOpen] = useState(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const [previewingVersion, setPreviewingVersion] = useState<AgentVersion | null>(null);
+  const [fullHistoryOpen, setFullHistoryOpen] = useState(false);
+  const [navVoicePlaying, setNavVoicePlaying] = useState(false);
 
   useEffect(() => {
     setPromptHydrated(false);
@@ -278,21 +286,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     latestVersion != null &&
     selectedVersion.versionNumber < latestVersion.versionNumber;
   const editorStatusText = hasUnsavedChanges
-    ? `Editing Draft Based on ${draftBaseLabel}`
+    ? `Draft · ${draftBaseLabel}`
     : isSelectedLive && selectedVersion
-      ? `Viewing Live ${selectedVersionLabel}`
+      ? `Live · ${selectedVersionLabel}`
       : selectedVersion
-        ? `Viewing ${selectedVersionLabel}`
-        : 'No version selected';
+        ? `Viewing · ${selectedVersionLabel}`
+        : 'New Agent';
 
-  const lastUpdatedLabel = selectedVersion
-    ? `Updated ${safeRelativeTime(selectedVersion.updatedAt)}`
-    : liveVersion
-      ? `Live ${safeRelativeTime(liveVersion.updatedAt)}`
-      : 'No version selected';
-  const editorMetaLabel = hasUnsavedChanges
-    ? 'Draft changes saved locally'
-    : 'No unpublished draft changes';
   const previewVersions = versions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT);
   const pinnedLiveVersion =
     !showAllVersions && liveVersion
@@ -303,10 +303,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     pinnedLiveVersion != null &&
     !previewVersions.some((version) => version.id === pinnedLiveVersion.id);
   const displayedVersions = showAllVersions ? versions : previewVersions;
-  const canRevealAllVersions =
-    !showAllVersions &&
-    (versions.length > VERSION_HISTORY_PREVIEW_LIMIT ||
-      (!allVersionsLoaded && versions.length >= VERSION_HISTORY_PREVIEW_LIMIT));
 
   useEffect(() => {
     if (!agent || promptHydrated) {
@@ -535,6 +531,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVoiceId(version.voiceId);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
+      setPreviewingVersion(null);
       setToast(
         `Viewing V${version.versionNumber}. Update this version or save V${nextVersionNumber} as a new version.`,
       );
@@ -853,6 +850,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setPreviewBusy(true);
     if (voiceToPreview) {
       setPlayingVoiceId(voiceToPreview.rimeVoiceId);
+    } else {
+      setNavVoicePlaying(true);
     }
     try {
       console.debug('[AgentEditor] Voice preview request', {
@@ -883,6 +882,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     } finally {
       setPreviewBusy(false);
       setPlayingVoiceId(null);
+      setNavVoicePlaying(false);
     }
   };
 
@@ -987,6 +987,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
   };
 
+  /* ─── Version row for sidebar history ─── */
   const renderVersionRow = (
     v: AgentVersion,
     options: { pinnedLive?: boolean } = {},
@@ -994,109 +995,120 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const isSelected = selectedVersion?.id === v.id;
     const status = versionStatus(v, liveVersion, latestVersion);
     const timestamp = v.publishedAt ?? v.updatedAt ?? v.createdAt;
-    const isOlderHistory = showAllVersions && v.versionNumber < VERSION_HISTORY_PREVIEW_LIMIT;
 
     return (
       <li
         key={options.pinnedLive ? `${v.id}-pinned` : v.id}
         className={cn(
-          'group/version relative rounded-lg px-2.5 py-1.5 text-xs transition-colors',
-          v.isLive ? 'bg-primary/5' : 'hover:bg-muted/50',
-          isSelected && 'bg-muted/75 ring-1 ring-border/70',
-          isOlderHistory && 'opacity-75',
+          'group/version relative rounded-lg px-3 py-2 text-xs transition-all cursor-pointer',
+          v.isLive
+            ? 'bg-primary/[0.04] hover:bg-primary/[0.08]'
+            : 'hover:bg-muted/60',
+          isSelected && 'bg-muted/70 ring-1 ring-primary/20',
         )}
+        onClick={() => setPreviewingVersion(v)}
       >
         <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            disabled={versionPanelBusy}
-            onClick={() => loadVersionIntoEditor(v)}
-          >
-            <div className="flex items-center justify-between gap-1.5">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="font-semibold text-xs leading-none">
-                  V{v.versionNumber}
-                </span>
-                <span className="text-[10px] text-muted-foreground shrink-0">
-                  {safeRelativeTime(timestamp)}
-                </span>
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <Badge variant={v.isLive ? 'default' : 'secondary'} className="text-[9px] px-1 py-0 h-4">
-                  {status}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-xs leading-none">
+                V{v.versionNumber}
+              </span>
+              <Badge
+                variant={v.isLive ? 'default' : 'secondary'}
+                className="text-[9px] px-1.5 py-0 h-[18px] font-medium"
+              >
+                {status}
+              </Badge>
+              {isSelected ? (
+                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-[18px]">
+                  Active
                 </Badge>
-                {isSelected ? (
-                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-                    Open
-                  </Badge>
-                ) : null}
-              </div>
+              ) : null}
             </div>
-          </button>
-          <div className="relative shrink-0" data-version-menu-root={v.id}>
+            <span className="text-[10px] text-muted-foreground/70 mt-0.5 block">
+              {safeRelativeTime(timestamp)}
+            </span>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
             <Button
               type="button"
               variant="ghost"
               size="icon-xs"
-              className="h-6 w-6"
-              aria-label={`Actions for version ${v.versionNumber}`}
-              aria-expanded={openVersionMenuId === v.id}
-              onClick={() =>
-                setOpenVersionMenuId((current) => (current === v.id ? null : v.id))
-              }
+              className="h-6 w-6 opacity-0 group-hover/version:opacity-100 transition-opacity"
+              onClick={(e) => {
+                e.stopPropagation();
+                setPreviewingVersion(v);
+              }}
+              title="Preview version"
             >
-              <MoreVertical className="size-3" aria-hidden />
+              <Eye className="size-3" aria-hidden />
             </Button>
-            {openVersionMenuId === v.id ? (
-              <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-border/70 bg-popover p-1.5 text-popover-foreground shadow-lg">
-                <VersionMenuButton
-                  icon={GitCompare}
-                  label="View diff"
-                  disabled={versionPanelBusy || versionHistoryBusy}
-                  onClick={() => {
-                    setOpenVersionMenuId(null);
-                    void openPromptDiff(v);
-                  }}
-                />
-                <VersionMenuButton
-                  icon={Rocket}
-                  label="Publish live"
-                  disabled={versionPanelBusy || v.isLive || hasUnsavedChanges}
-                  onClick={() => {
-                    setOpenVersionMenuId(null);
-                    setPublishTarget(v);
-                  }}
-                />
-                <VersionMenuButton
-                  icon={RotateCcw}
-                  label="Restore"
-                  disabled={versionPanelBusy}
-                  onClick={() => {
-                    setOpenVersionMenuId(null);
-                    setRestoreTarget(v);
-                  }}
-                />
-                <VersionMenuButton
-                  icon={Copy}
-                  label="Duplicate"
-                  disabled={versionPanelBusy || saveBusy !== null}
-                  onClick={() => {
-                    setOpenVersionMenuId(null);
-                    void duplicateVersion(v);
-                  }}
-                />
-                <VersionMenuButton
-                  icon={Copy}
-                  label="Copy prompt"
-                  disabled={versionPanelBusy}
-                  onClick={() => {
-                    setOpenVersionMenuId(null);
-                    void copyVersionPrompt(v);
-                  }}
-                />
-              </div>
-            ) : null}
+            <div className="relative shrink-0" data-version-menu-root={v.id}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                className="h-6 w-6 opacity-0 group-hover/version:opacity-100 transition-opacity"
+                aria-label={`Actions for version ${v.versionNumber}`}
+                aria-expanded={openVersionMenuId === v.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenVersionMenuId((current) => (current === v.id ? null : v.id));
+                }}
+              >
+                <MoreVertical className="size-3" aria-hidden />
+              </Button>
+              {openVersionMenuId === v.id ? (
+                <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-border/70 bg-popover p-1.5 text-popover-foreground shadow-lg">
+                  <VersionMenuButton
+                    icon={GitCompare}
+                    label="View diff"
+                    disabled={versionPanelBusy || versionHistoryBusy}
+                    onClick={() => {
+                      setOpenVersionMenuId(null);
+                      void openPromptDiff(v);
+                    }}
+                  />
+                  <VersionMenuButton
+                    icon={Rocket}
+                    label="Publish live"
+                    disabled={versionPanelBusy || v.isLive || hasUnsavedChanges}
+                    onClick={() => {
+                      setOpenVersionMenuId(null);
+                      setPublishTarget(v);
+                    }}
+                  />
+                  <VersionMenuButton
+                    icon={RotateCcw}
+                    label="Restore"
+                    disabled={versionPanelBusy}
+                    onClick={() => {
+                      setOpenVersionMenuId(null);
+                      setRestoreTarget(v);
+                    }}
+                  />
+                  <VersionMenuButton
+                    icon={Copy}
+                    label="Duplicate"
+                    disabled={versionPanelBusy || saveBusy !== null}
+                    onClick={() => {
+                      setOpenVersionMenuId(null);
+                      void duplicateVersion(v);
+                    }}
+                  />
+                  <VersionMenuButton
+                    icon={Copy}
+                    label="Copy prompt"
+                    disabled={versionPanelBusy}
+                    onClick={() => {
+                      setOpenVersionMenuId(null);
+                      void copyVersionPrompt(v);
+                    }}
+                  />
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
       </li>
@@ -1137,18 +1149,21 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   return (
     <div className="-m-4 min-h-screen bg-background sm:-m-6">
+      {/* Toast */}
       {toast ? (
         <div
           role="status"
-          className="fixed bottom-6 right-6 z-[100] max-w-sm rounded-lg border border-border bg-popover px-4 py-2 text-popover-foreground text-sm shadow-lg"
+          className="fixed bottom-6 right-6 z-[100] max-w-sm rounded-xl border border-border/80 bg-popover px-4 py-2.5 text-popover-foreground text-sm shadow-xl backdrop-blur"
         >
           {toast}
         </div>
       ) : null}
 
-      <div className="border-b border-border/60 bg-background/95 px-4 py-2.5 backdrop-blur sm:px-6">
-        <div className="mx-auto flex max-w-[1500px] flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0 flex items-center flex-wrap gap-3">
+      {/* ═══════════════════════ HEADER NAVBAR ═══════════════════════ */}
+      <div className="border-b border-border/40 bg-background/80 px-4 py-2 backdrop-blur-xl sm:px-6 sticky top-0 z-40">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4">
+          {/* Left: Back + Name + Status */}
+          <div className="min-w-0 flex items-center gap-2.5">
             <Link
               href="/agents"
               onClick={(event) => {
@@ -1159,43 +1174,73 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   event.preventDefault();
                 }
               }}
-              className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'h-8 w-8')}
+              className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'h-8 w-8 shrink-0')}
               aria-label="Back to agents"
             >
               <ArrowLeft className="size-4" aria-hidden />
             </Link>
-            <h1 className="truncate font-semibold text-lg tracking-tight">
+            <h1 className="truncate font-semibold text-base tracking-tight">
               {agent.name}
             </h1>
-            <Badge variant={agent.isActive ? 'default' : 'secondary'} className="h-5 text-[10px] px-2">
+            <Badge
+              variant={agent.isActive ? 'default' : 'secondary'}
+              className="h-5 text-[10px] px-2 shrink-0"
+            >
               {agent.isActive ? 'Active' : 'Inactive'}
             </Badge>
 
-            {/* Voice Pill Trigger */}
-            <button
-              type="button"
-              onClick={() => setVoiceModalOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 hover:bg-muted/40 px-2.5 py-0.5 text-xs font-semibold text-foreground transition-colors shadow-sm h-6"
-            >
-              <Volume2 className="size-3 text-muted-foreground" />
-              <span>{selectedVoice?.name ?? 'Select Voice'}</span>
-            </button>
+            <span className="h-4 w-px bg-border/50 mx-1 hidden md:block" />
 
-            {/* Phone Pill Trigger with Dropdown */}
-            <div className="relative inline-block" data-phone-dropdown-root>
+            {/* Voice Pill with Play + Settings */}
+            <div className="hidden md:flex items-center gap-0.5 rounded-full border border-border/50 bg-muted/15 pl-1 pr-2.5 py-0.5 h-7">
+              <button
+                type="button"
+                className="flex items-center justify-center h-5 w-5 rounded-full hover:bg-muted/60 transition-colors"
+                title={selectedVoice ? `Play ${selectedVoice.name}` : 'Select a voice first'}
+                disabled={!selectedVoiceId || previewBusy}
+                onClick={() => void playVoicePreview()}
+              >
+                {previewBusy && navVoicePlaying ? (
+                  <Loader2 className="size-3 animate-spin text-primary" />
+                ) : navVoicePlaying ? (
+                  <Pause className="size-3 text-primary" />
+                ) : (
+                  <Play className="size-2.5 text-muted-foreground fill-muted-foreground" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceModalOpen(true)}
+                className="flex items-center gap-1.5 text-xs font-medium text-foreground hover:text-primary transition-colors"
+              >
+                <Volume2 className="size-3 text-muted-foreground" />
+                <span className="max-w-[100px] truncate">{selectedVoice?.name ?? 'Voice'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceModalOpen(true)}
+                className="flex items-center justify-center h-5 w-5 rounded-full hover:bg-muted/60 transition-colors ml-0.5"
+                title="Voice settings"
+              >
+                <Settings2 className="size-3 text-muted-foreground" />
+              </button>
+            </div>
+
+            {/* Phone Pill */}
+            <div className="relative hidden md:inline-block" data-phone-dropdown-root>
               <button
                 type="button"
                 onClick={() => setPhoneDropdownOpen((prev) => !prev)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/20 hover:bg-muted/40 px-2.5 py-0.5 text-xs font-semibold text-foreground transition-colors shadow-sm h-6"
+                className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-muted/15 px-2.5 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-muted/30 h-7"
               >
-                <span>📞</span>
-                <span>
+                <span className="text-muted-foreground">📞</span>
+                <span className="max-w-[100px] truncate">
                   {attachedPhones.length > 0 ? attachedPhones[0].number : 'No Phone'}
                 </span>
               </button>
               {phoneDropdownOpen && (
-                <div 
-                  className="absolute left-0 mt-1.5 z-50 w-64 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg focus-visible:outline-none" 
+                <div
+                  className="absolute left-0 mt-1.5 z-50 w-64 rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-lg focus-visible:outline-none"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-1">
@@ -1226,75 +1271,36 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 </div>
               )}
             </div>
-
-            <span className="text-[11px] text-muted-foreground hidden lg:inline-block">•</span>
-            <span className="text-[11px] text-muted-foreground font-medium hidden lg:inline-block">
-              {editorStatusText}
-            </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 md:justify-end">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 text-xs px-3"
-              disabled={!canUpdateCurrentVersion}
-              title={
-                selectedVersion
-                  ? 'Save edits into the selected version without creating a new row.'
-                  : 'Select a version before updating.'
-              }
-              onClick={() => void updateCurrentVersionFlow()}
-            >
-              {saveBusy === 'update' ? (
-                <Loader2 className="size-3.5 animate-spin mr-1.5" />
-              ) : (
-                <Save className="size-3.5 mr-1.5" aria-hidden />
+          {/* Right: Status + Test */}
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="hidden lg:flex items-center gap-1.5 text-[11px] text-muted-foreground font-medium">
+              {hasUnsavedChanges && (
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
               )}
-              Update Version
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="h-8 text-xs px-3"
-              disabled={!canCreateNewVersion}
-              title="Save a new version from your current edits."
-              onClick={() => void createVersionFlow()}
-            >
-              {saveBusy === 'create' ? (
-                <Loader2 className="size-3.5 animate-spin mr-1.5" />
-              ) : (
-                <Plus className="size-3.5 mr-1.5" aria-hidden />
-              )}
-              Save Draft
-            </Button>
+              {editorStatusText}
+            </span>
             <Button
               type="button"
               variant="default"
               size="sm"
-              className="h-8 text-xs px-3"
-              disabled={!canPublishLive}
-              title={
-                hasUnsavedChanges
-                  ? 'Update or create a version before publishing.'
-                  : isSelectedLive
-                    ? 'This version is already live.'
-                    : 'Publish this version for preview and production calls.'
-              }
-              onClick={() => selectedVersion && setPublishTarget(selectedVersion)}
+              className="h-8 text-xs px-4 rounded-lg shadow-sm"
+              disabled={!canTest}
+              title={testCallBlockedReason ?? 'Run a browser preview.'}
+              onClick={() => setTestCallOpen(true)}
             >
-              <Rocket className="size-3.5 mr-1.5" aria-hidden />
-              Publish Live
+              <Play className="size-3.5 mr-1.5 fill-current" aria-hidden />
+              Test Agent
             </Button>
           </div>
         </div>
       </div>
 
+      {/* Error banner */}
       {pageError ? (
         <div className="mx-auto max-w-[1500px] px-4 pt-4 sm:px-6">
-          <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-destructive text-sm">
+          <p className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-destructive text-sm">
             {pageError}
           </p>
         </div>
@@ -1307,224 +1313,159 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         agentName={agent.name}
         apiCall={apiCall}
       />
-      <div className="mx-auto grid max-w-[1500px] gap-8 px-4 py-6 sm:px-6 lg:grid-cols-[1fr_320px] items-stretch">
-        {/* Left Column: Prompt Editor Workspace */}
-        <div className="flex flex-col min-w-0 space-y-4">
-          <div className="flex items-center justify-between gap-2 pb-1 border-b border-border/30">
-            <div>
-              <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">System Instructions</h2>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Define the assistant&apos;s role, tone, boundaries, and conversation goals.
-              </p>
+
+      {/* ═══════════════════════ MAIN GRID ═══════════════════════ */}
+      <div className="mx-auto grid max-w-[1500px] gap-8 px-4 py-6 sm:px-6 lg:grid-cols-[1fr_300px] items-start">
+        {/* ─── LEFT COLUMN: Prompt Workspace ─── */}
+        <div className="flex flex-col min-w-0 gap-3">
+          {/* Minimal section header */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <h2 className="text-sm font-semibold text-foreground tracking-tight">System Instructions</h2>
+              {selectedVersion ? (
+                <span className="text-[11px] text-muted-foreground">
+                  {hasUnsavedChanges
+                    ? `Editing from V${selectedVersion.versionNumber}`
+                    : isSelectedLive
+                      ? `Live V${selectedVersion.versionNumber}`
+                      : `V${selectedVersion.versionNumber}`}
+                </span>
+              ) : null}
             </div>
-            {selectedVersion ? (
-              <Badge variant={hasUnsavedChanges ? 'outline' : 'secondary'} className="h-6 text-[10px]">
-                {hasUnsavedChanges
-                  ? `Draft from V${selectedVersion.versionNumber}`
-                  : isSelectedLive
-                    ? `Viewing Live V${selectedVersion.versionNumber}`
-                    : `Viewing V${selectedVersion.versionNumber}`}
-              </Badge>
-            ) : null}
           </div>
 
-          <div className="space-y-2">
-            {isSelectedLive && hasUnsavedChanges ? (
-              <div className="flex items-center gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-amber-800 text-xs dark:text-amber-300">
-                <AlertTriangle className="size-4 text-amber-500 shrink-0" aria-hidden />
-                <p className="font-medium">
-                  Editing Live Version: Saving will immediately affect active calls.
-                </p>
-              </div>
-            ) : null}
-            {isViewingHistoricalVersion ? (
-              <div className="flex flex-col gap-1 rounded-lg border border-border bg-muted/20 px-3.5 py-2.5 text-xs">
-                <p className="font-semibold text-foreground">
-                  Viewing Historical V{selectedVersion?.versionNumber}
-                </p>
-                <p className="text-muted-foreground leading-normal">
-                  This is a read-only snapshot. Click <strong>Restore</strong> to start editing a new draft based on this version.
-                </p>
-              </div>
-            ) : null}
-            {hasUnsavedChanges ? (
-              <div className="flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-amber-800 text-xs dark:text-amber-300">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
-                <p className="font-medium">
-                  Unsaved draft: changes are currently stored locally.
-                </p>
-              </div>
-            ) : null}
-          </div>
+          {/* Contextual alerts — kept slim */}
+          {isSelectedLive && hasUnsavedChanges ? (
+            <div className="flex items-center gap-2 rounded-lg bg-amber-500/[0.06] border border-amber-500/15 px-3 py-2 text-amber-700 text-xs dark:text-amber-300">
+              <AlertTriangle className="size-3.5 text-amber-500 shrink-0" aria-hidden />
+              <span className="font-medium">Editing Live — saving will immediately affect active calls.</span>
+            </div>
+          ) : null}
+          {isViewingHistoricalVersion ? (
+            <div className="flex items-center gap-2 rounded-lg bg-muted/30 border border-border/40 px-3 py-2 text-xs text-muted-foreground">
+              <Clock className="size-3.5 shrink-0" aria-hidden />
+              <span>Viewing historical V{selectedVersion?.versionNumber}. Use <strong className="text-foreground">Restore</strong> to create a new draft from this version.</span>
+            </div>
+          ) : null}
 
+          {/* The actual editor */}
           {promptHydrated ? (
             <AgentSystemPromptEditor
               value={prompt}
               onChange={setPrompt}
               disabled={saveBusy !== null}
-              statusLabel={hasUnsavedChanges ? 'Draft editing' : 'Ready'}
-              updatedLabel={lastUpdatedLabel}
-              helperLabel={editorMetaLabel}
+              helperLabel={hasUnsavedChanges ? 'Draft changes saved locally' : undefined}
             />
           ) : (
-            <div className="min-h-[520px] rounded-2xl border border-dashed border-border bg-muted/30 flex-1" />
+            <div className="min-h-[480px] rounded-xl border border-dashed border-border/40 bg-muted/10 flex-1 animate-pulse" />
           )}
         </div>
 
-        {/* Right Column: Sticky Sidebar Tools */}
-        <div className="space-y-6 lg:self-start lg:sticky lg:top-[74px]">
-          {/* Test Agent CTA */}
-          <div className="space-y-2">
-            <Button
-              type="button"
-              variant="default"
-              size="lg"
-              className="w-full h-11 text-sm font-semibold shadow-md bg-primary hover:bg-primary/90 hover:shadow-lg transition-all rounded-xl"
-              disabled={!canTest}
-              title={testCallBlockedReason ?? 'Run a browser preview.'}
-              onClick={() => setTestCallOpen(true)}
-            >
-              <Play className="size-4 mr-2 text-primary-foreground fill-primary-foreground" aria-hidden />
-              Test Agent
-            </Button>
-            {testCallBlockedReason ? (
-              <p className="text-[10px] text-muted-foreground text-center leading-normal px-2">
-                ⚠️ {testCallBlockedReason}
-              </p>
-            ) : (
-              <p className="text-[10px] text-muted-foreground text-center leading-normal">
-                Start a live audio preview test call with this agent.
-              </p>
-            )}
-          </div>
-
-          {/* Voice Section */}
-          <div className="pt-4 border-t border-border/40 space-y-2.5">
+        {/* ─── RIGHT COLUMN: Version Control Center ─── */}
+        <div className="space-y-5 lg:self-start lg:sticky lg:top-[60px]">
+          {/* Version Actions Card */}
+          <div className="rounded-xl border border-border/50 bg-muted/[0.03] p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Voice</h3>
-              {isSelectedLive ? <Badge variant="outline" className="text-[9px] px-1.5 py-0">Live Voice</Badge> : null}
+              <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <Rocket className="size-3 text-muted-foreground" />
+                Version Control
+              </h3>
+              {selectedVersion && (
+                <Badge
+                  variant={hasUnsavedChanges ? 'outline' : isSelectedLive ? 'default' : 'secondary'}
+                  className="text-[9px] px-1.5 h-[18px]"
+                >
+                  {hasUnsavedChanges
+                    ? 'Draft'
+                    : isSelectedLive
+                      ? 'Live'
+                      : `V${selectedVersion.versionNumber}`}
+                </Badge>
+              )}
             </div>
-            <div 
-              onClick={() => setVoiceModalOpen(true)}
-              className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-muted/15 px-3 py-2 hover:bg-muted/40 cursor-pointer transition-colors"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-semibold text-xs text-foreground">
-                  {selectedVoice?.name ?? 'Select Voice'}
-                </p>
-                <p className="truncate text-muted-foreground text-[10px] mt-0.5">
-                  {selectedVoice?.rimeVoiceId ?? 'No voice selected'}
-                </p>
-              </div>
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                className="shrink-0 hover:bg-background/80 h-7 w-7"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void playVoicePreview();
-                }}
-                disabled={!selectedVoiceId || previewBusy}
-                title={selectedVoiceId ? 'Play preview' : 'Select voice first'}
-              >
-                {previewBusy ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <Play className="size-3 text-muted-foreground hover:text-foreground" aria-hidden />
-                )}
-              </Button>
-            </div>
-            <audio ref={previewAudioRef} className="hidden" preload="none" />
-          </div>
 
-          {/* Phone Number Section */}
-          <div className="pt-4 border-t border-border/40 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Phone Number</h3>
-            </div>
-            <div className="rounded-lg border border-border/60 bg-muted/15 px-3 py-2.5 space-y-2">
-              <div className="min-w-0">
-                {attachedPhones.length > 0 ? (
-                  <div>
-                    <p className="font-semibold text-xs text-foreground">
-                      {attachedPhones[0].number}
-                    </p>
-                    {attachedPhones[0].friendlyName ? (
-                      <p className="text-[10px] text-muted-foreground truncate mt-0.5">
-                        {attachedPhones[0].friendlyName}
-                      </p>
-                    ) : (
-                      <p className="text-[10px] text-muted-foreground mt-0.5">Assigned to this agent</p>
-                    )}
-                  </div>
-                ) : (
-                  <div>
-                    <p className="font-semibold text-xs text-muted-foreground">
-                      No Phone Assigned
-                    </p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      Assign a number to receive inbound calls.
-                    </p>
-                  </div>
-                )}
-              </div>
-              <div className="flex items-center gap-2 pt-1">
+            {/* Status line */}
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              {hasUnsavedChanges
+                ? `Unsaved changes based on ${draftBaseLabel}`
+                : isSelectedLive && selectedVersion
+                  ? `V${selectedVersion.versionNumber} is live and serving calls`
+                  : selectedVersion
+                    ? `Viewing V${selectedVersion.versionNumber}`
+                    : 'No versions yet — write a prompt to begin'}
+            </p>
+
+            {/* Action buttons */}
+            <div className="flex flex-col gap-2">
+              {canPublishLive && (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="w-full h-9 text-xs font-semibold rounded-lg"
+                  onClick={() => selectedVersion && setPublishTarget(selectedVersion)}
+                >
+                  <Rocket className="size-3.5 mr-1.5" aria-hidden />
+                  Publish Live
+                </Button>
+              )}
+              <div className="flex gap-2">
                 <Button
                   type="button"
                   variant="outline"
-                  size="xs"
-                  className="h-7 text-[10px] px-2.5"
-                  onClick={() => setPhoneEditOpen((current) => !current)}
+                  size="sm"
+                  className="flex-1 h-8 text-[11px] px-2.5 rounded-lg"
+                  disabled={!canUpdateCurrentVersion}
+                  title={
+                    selectedVersion
+                      ? 'Save edits into the selected version.'
+                      : 'Select a version before updating.'
+                  }
+                  onClick={() => void updateCurrentVersionFlow()}
                 >
-                  {phoneEditOpen ? 'Cancel' : 'Assign Number'}
+                  {saveBusy === 'update' ? (
+                    <Loader2 className="size-3 animate-spin mr-1" />
+                  ) : (
+                    <Save className="size-3 mr-1" aria-hidden />
+                  )}
+                  Update
                 </Button>
-                {saveBusy === 'phone' ? (
-                  <span className="text-[10px] text-muted-foreground animate-pulse">Saving…</span>
-                ) : null}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="flex-1 h-8 text-[11px] px-2.5 rounded-lg"
+                  disabled={!canCreateNewVersion}
+                  title="Save a new version from your current edits."
+                  onClick={() => void createVersionFlow()}
+                >
+                  {saveBusy === 'create' ? (
+                    <Loader2 className="size-3 animate-spin mr-1" />
+                  ) : (
+                    <Plus className="size-3 mr-1" aria-hidden />
+                  )}
+                  Save V{nextVersionNumber}
+                </Button>
               </div>
-              {phoneEditOpen && (
-                <div className="pt-2 border-t border-border/30">
-                  <select
-                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    value={primaryAttachedId}
-                    disabled={saveBusy === 'phone'}
-                    onChange={(e) => {
-                      void onPhoneRoutingChange(e.target.value);
-                      setPhoneEditOpen(false);
-                    }}
-                  >
-                    <option value="">None (unassigned)</option>
-                    {phones.map((p) => {
-                      const assignment =
-                        p.agent && !p.agent.deletedAt
-                          ? ` (-> ${p.agent.name})`
-                          : ' (unassigned)';
-                      return (
-                        <option key={p.id} value={p.id}>
-                          {p.number}{assignment}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              )}
             </div>
           </div>
 
-          {/* Version History Section */}
-          <div className="pt-4 border-t border-border/40 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Version History</h3>
+          {/* Version History */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-0.5">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <History className="size-3" />
+                History
+              </h3>
               {liveVersion && (
-                <span className="text-[10px] text-muted-foreground font-semibold">
+                <span className="text-[10px] text-muted-foreground">
                   Live: V{liveVersion.versionNumber}
                 </span>
               )}
             </div>
             {versions.length > 0 ? (
-              <div className="space-y-3">
-                <ul className="space-y-1">
+              <div className="space-y-1.5">
+                <ul className="space-y-0.5">
                   {(showAllVersions
                     ? displayedVersions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT)
                     : displayedVersions
@@ -1532,11 +1473,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 </ul>
 
                 {showAllVersions && displayedVersions.length > VERSION_HISTORY_PREVIEW_LIMIT ? (
-                  <div className="space-y-1 pt-1 border-t border-border/20">
+                  <div className="space-y-0.5 pt-1.5 border-t border-border/20">
                     <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider px-1 py-0.5">
-                      Older History
+                      Older
                     </p>
-                    <ul className="space-y-1 border-l border-dashed border-border/60 pl-2">
+                    <ul className="space-y-0.5 border-l-2 border-border/20 pl-2 ml-1.5">
                       {displayedVersions
                         .slice(VERSION_HISTORY_PREVIEW_LIMIT)
                         .map((v) => renderVersionRow(v))}
@@ -1545,11 +1486,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 ) : null}
 
                 {shouldRenderPinnedLive && pinnedLiveVersion ? (
-                  <div className="space-y-1 pt-1 border-t border-border/20">
+                  <div className="space-y-0.5 pt-1.5 border-t border-border/20">
                     <p className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider px-1 py-0.5">
-                      Active Live Version
+                      Live Version
                     </p>
-                    <ul className="space-y-1">
+                    <ul className="space-y-0.5">
                       {renderVersionRow(pinnedLiveVersion, {
                         pinnedLive: true,
                       })}
@@ -1557,48 +1498,43 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   </div>
                 ) : null}
 
-                <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/20">
-                  <p className="text-muted-foreground text-[10px]">
-                    {showAllVersions
-                      ? `All ${versions.length} versions.`
-                      : `Latest ${Math.min(
-                          VERSION_HISTORY_PREVIEW_LIMIT,
-                          previewVersions.length,
-                        )}.`}
-                  </p>
-                  {showAllVersions ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="h-6 text-[10px]"
-                      onClick={() => setShowAllVersions(false)}
-                    >
-                      Show recent only
-                    </Button>
-                  ) : canRevealAllVersions ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      className="h-6 text-[10px]"
-                      disabled={versionHistoryBusy}
-                      onClick={() => void loadFullVersionHistory()}
-                    >
-                      {versionHistoryBusy ? 'Loading...' : 'View full history'}
-                    </Button>
-                  ) : null}
+                {/* Footer link */}
+                <div className="pt-1.5 border-t border-border/20">
+                  <button
+                    type="button"
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                    disabled={versionHistoryBusy}
+                    onClick={async () => {
+                      if (!allVersionsLoaded) {
+                        await loadFullVersionHistory();
+                      }
+                      setFullHistoryOpen(true);
+                    }}
+                  >
+                    {versionHistoryBusy ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <ChevronRight className="size-3" />
+                    )}
+                    View full history
+                  </button>
                 </div>
               </div>
             ) : (
-              <p className="rounded-lg border border-dashed border-border p-4 text-center text-muted-foreground text-xs">
-                No versions yet. Save V1 to start.
+              <p className="rounded-lg border border-dashed border-border/40 p-4 text-center text-muted-foreground text-xs">
+                No versions yet. Write a prompt and save V1.
               </p>
             )}
           </div>
         </div>
       </div>
 
+      {/* Hidden audio element */}
+      <audio ref={previewAudioRef} className="hidden" preload="none" />
+
+      {/* ═══════════════════════ DIALOGS ═══════════════════════ */}
+
+      {/* Prompt Diff */}
       <Dialog
         open={promptDiff !== null}
         onOpenChange={(next) => {
@@ -1635,6 +1571,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         ) : null}
       </Dialog>
 
+      {/* Restore Confirm */}
       <Dialog
         open={restoreTarget !== null}
         onOpenChange={(next) => {
@@ -1678,6 +1615,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         ) : null}
       </Dialog>
 
+      {/* Tiny Change Warning */}
       <Dialog
         open={tinyChangeIntent !== null}
         onOpenChange={(next) => {
@@ -1719,6 +1657,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         ) : null}
       </Dialog>
 
+      {/* Publish Confirm */}
       <Dialog
         open={publishTarget !== null}
         onOpenChange={(next) => {
@@ -1761,6 +1700,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         ) : null}
       </Dialog>
 
+      {/* Voice Selector Modal */}
       <Dialog
         open={voiceModalOpen}
         onOpenChange={(next) => {
@@ -1868,6 +1808,213 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               Cancel
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════ VERSION PREVIEW MODAL ═══════════════ */}
+      <Dialog
+        open={previewingVersion !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setPreviewingVersion(null);
+          }
+        }}
+      >
+        {previewingVersion ? (
+          <DialogContent
+            showCloseButton
+            className="max-h-[85vh] w-[min(640px,calc(100vw-2rem))] max-w-none gap-0 overflow-hidden sm:max-w-none flex flex-col p-0 rounded-2xl"
+          >
+            {/* Header */}
+            <div className="px-6 pt-5 pb-4 border-b border-border/40">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <DialogTitle className="text-base font-semibold tracking-tight">
+                    Version {previewingVersion.versionNumber}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-foreground mt-1">
+                    {previewingVersion.isLive ? 'Currently live' : 'Saved snapshot'} · Created {safeRelativeTime(previewingVersion.createdAt)}
+                  </DialogDescription>
+                </div>
+                <Badge
+                  variant={previewingVersion.isLive ? 'default' : 'secondary'}
+                  className="text-[10px] px-2 h-5"
+                >
+                  {versionStatus(previewingVersion, liveVersion, latestVersion)}
+                </Badge>
+              </div>
+              {/* Metadata row */}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[11px] text-muted-foreground">
+                <span className="flex items-center gap-1">
+                  <Volume2 className="size-3" />
+                  {voices.find((v) => v.rimeVoiceId === previewingVersion.voiceId)?.name ?? previewingVersion.voiceId}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Clock className="size-3" />
+                  {safeRelativeTime(previewingVersion.updatedAt)}
+                </span>
+                {previewingVersion.publishedAt && (
+                  <span className="flex items-center gap-1">
+                    <Rocket className="size-3" />
+                    Published {safeRelativeTime(previewingVersion.publishedAt)}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Prompt body */}
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">System Prompt</p>
+              <div className="rounded-lg border border-border/30 bg-muted/[0.03] p-4">
+                <pre className="whitespace-pre-wrap text-[13px] leading-[1.8] text-foreground font-[system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,sans-serif]">
+                  {previewingVersion.systemPrompt}
+                </pre>
+              </div>
+            </div>
+
+            {/* Actions footer */}
+            <div className="px-6 py-3 border-t border-border/40 bg-muted/[0.02] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5"
+                  onClick={() => {
+                    void copyVersionPrompt(previewingVersion);
+                  }}
+                >
+                  <Copy className="size-3" />
+                  Copy
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5"
+                  disabled={versionPanelBusy || versionHistoryBusy}
+                  onClick={() => {
+                    setPreviewingVersion(null);
+                    void openPromptDiff(previewingVersion);
+                  }}
+                >
+                  <GitCompare className="size-3" />
+                  Compare
+                </Button>
+              </div>
+              <div className="flex items-center gap-2">
+                {!previewingVersion.isLive && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5"
+                    disabled={versionPanelBusy || hasUnsavedChanges}
+                    onClick={() => {
+                      setPreviewingVersion(null);
+                      setPublishTarget(previewingVersion);
+                    }}
+                  >
+                    <Rocket className="size-3" />
+                    Publish
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5"
+                  onClick={() => {
+                    loadVersionIntoEditor(previewingVersion);
+                  }}
+                >
+                  <RotateCcw className="size-3" />
+                  Load in Editor
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
+      {/* ═══════════════ FULL VERSION HISTORY MODAL ═══════════════ */}
+      <Dialog
+        open={fullHistoryOpen}
+        onOpenChange={(next) => {
+          if (!next) {
+            setFullHistoryOpen(false);
+          }
+        }}
+      >
+        <DialogContent
+          showCloseButton
+          className="max-h-[85vh] w-[min(700px,calc(100vw-2rem))] max-w-none gap-0 overflow-hidden sm:max-w-none flex flex-col p-0 rounded-2xl"
+        >
+          <div className="px-6 pt-5 pb-4 border-b border-border/40">
+            <DialogTitle className="text-base font-semibold tracking-tight flex items-center gap-2">
+              <History className="size-4" />
+              Version History
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground mt-1">
+              {versions.length} version{versions.length !== 1 ? 's' : ''} · Click any version to preview
+            </DialogDescription>
+          </div>
+          <div className="flex-1 overflow-y-auto min-h-0 p-2">
+            {versions.length > 0 ? (
+              <div className="space-y-0.5">
+                {versions.map((v) => {
+                  const isSelected = selectedVersion?.id === v.id;
+                  const status = versionStatus(v, liveVersion, latestVersion);
+                  const timestamp = v.publishedAt ?? v.updatedAt ?? v.createdAt;
+                  const voiceName = voices.find((voice) => voice.rimeVoiceId === v.voiceId)?.name ?? v.voiceId;
+
+                  return (
+                    <button
+                      type="button"
+                      key={v.id}
+                      className={cn(
+                        'w-full flex items-center justify-between gap-3 px-4 py-3 rounded-lg text-left transition-all',
+                        'hover:bg-muted/60',
+                        v.isLive && 'bg-primary/[0.04]',
+                        isSelected && 'ring-1 ring-primary/20 bg-muted/50',
+                      )}
+                      onClick={() => {
+                        setFullHistoryOpen(false);
+                        setPreviewingVersion(v);
+                      }}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="font-semibold text-sm tabular-nums shrink-0 w-8">
+                          V{v.versionNumber}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <Badge
+                              variant={v.isLive ? 'default' : 'secondary'}
+                              className="text-[9px] px-1.5 py-0 h-[18px]"
+                            >
+                              {status}
+                            </Badge>
+                            {isSelected && (
+                              <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-[18px]">
+                                Active in Editor
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                            {voiceName} · {safeRelativeTime(timestamp)}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="size-4 text-muted-foreground/50 shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-center text-sm text-muted-foreground py-12">No versions found.</p>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
