@@ -8,6 +8,7 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   AlertTriangle,
   ArrowLeft,
+  Check,
   ChevronRight,
   Clock,
   Copy,
@@ -199,6 +200,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [promptViewMode, setPromptViewMode] = useState<'edit' | 'diff'>('edit');
   const [blueprintDrawerOpen, setBlueprintDrawerOpen] = useState(false);
   const [hoveredVersionBtn, setHoveredVersionBtn] = useState<'update' | 'save' | 'publish' | null>(null);
+  const [selectedBlueprint, setSelectedBlueprint] = useState<typeof BLUEPRINTS[0] | null>(null);
+  const [tempSelectedVoiceId, setTempSelectedVoiceId] = useState('');
+
+  useEffect(() => {
+    if (voiceModalOpen) {
+      setTempSelectedVoiceId(selectedVoiceId);
+    }
+  }, [voiceModalOpen, selectedVoiceId]);
 
   useEffect(() => {
     setPromptHydrated(false);
@@ -1420,7 +1429,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       {/* ═══════════════════════ MAIN GRID ═══════════════════════ */}
       <div className="mx-auto grid max-w-[1500px] gap-8 px-4 py-6 sm:px-6 lg:grid-cols-[1fr_300px] items-start">
         {/* ─── LEFT COLUMN: Prompt Workspace ─── */}
-        <div className="flex flex-col min-w-0 gap-3">
+        <div className="flex flex-col min-w-0 gap-3 lg:sticky lg:top-[68px] z-10">
           {/* Minimal section header */}
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
@@ -1512,7 +1521,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </div>
 
             {blueprintDrawerOpen && (
-              <div className="w-[260px] h-[580px] shrink-0 flex flex-col rounded-xl border border-border/30 bg-background shadow-sm overflow-hidden animate-in slide-in-from-right duration-250">
+              <div className="w-[260px] h-[calc(100vh-130px)] min-h-[500px] shrink-0 flex flex-col rounded-xl border border-border/30 bg-background shadow-sm overflow-hidden animate-in slide-in-from-right duration-250">
                 <div className="p-3.5 border-b border-border/20 bg-muted/[0.02] shrink-0">
                   <h3 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                     <Sparkles className="size-3.5 text-amber-500" />
@@ -1526,11 +1535,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                       key={bp.id}
                       className="p-2.5 rounded-lg border border-transparent hover:bg-muted/50 transition-colors cursor-pointer group"
                       onClick={() => {
-                        if (confirm(`Replace current prompt instructions with the "${bp.name}" template?`)) {
-                          setPrompt(bp.template);
-                          setPromptViewMode('edit');
-                          setToast(`Applied ${bp.name} blueprint.`);
-                        }
+                        setSelectedBlueprint(bp);
                       }}
                     >
                       <h4 className="text-[11px] font-semibold text-foreground group-hover:text-primary transition-colors">
@@ -1613,7 +1618,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   variant="default"
                   size="sm"
                   className="w-full h-9 text-xs font-semibold rounded-lg transition-all"
-                  onMouseEnter={() => setHoveredVersionBtn('publish')}
+                  onMouseEnter={() => {
+                    if (canPublishLive) {
+                      setHoveredVersionBtn('publish');
+                    }
+                  }}
                   onMouseLeave={() => setHoveredVersionBtn(null)}
                   onClick={() => selectedVersion && setPublishTarget(selectedVersion)}
                 >
@@ -1628,7 +1637,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   size="sm"
                   className="flex-1 h-8 text-[11px] px-2.5 rounded-lg transition-all"
                   disabled={!canUpdateCurrentVersion}
-                  onMouseEnter={() => setHoveredVersionBtn('update')}
+                  onMouseEnter={() => {
+                    if (canUpdateCurrentVersion) {
+                      setHoveredVersionBtn('update');
+                    }
+                  }}
                   onMouseLeave={() => setHoveredVersionBtn(null)}
                   onClick={() => void updateCurrentVersionFlow()}
                 >
@@ -1645,7 +1658,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   size="sm"
                   className="flex-1 h-8 text-[11px] px-2.5 rounded-lg transition-all"
                   disabled={!canCreateNewVersion}
-                  onMouseEnter={() => setHoveredVersionBtn('save')}
+                  onMouseEnter={() => {
+                    if (canCreateNewVersion) {
+                      setHoveredVersionBtn('save');
+                    }
+                  }}
                   onMouseLeave={() => setHoveredVersionBtn(null)}
                   onClick={() => void createVersionFlow()}
                 >
@@ -1660,13 +1677,15 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </div>
 
             {/* Hover explanation block */}
-            <div className="pt-2 pb-0.5 border-t border-border/10 flex items-start gap-2 text-[10px] text-muted-foreground/80 min-h-[38px] leading-normal select-none">
+            <div className={cn(
+              "pt-2 pb-0.5 border-t border-border/10 flex items-start gap-2 text-[10px] text-muted-foreground/80 min-h-[38px] leading-normal select-none transition-all duration-200",
+              hoveredVersionBtn ? "opacity-100" : "opacity-0 pointer-events-none"
+            )}>
               <Info className="size-3.5 text-muted-foreground/60 shrink-0 mt-0.5" />
               <p className="flex-1">
                 {hoveredVersionBtn === 'publish' && "Publish Live: Activates this version for all phone routing. Changes take effect instantly."}
                 {hoveredVersionBtn === 'update' && "Update: Saves edits directly into the selected version without creating a new checkpoint."}
                 {hoveredVersionBtn === 'save' && `Save V${nextVersionNumber}: Creates a new separate version checkpoint. You can review or revert to this point later.`}
-                {!hoveredVersionBtn && "Hover over any action button to understand what it does."}
               </p>
             </div>
           </div>
@@ -1905,6 +1924,65 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         ) : null}
       </Dialog>
 
+      {/* Blueprint Preview Dialog */}
+      <Dialog
+        open={selectedBlueprint !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setSelectedBlueprint(null);
+          }
+        }}
+      >
+        {selectedBlueprint ? (
+          <DialogContent className="max-h-[85vh] w-[min(640px,calc(100vw-2rem))] max-w-none gap-0 overflow-hidden sm:max-w-none flex flex-col p-0 rounded-2xl border border-border/80 shadow-2xl">
+            <DialogHeader className="px-6 pt-5 pb-4 border-b border-border/40 shrink-0">
+              <DialogTitle className="text-base font-semibold tracking-tight flex items-center gap-2">
+                <Sparkles className="size-4 text-amber-500" />
+                Blueprint: {selectedBlueprint.name}
+              </DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground mt-1.5">
+                {selectedBlueprint.description}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Prompt Template</p>
+              <div className="rounded-lg border border-border/30 bg-muted/[0.03] p-4 h-[calc(100%-20px)] overflow-y-auto">
+                <pre className="whitespace-pre-wrap text-[13px] leading-[1.8] text-foreground font-[system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,sans-serif]">
+                  {selectedBlueprint.template}
+                </pre>
+              </div>
+            </div>
+
+            <DialogFooter className="px-6 py-3 border-t border-border/40 bg-muted/[0.02] flex items-center justify-end gap-2.5 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs px-4"
+                onClick={() => setSelectedBlueprint(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                className="h-8 text-xs px-4 bg-primary text-primary-foreground hover:bg-primary/95"
+                onClick={() => {
+                  setPrompt(selectedBlueprint.template);
+                  setPromptViewMode('edit');
+                  setSelectedBlueprint(null);
+                  setToast(`Applied ${selectedBlueprint.name} blueprint.`);
+                }}
+              >
+                Use This Prompt
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
       {/* Voice Selector Modal */}
       <Dialog
         open={voiceModalOpen}
@@ -1942,15 +2020,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 return v.name.toLowerCase().includes(q) || v.rimeVoiceId.toLowerCase().includes(q);
               })
               .map((v) => {
-                const isSelected = selectedVoiceId === v.rimeVoiceId;
+                const isTempSelected = tempSelectedVoiceId === v.rimeVoiceId;
                 const isPlaying = playingVoiceId === v.rimeVoiceId;
                 return (
                   <div
                     key={v.id}
                     className={cn(
-                      "flex items-center justify-between gap-3 p-2 rounded-lg border border-transparent hover:bg-muted/40 transition-all",
-                      isSelected && "bg-primary/5 border-primary/10"
+                      "flex items-center justify-between gap-3 p-2 rounded-lg border transition-all cursor-pointer",
+                      isTempSelected 
+                        ? "bg-primary/[0.06] border-primary/20 shadow-sm" 
+                        : "border-transparent hover:bg-muted/40"
                     )}
+                    onClick={() => setTempSelectedVoiceId(v.rimeVoiceId)}
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <Button
@@ -1975,25 +2056,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         <p className="text-[9px] text-muted-foreground truncate">{v.rimeVoiceId}</p>
                       </div>
                     </div>
-                    {isSelected ? (
-                      <span className="text-[10px] font-semibold text-primary px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 flex items-center gap-1 shrink-0">
-                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                    {isTempSelected ? (
+                      <span className="text-[10px] font-semibold text-primary px-2 py-1 rounded-full bg-primary/10 border border-primary/20 flex items-center gap-1 shrink-0">
+                        <Check className="size-3 text-primary" aria-hidden />
                         Selected
                       </span>
-                    ) : (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs px-3 hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all duration-200 shrink-0"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void onVoiceSelect(v.rimeVoiceId);
-                        }}
-                      >
-                        Select
-                      </Button>
-                    )}
+                    ) : null}
                   </div>
                 );
               })}
@@ -2009,18 +2077,32 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             <span className="text-[10px] text-muted-foreground">
               {voices.length} voices available
             </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => {
-                setVoiceModalOpen(false);
-                setVoiceSearchQuery('');
-              }}
-            >
-              Cancel
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => {
+                  setVoiceModalOpen(false);
+                  setVoiceSearchQuery('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                className="h-8 text-xs px-4"
+                disabled={!tempSelectedVoiceId}
+                onClick={() => {
+                  void onVoiceSelect(tempSelectedVoiceId);
+                }}
+              >
+                Select Voice
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

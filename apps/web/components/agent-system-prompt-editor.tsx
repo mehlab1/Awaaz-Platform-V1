@@ -28,7 +28,7 @@ export function AgentSystemPromptEditor({
   const characterCount = value.length.toLocaleString();
 
   return (
-    <div className="w-full flex flex-col rounded-xl border border-border/30 bg-background shadow-sm transition-all focus-within:border-primary/30 focus-within:shadow-[0_0_0_3px_hsl(var(--primary)/0.04)] h-[580px] overflow-hidden">
+    <div className="w-full flex flex-col rounded-xl border border-border/30 bg-background shadow-sm transition-all focus-within:border-primary/30 focus-within:shadow-[0_0_0_3px_hsl(var(--primary)/0.04)] h-[calc(100vh-130px)] min-h-[500px] overflow-hidden">
       <label htmlFor={id} className="sr-only">
         System prompt
       </label>
