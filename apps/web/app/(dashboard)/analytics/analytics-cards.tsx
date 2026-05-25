@@ -43,7 +43,7 @@ export function PageHeader({
   errorMessage: string | null;
 }) {
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -59,7 +59,7 @@ export function PageHeader({
 
 export function StatGrid({ today }: { today: AnalyticsSummary }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-4">
       <StatCard icon={<PhoneCall />} label="Total Calls Today" value={formatInteger(today.calls)} />
       <StatCard icon={<Clock />} label="Minutes Today" value={formatMinutes(today.minutes)} />
       <StatCard
@@ -85,14 +85,14 @@ export function ChartCard({
 }) {
   return (
     <Card>
-      <CardHeader className="grid-cols-[1fr_auto]">
+      <CardHeader className="grid-cols-[1fr_auto] pb-4">
         <div>
           <CardTitle>{title}</CardTitle>
           {description ? <CardDescription>{description}</CardDescription> : null}
         </div>
         {action}
       </CardHeader>
-      <CardContent>{children}</CardContent>
+      <CardContent className="p-6 pt-0">{children}</CardContent>
     </Card>
   );
 }
@@ -134,7 +134,7 @@ export function HealthSection({
   latency: AnalyticsLatency | undefined;
 }) {
   return (
-    <section className="grid gap-3 lg:grid-cols-3">
+    <section className="grid gap-6 lg:grid-cols-3">
       <LatencyCard latency={latency} />
       <SuccessRateCard summary={summary} />
       <LiveCard activeCalls={liveCalls} generatedAt={liveGeneratedAt} />
@@ -162,13 +162,13 @@ function StatCard({
 }) {
   return (
     <Card>
-      <CardContent className="flex items-center gap-3 pt-0">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-sky-500/10 text-sky-700">
+      <CardContent className="flex items-center gap-4 p-6">
+        <div className="flex size-12 items-center justify-center rounded-lg bg-sky-500/10 text-sky-700">
           {icon}
         </div>
         <div className="min-w-0">
           <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="truncate text-2xl font-semibold tabular-nums">{value}</p>
+          <p className="truncate text-3xl font-semibold tabular-nums">{value}</p>
         </div>
       </CardContent>
     </Card>
@@ -239,7 +239,7 @@ function MetricCard({
         <CardTitle>{title}</CardTitle>
         <div className="text-muted-foreground">{icon}</div>
       </CardHeader>
-      <CardContent className="space-y-3">{children}</CardContent>
+      <CardContent className="space-y-4">{children}</CardContent>
     </Card>
   );
 }

@@ -56,7 +56,7 @@ export function AnalyticsDashboardClient() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         isLoading={analytics.isLoading}
         errorMessage={analytics.error?.message ?? null}
@@ -88,7 +88,7 @@ function TrendSection({
   onRangeChange: (value: TrendRange) => void;
 }) {
   return (
-    <section className="grid gap-4 xl:grid-cols-2">
+    <section className="grid gap-6 xl:grid-cols-2">
       <ChartCard
         title="Calls Over Time"
         action={<RangeToggle value={range} onChange={onRangeChange} />}
@@ -110,7 +110,7 @@ function CostAndAgentsSection({
   agents: AgentMetric[];
 }) {
   return (
-    <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+    <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
       <ChartCard title="Cost Breakdown" description={formatUsd(totalCost(costBuckets))}>
         {costContent(costBuckets)}
       </ChartCard>
@@ -137,7 +137,7 @@ function costContent(costBuckets: CostBucket[]) {
     return <EmptyChart label="No cost data yet" />;
   }
   return (
-    <div className="grid gap-3 lg:grid-cols-[0.8fr_1.2fr]">
+    <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
       <CostBreakdownChart data={costBuckets} />
       <MonthlyCostChart data={costBuckets} />
     </div>

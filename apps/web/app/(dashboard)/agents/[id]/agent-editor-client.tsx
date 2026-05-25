@@ -1947,12 +1947,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 return (
                   <div
                     key={v.id}
-                    onClick={() => {
-                      void onVoiceSelect(v.rimeVoiceId);
-                    }}
                     className={cn(
-                      "flex items-center justify-between gap-3 p-2 rounded-lg border border-transparent hover:bg-muted/75 cursor-pointer transition-all",
-                      isSelected && "bg-primary/5 border-primary/20"
+                      "flex items-center justify-between gap-3 p-2 rounded-lg border border-transparent hover:bg-muted/40 transition-all",
+                      isSelected && "bg-primary/5 border-primary/10"
                     )}
                   >
                     <div className="flex items-center gap-3 min-w-0">
@@ -1978,10 +1975,24 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         <p className="text-[9px] text-muted-foreground truncate">{v.rimeVoiceId}</p>
                       </div>
                     </div>
-                    {isSelected && (
-                      <span className="text-[10px] font-semibold text-primary px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20">
+                    {isSelected ? (
+                      <span className="text-[10px] font-semibold text-primary px-2.5 py-1 rounded-full bg-primary/10 border border-primary/20 flex items-center gap-1 shrink-0">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
                         Selected
                       </span>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs px-3 hover:bg-primary hover:text-primary-foreground hover:border-primary transition-all duration-200 shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onVoiceSelect(v.rimeVoiceId);
+                        }}
+                      >
+                        Select
+                      </Button>
                     )}
                   </div>
                 );

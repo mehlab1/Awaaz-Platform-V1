@@ -10,7 +10,7 @@ import {
 } from 'react';
 
 import { format } from 'date-fns';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Filter, X, Phone } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { Badge } from '@/components/ui/badge';
@@ -289,7 +289,7 @@ export function CallHistoryClient() {
   );
 
   const fieldClass =
-    'rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring';
+    'rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring transition-colors';
 
   const rows = payload?.items ?? [];
 
@@ -303,8 +303,11 @@ export function CallHistoryClient() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="font-semibold text-2xl tracking-tight">Calls</h1>
+      <header className="space-y-1">
+        <h1 className="font-semibold text-2xl tracking-tight flex items-center gap-2.5">
+          <Phone className="size-5 text-muted-foreground" />
+          Calls
+        </h1>
         <p className="mt-1 max-w-2xl text-muted-foreground text-sm">
           Review recent calls, test sessions, transcripts, and call outcomes.
         </p>
@@ -314,124 +317,125 @@ export function CallHistoryClient() {
         <p className="text-destructive text-sm">{error}</p>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Filters</CardTitle>
-          <CardDescription className="text-muted-foreground text-xs">
-            Filter calls by agent, direction, status, date, or phone number.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap items-end gap-4">
-            <label className="flex min-w-[10rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              Agent
-              <select
-                className={fieldClass}
-                value={filters.agentId}
-                onChange={(e) => {
-                  setPage(1);
-                  setFilters((f) => ({ ...f, agentId: e.target.value }));
-                }}
-              >
-                <option value="">All agents</option>
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex min-w-[8rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              Direction
-              <select
-                className={fieldClass}
-                value={filters.direction}
-                onChange={(e) => {
-                  setPage(1);
-                  setFilters((f) => ({
-                    ...f,
-                    direction: e.target.value as FilterState['direction'],
-                  }));
-                }}
-              >
-                <option value="">Any</option>
-                {CALL_DIRECTIONS.map((d) => (
-                  <option key={d} value={d}>
-                    {formatEnumLabel(d)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex min-w-[9rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              Status
-              <select
-                className={fieldClass}
-                value={filters.status}
-                onChange={(e) => {
-                  setPage(1);
-                  setFilters((f) => ({
-                    ...f,
-                    status: e.target.value as FilterState['status'],
-                  }));
-                }}
-              >
-                <option value="">Any</option>
-                {CALL_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {formatEnumLabel(s)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="flex flex-wrap items-end gap-4">
-            <label className="flex flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              From date
-              <input
-                type="date"
-                className={fieldClass}
-                value={filters.dateFrom}
-                onChange={(e) => {
-                  setPage(1);
-                  setFilters((f) => ({ ...f, dateFrom: e.target.value }));
-                }}
-              />
-            </label>
-            <label className="flex flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              To date
-              <input
-                type="date"
-                className={fieldClass}
-                value={filters.dateTo}
-                onChange={(e) => {
-                  setPage(1);
-                  setFilters((f) => ({ ...f, dateTo: e.target.value }));
-                }}
-              />
-            </label>
-            <label className="flex min-w-[12rem] flex-1 flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
-              Phone number
-              <input
-                type="search"
-                placeholder="Search from or to..."
-                className={cn(fieldClass, 'font-mono text-xs')}
-                value={phoneDraft}
-                onChange={(e) => setPhoneDraft(e.target.value)}
-              />
-            </label>
-          </div>
-          {filterActive ? (
-            <div>
-              <Button type="button" variant="outline" size="sm" onClick={clearFilters}>
-                Clear filters
-              </Button>
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
+      <div className="rounded-xl border border-border/50 bg-muted/[0.03] p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            <Filter className="size-3" />
+            Filters
+          </span>
+          {filterActive && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1"
+              onClick={clearFilters}
+            >
+              <X className="size-3" />
+              Clear
+            </Button>
+          )}
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="flex min-w-[10rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
+            Agent
+            <select
+              className={fieldClass}
+              value={filters.agentId}
+              onChange={(e) => {
+                setPage(1);
+                setFilters((f) => ({ ...f, agentId: e.target.value }));
+              }}
+            >
+              <option value="">All agents</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex min-w-[8rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
+            Direction
+            <select
+              className={fieldClass}
+              value={filters.direction}
+              onChange={(e) => {
+                setPage(1);
+                setFilters((f) => ({
+                  ...f,
+                  direction: e.target.value as FilterState['direction'],
+                }));
+              }}
+            >
+              <option value="">Any</option>
+              {CALL_DIRECTIONS.map((d) => (
+                <option key={d} value={d}>
+                  {formatEnumLabel(d)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex min-w-[9rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
+            Status
+            <select
+              className={fieldClass}
+              value={filters.status}
+              onChange={(e) => {
+                setPage(1);
+                setFilters((f) => ({
+                  ...f,
+                  status: e.target.value as FilterState['status'],
+                }));
+              }}
+            >
+              <option value="">Any</option>
+              {CALL_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {formatEnumLabel(s)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
+            From date
+            <input
+              type="date"
+              className={fieldClass}
+              value={filters.dateFrom}
+              onChange={(e) => {
+                setPage(1);
+                setFilters((f) => ({ ...f, dateFrom: e.target.value }));
+              }}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
+            To date
+            <input
+              type="date"
+              className={fieldClass}
+              value={filters.dateTo}
+              onChange={(e) => {
+                setPage(1);
+                setFilters((f) => ({ ...f, dateTo: e.target.value }));
+              }}
+            />
+          </label>
+          <label className="flex min-w-[12rem] flex-1 flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
+            Phone number
+            <input
+              type="search"
+              placeholder="Search from or to..."
+              className={cn(fieldClass, 'font-mono text-xs')}
+              value={phoneDraft}
+              onChange={(e) => setPhoneDraft(e.target.value)}
+            />
+          </label>
+        </div>
+      </div>
 
       <Card>
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-4">
           <div>
             <CardTitle>Recent calls</CardTitle>
             <CardDescription>Open any row to review transcript and recording.</CardDescription>
@@ -450,10 +454,13 @@ export function CallHistoryClient() {
           {loading ? (
             <p className="text-muted-foreground text-sm">Loading calls…</p>
           ) : rows.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border p-10 text-center text-muted-foreground text-sm">
-              {filterActive
-                ? 'No calls match these filters. Try widening the date range or broadening phone search.'
-                : 'No recorded calls yet for this organization.'}
+            <div className="rounded-lg border border-dashed border-border p-12 text-center text-muted-foreground text-sm flex flex-col items-center gap-3">
+              <Phone className="size-8 text-muted-foreground/40" />
+              <p>
+                {filterActive
+                  ? 'No calls match these filters. Try widening the date range or broadening phone search.'
+                  : 'No recorded calls yet for this organization.'}
+              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -538,7 +545,7 @@ export function CallHistoryClient() {
           )}
 
           {payload !== null && !loading && payload.total > 0 ? (
-            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <div className="mt-6 flex items-center justify-between gap-3 pt-5 border-t border-border/50">
               <Button
                 type="button"
                 variant="outline"
@@ -548,9 +555,10 @@ export function CallHistoryClient() {
                   setPage((p) => Math.max(1, p - 1))
                 }
               >
+                <ChevronLeft className="size-3.5 mr-1" />
                 Previous
               </Button>
-              <span className="text-muted-foreground text-xs">
+              <span className="text-xs text-muted-foreground tabular-nums">
                 Showing {(payload.page - 1) * payload.pageSize + 1}
                 –
                 {(payload.page - 1) * payload.pageSize + payload.items.length} of{' '}
@@ -566,6 +574,7 @@ export function CallHistoryClient() {
                 }
               >
                 Next
+                <ChevronRight className="size-3.5 ml-1" />
               </Button>
             </div>
           ) : null}
@@ -636,14 +645,14 @@ function isTestMeta(meta: unknown): boolean {
 function DirectionBadge({ value }: { value: string }) {
   if (value === 'INBOUND') {
     return (
-      <Badge variant="default" className="font-mono text-[10px]">
+      <Badge variant="outline" className="font-mono text-[10px] border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300">
         INBOUND
       </Badge>
     );
   }
   if (value === 'OUTBOUND') {
     return (
-      <Badge variant="secondary" className="font-mono text-[10px]">
+      <Badge variant="outline" className="font-mono text-[10px] border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300">
         OUTBOUND
       </Badge>
     );
@@ -658,7 +667,7 @@ function DirectionBadge({ value }: { value: string }) {
 function StatusBadge({ value }: { value: string }) {
   if (value === 'COMPLETED') {
     return (
-      <Badge variant="default" className="font-mono text-[10px]">
+      <Badge variant="outline" className="font-mono text-[10px] border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
         {value}
       </Badge>
     );
@@ -666,6 +675,20 @@ function StatusBadge({ value }: { value: string }) {
   if (value === 'FAILED' || value === 'ABANDONED') {
     return (
       <Badge variant="destructive" className="font-mono text-[10px]">
+        {value}
+      </Badge>
+    );
+  }
+  if (value === 'IN_PROGRESS') {
+    return (
+      <Badge variant="outline" className="font-mono text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+        {value}
+      </Badge>
+    );
+  }
+  if (value === 'INITIATED') {
+    return (
+      <Badge variant="outline" className="font-mono text-[10px] border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300">
         {value}
       </Badge>
     );

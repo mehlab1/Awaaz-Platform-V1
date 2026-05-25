@@ -3,6 +3,15 @@
 import { useState } from 'react';
 
 import { format } from 'date-fns';
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Copy,
+  Minus,
+  Phone,
+  RefreshCw,
+} from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -31,7 +40,7 @@ import {
 import { AddNumberDialog } from './add-number-dialog';
 
 const SELECT_CLASS =
-  'min-w-[12rem] rounded-md border border-input bg-background px-2 py-1.5 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring';
+  'min-w-[12rem] appearance-none rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none ring-offset-background transition-colors hover:border-ring focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
 
 export function PhoneNumbersClient() {
   const {
@@ -65,13 +74,20 @@ export function PhoneNumbersClient() {
   };
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Phone Numbers</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Registered Twilio numbers and agent routing.
-          </p>
+    <div className="space-y-8">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+              <Phone className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">Phone Numbers</h1>
+              <p className="text-sm text-muted-foreground">
+                Registered Twilio numbers and agent routing.
+              </p>
+            </div>
+          </div>
         </div>
         <AddNumberDialog
           isBusy={registerPhoneNumber.isPending}
@@ -91,12 +107,19 @@ export function PhoneNumbersClient() {
       />
 
       <Card>
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-          <div>
-            <CardTitle>Numbers</CardTitle>
-            <CardDescription>
-              {rows.length.toLocaleString()} registered
-            </CardDescription>
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 space-y-0 pb-4">
+          <div className="flex items-center gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <CardTitle>Numbers</CardTitle>
+                <Badge variant="secondary" className="tabular-nums">
+                  {rows.length.toLocaleString()}
+                </Badge>
+              </div>
+              <CardDescription className="mt-1">
+                Manage your registered phone numbers
+              </CardDescription>
+            </div>
           </div>
           <Button
             type="button"
@@ -104,7 +127,9 @@ export function PhoneNumbersClient() {
             size="sm"
             disabled={phoneNumbers.isFetching}
             onClick={() => void phoneNumbers.refetch()}
+            className="gap-2"
           >
+            <RefreshCw className={`h-3.5 w-3.5 ${phoneNumbers.isFetching ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </CardHeader>
@@ -159,8 +184,14 @@ function NumbersTable({
   }
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-        No phone numbers registered.
+      <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border px-6 py-16 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+          <Phone className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <h3 className="mt-4 text-sm font-medium">No phone numbers registered</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Get started by adding your first Twilio phone number.
+        </p>
       </div>
     );
   }
@@ -192,6 +223,29 @@ function NumbersTable({
   );
 }
 
+function CopyButton({ text, field, copiedField, onCopy }: {
+  text: string;
+  field: string;
+  copiedField: string | null;
+  onCopy: (text: string, field: string) => void;
+}) {
+  const isCopied = copiedField === field;
+  return (
+    <button
+      type="button"
+      onClick={() => onCopy(text, field)}
+      className="ml-1.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      title="Copy to clipboard"
+    >
+      {isCopied ? (
+        <Check className="h-3 w-3 text-emerald-600" />
+      ) : (
+        <Copy className="h-3 w-3" />
+      )}
+    </button>
+  );
+}
+
 function PhoneNumberTableRow({
   row,
   agents,
@@ -203,9 +257,26 @@ function PhoneNumberTableRow({
   isBusy: boolean;
   onAssign: (phoneNumberId: string, agentId: string) => Promise<void>;
 }) {
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const copyToClipboard = (text: string, field: string) => {
+    void navigator.clipboard.writeText(text);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField(null), 2000);
+  };
+
   return (
-    <TableRow>
-      <TableCell className="font-mono text-xs">{row.number}</TableCell>
+    <TableRow className="hover:bg-muted/50 transition-colors">
+      <TableCell>
+        <div className="flex items-center gap-1">
+          <span className="font-mono text-sm font-medium">{row.number}</span>
+          <CopyButton
+            text={row.number}
+            field="number"
+            copiedField={copiedField}
+            onCopy={copyToClipboard}
+          />
+        </div>
+      </TableCell>
       <TableCell>{row.friendlyName ?? '—'}</TableCell>
       <TableCell>
         <select
@@ -230,10 +301,20 @@ function PhoneNumberTableRow({
       <TableCell>
         <DispatchBadge row={row} />
       </TableCell>
-      <TableCell className="max-w-[12rem] truncate font-mono text-xs">
-        {row.twilioSid ?? '—'}
+      <TableCell>
+        <div className="flex max-w-[12rem] items-center gap-1">
+          <span className="truncate font-mono text-xs">{row.twilioSid ?? '—'}</span>
+          {row.twilioSid && (
+            <CopyButton
+              text={row.twilioSid}
+              field="sid"
+              copiedField={copiedField}
+              onCopy={copyToClipboard}
+            />
+          )}
+        </div>
       </TableCell>
-      <TableCell>{formatDate(row.updatedAt)}</TableCell>
+      <TableCell className="text-sm text-muted-foreground">{formatDate(row.updatedAt)}</TableCell>
     </TableRow>
   );
 }
@@ -244,10 +325,15 @@ function StatusBadge({ isActive }: { isActive: boolean }) {
       variant={isActive ? 'outline' : 'secondary'}
       className={
         isActive
-          ? 'border-emerald-600/50 bg-emerald-600/10 text-emerald-800'
-          : 'text-muted-foreground'
+          ? 'border-emerald-600/50 bg-emerald-600/10 text-emerald-800 gap-1.5'
+          : 'text-muted-foreground gap-1.5'
       }
     >
+      {isActive ? (
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+      ) : (
+        <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+      )}
       {isActive ? 'Active' : 'Inactive'}
     </Badge>
   );
@@ -255,12 +341,27 @@ function StatusBadge({ isActive }: { isActive: boolean }) {
 
 function DispatchBadge({ row }: { row: PhoneNumberRow }) {
   if (!row.agentId) {
-    return <Badge variant="secondary">Unassigned</Badge>;
+    return (
+      <Badge variant="secondary" className="gap-1">
+        <Minus className="h-3 w-3" />
+        Unassigned
+      </Badge>
+    );
   }
   if (row.liveKitDispatchRuleId) {
-    return <Badge variant="outline">Synced</Badge>;
+    return (
+      <Badge variant="outline" className="gap-1 border-emerald-600/50 bg-emerald-600/10 text-emerald-800">
+        <CheckCircle2 className="h-3 w-3" />
+        Synced
+      </Badge>
+    );
   }
-  return <Badge variant="destructive">Needs sync</Badge>;
+  return (
+    <Badge variant="outline" className="gap-1 border-amber-500/50 bg-amber-500/10 text-amber-700">
+      <AlertTriangle className="h-3 w-3" />
+      Needs sync
+    </Badge>
+  );
 }
 
 function formatDate(value: string): string {
