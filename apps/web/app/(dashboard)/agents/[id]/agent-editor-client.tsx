@@ -141,6 +141,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [tinyChangeIntent, setTinyChangeIntent] = useState<{
     message: string;
   } | null>(null);
+  const [openVersionMenuId, setOpenVersionMenuId] = useState<string | null>(null);
+  const [phoneEditOpen, setPhoneEditOpen] = useState(false);
   const [versionMutating, setVersionMutating] = useState<
     | { kind: 'restore' | 'publish'; versionId: string }
     | null
@@ -163,6 +165,36 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const t = window.setTimeout(() => setToast(null), 4500);
     return () => window.clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    if (!openVersionMenuId) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+      if (!target.closest(`[data-version-menu-root="${openVersionMenuId}"]`)) {
+        setOpenVersionMenuId(null);
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenVersionMenuId(null);
+      }
+    };
+
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [openVersionMenuId]);
 
   const liveVersion = agent?.currentVersion ?? null;
   const latestVersion = versions[0] ?? liveVersion;
@@ -478,6 +510,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(version.systemPrompt);
       setSelectedVoiceId(version.voiceId);
       setDraftPrompt('');
+      setOpenVersionMenuId(null);
       setToast(
         `Viewing V${version.versionNumber}. Update this version or save V${nextVersionNumber} as a new version.`,
       );
@@ -510,6 +543,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(restored.systemPrompt);
       setSelectedVoiceId(restored.voiceId);
       setDraftPrompt('');
+      setOpenVersionMenuId(null);
       setRestoreTarget(null);
       setToast(`Restored snapshot as draft V${restored.versionNumber}.`);
       await loadData(showAllVersions && allVersionsLoaded);
@@ -619,6 +653,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(updated.systemPrompt);
       setSelectedVoiceId(updated.voiceId);
       setDraftPrompt('');
+      setOpenVersionMenuId(null);
       setToast(
         updated.isLive
           ? `Updated live V${updated.versionNumber}.`
@@ -696,6 +731,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(created.systemPrompt);
       setSelectedVoiceId(created.voiceId);
       setDraftPrompt('');
+      setOpenVersionMenuId(null);
       console.debug('[AgentEditor] Saved version voice', {
         versionId: created.id,
         versionNumber: created.versionNumber,
@@ -901,6 +937,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(created.systemPrompt);
       setSelectedVoiceId(created.voiceId);
       setDraftPrompt('');
+      setOpenVersionMenuId(null);
       setToast(`Duplicated V${version.versionNumber} as V${created.versionNumber}.`);
       await loadData(showAllVersions && allVersionsLoaded);
     } catch (e) {
@@ -926,20 +963,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     options: { pinnedLive?: boolean } = {},
   ) => {
     const isSelected = selectedVersion?.id === v.id;
-    const isLatest = latestVersion?.id === v.id;
-    const isPrimaryVersion = isSelected || isLatest || v.isLive;
     const snippet = compactPromptSnippet(v.systemPrompt);
     const status = versionStatus(v, liveVersion, latestVersion);
     const timestamp = v.publishedAt ?? v.updatedAt ?? v.createdAt;
+    const isOlderHistory = showAllVersions && v.versionNumber < VERSION_HISTORY_PREVIEW_LIMIT;
 
     return (
       <li
         key={options.pinnedLive ? `${v.id}-pinned` : v.id}
         className={cn(
-          'group/version relative rounded-md border-l-2 border-l-transparent px-2 py-2 text-xs transition-colors',
-          v.isLive ? 'border-l-primary/60 bg-primary/5' : 'hover:bg-muted/40',
-          isSelected && 'border-l-primary/40 bg-muted/70',
-          !isPrimaryVersion && showAllVersions && 'opacity-75',
+          'group/version relative rounded-lg px-2.5 py-2 text-xs transition-colors',
+          v.isLive ? 'bg-primary/5' : 'hover:bg-muted/50',
+          isSelected && 'bg-muted/75 ring-1 ring-border/70',
+          isOlderHistory && 'opacity-75',
         )}
       >
         <div className="flex items-start gap-2">
@@ -963,49 +999,69 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               {snippet}
             </p>
           </button>
-          <details className="relative shrink-0">
-            <summary
-              className={cn(
-                buttonVariants({ variant: 'ghost', size: 'icon-xs' }),
-                'list-none [&::-webkit-details-marker]:hidden',
-              )}
+          <div className="relative shrink-0" data-version-menu-root={v.id}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
               aria-label={`Actions for version ${v.versionNumber}`}
+              aria-expanded={openVersionMenuId === v.id}
+              onClick={() =>
+                setOpenVersionMenuId((current) => (current === v.id ? null : v.id))
+              }
             >
               <MoreVertical className="size-3.5" aria-hidden />
-            </summary>
-            <div className="absolute right-0 z-20 mt-1 w-40 rounded-md border border-border/60 bg-popover p-1 text-popover-foreground shadow-lg">
-              <VersionMenuButton
-                icon={GitCompare}
-                label="View diff"
-                disabled={versionPanelBusy || versionHistoryBusy}
-                onClick={() => void openPromptDiff(v)}
-              />
-              <VersionMenuButton
-                icon={Rocket}
-                label="Publish live"
-                disabled={versionPanelBusy || v.isLive || hasUnsavedChanges}
-                onClick={() => setPublishTarget(v)}
-              />
-              <VersionMenuButton
-                icon={RotateCcw}
-                label="Restore"
-                disabled={versionPanelBusy}
-                onClick={() => setRestoreTarget(v)}
-              />
-              <VersionMenuButton
-                icon={Copy}
-                label="Duplicate"
-                disabled={versionPanelBusy || saveBusy !== null}
-                onClick={() => void duplicateVersion(v)}
-              />
-              <VersionMenuButton
-                icon={Copy}
-                label="Copy prompt"
-                disabled={versionPanelBusy}
-                onClick={() => void copyVersionPrompt(v)}
-              />
-            </div>
-          </details>
+            </Button>
+            {openVersionMenuId === v.id ? (
+              <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-border/70 bg-popover p-1.5 text-popover-foreground shadow-lg">
+                <VersionMenuButton
+                  icon={GitCompare}
+                  label="View diff"
+                  disabled={versionPanelBusy || versionHistoryBusy}
+                  onClick={() => {
+                    setOpenVersionMenuId(null);
+                    void openPromptDiff(v);
+                  }}
+                />
+                <VersionMenuButton
+                  icon={Rocket}
+                  label="Publish live"
+                  disabled={versionPanelBusy || v.isLive || hasUnsavedChanges}
+                  onClick={() => {
+                    setOpenVersionMenuId(null);
+                    setPublishTarget(v);
+                  }}
+                />
+                <VersionMenuButton
+                  icon={RotateCcw}
+                  label="Restore"
+                  disabled={versionPanelBusy}
+                  onClick={() => {
+                    setOpenVersionMenuId(null);
+                    setRestoreTarget(v);
+                  }}
+                />
+                <VersionMenuButton
+                  icon={Copy}
+                  label="Duplicate"
+                  disabled={versionPanelBusy || saveBusy !== null}
+                  onClick={() => {
+                    setOpenVersionMenuId(null);
+                    void duplicateVersion(v);
+                  }}
+                />
+                <VersionMenuButton
+                  icon={Copy}
+                  label="Copy prompt"
+                  disabled={versionPanelBusy}
+                  onClick={() => {
+                    setOpenVersionMenuId(null);
+                    void copyVersionPrompt(v);
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
         </div>
       </li>
     );
@@ -1095,7 +1151,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         </div>
       ) : null}
 
-      <div className="sticky top-0 z-20 border-b border-border/60 bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
+      <div className="border-b border-border/60 bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
         <div className="mx-auto flex max-w-[1500px] flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1230,7 +1286,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               ) : null}
             </div>
             <CardDescription>
-              Write assistant behavior, tone, boundaries, call goals, and escalation rules.
+              Write the assistant&apos;s tone, guardrails, call goals, and handoff rules.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1238,21 +1294,27 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-800 text-sm dark:text-amber-300">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
                 <p>
-                  You are editing the live version currently serving calls. Updating
-                  it in place changes what callers and preview calls use.
+                  You are editing the live version currently used for calls. Saving
+                  here changes what the agent says next.
                 </p>
               </div>
             ) : null}
             {isViewingHistoricalVersion ? (
-              <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-muted-foreground text-sm">
-                You are viewing an older version. Preview calls still use the
-                published live version.
+              <div className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm">
+                <p className="font-medium text-foreground">
+                  Viewing V{selectedVersion?.versionNumber}
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  This is a historical snapshot, not the live version. Restore it
+                  to start a new draft from here, or create a new version to keep
+                  editing safely.
+                </p>
               </div>
             ) : null}
             {hasUnsavedChanges ? (
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-amber-800 text-sm dark:text-amber-300">
-                Draft changes are not live yet. Update V{selectedVersion?.versionNumber ?? 'current'}
-                {' '}or save V{nextVersionNumber}, then publish when ready.
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-800 text-sm dark:text-amber-300">
+                Draft changes are saved only in this editor until you update the
+                current version or save a new one.
               </div>
             ) : null}
             {promptHydrated ? (
@@ -1260,7 +1322,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 value={prompt}
                 onChange={setPrompt}
                 disabled={saveBusy !== null}
-                statusLabel={hasUnsavedChanges ? 'Draft editing' : 'Ready to publish'}
+                statusLabel={hasUnsavedChanges ? 'Draft editing' : 'Ready'}
                 updatedLabel={lastUpdatedLabel}
                 helperLabel={editorMetaLabel}
               />
@@ -1270,52 +1332,33 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           </CardContent>
         </Card>
 
-        <div className="space-y-4 lg:sticky lg:top-28 lg:self-start">
-          <Card className="bg-background shadow-sm ring-1 ring-border/50">
+        <div className="space-y-4 lg:self-start">
+          <Card size="sm" className="bg-background shadow-sm ring-1 ring-border/50">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <CardTitle>Voice</CardTitle>
                 {isSelectedLive ? <Badge variant="outline">Live voice</Badge> : null}
               </div>
               <CardDescription>
-                Choose how the assistant sounds when this version is published.
+                Choose how the assistant sounds when it speaks.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="rounded-lg bg-gradient-to-br from-primary/10 via-primary/5 to-background p-3">
-                <div className="flex items-center gap-3">
-                  <div className="grid size-10 shrink-0 place-items-center rounded-full bg-background text-primary shadow-sm">
-                    <Volume2 className="size-5" aria-hidden />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-sm">
-                      {selectedVoice?.name ?? 'Select a voice'}
-                    </p>
-                    <p className="truncate text-muted-foreground text-xs">
-                      {selectedVoice?.rimeVoiceId ?? 'No voice selected'}
-                    </p>
-                  </div>
+              <div className="flex items-center gap-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                <div className="grid size-9 shrink-0 place-items-center rounded-full bg-background text-primary ring-1 ring-border/60">
+                  <Volume2 className="size-4.5" aria-hidden />
                 </div>
-              </div>
-              <label className="block text-muted-foreground text-xs uppercase tracking-wide">
-                Voice
-              </label>
-              <select
-                className={fieldClass}
-                value={selectedVoiceId}
-                onChange={(e) => setSelectedVoiceId(e.target.value)}
-              >
-                <option value="">Select voice...</option>
-                {voices.map((v) => (
-                  <option key={v.id} value={v.rimeVoiceId}>
-                    {v.name} ({v.rimeVoiceId})
-                  </option>
-                ))}
-              </select>
-              <div className="flex gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-sm">
+                    {selectedVoice?.name ?? 'Select a voice'}
+                  </p>
+                  <p className="truncate text-muted-foreground text-xs">
+                    {selectedVoice?.rimeVoiceId ?? 'No voice selected'}
+                  </p>
+                </div>
                 <Button
                   type="button"
-                  size="sm"
+                  size="icon-sm"
                   variant="outline"
                   onClick={() => void playVoicePreview()}
                   disabled={!selectedVoiceId || previewBusy}
@@ -1328,58 +1371,117 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   {previewBusy ? (
                     <Loader2 className="animate-spin" />
                   ) : (
-                    <Volume2 className="size-4" aria-hidden />
+                    <Play className="size-4" aria-hidden />
                   )}
-                  {previewBusy ? 'Loading...' : 'Preview voice'}
                 </Button>
-                <audio ref={previewAudioRef} className="hidden" preload="none" />
               </div>
-              <p className="text-xs text-muted-foreground">
-                Publishing a version updates the live voice used in preview and production calls.
-              </p>
-              {voices.length === 0 ? (
-                <p className="text-muted-foreground text-xs">
-                  No voices are available yet.
-                </p>
-              ) : null}
+              <label className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Voice
+              </label>
+              <select
+                className={cn(fieldClass, 'max-w-none')}
+                value={selectedVoiceId}
+                onChange={(e) => setSelectedVoiceId(e.target.value)}
+              >
+                <option value="">Select voice...</option>
+                {voices.map((v) => (
+                  <option key={v.id} value={v.rimeVoiceId}>
+                    {v.name} ({v.rimeVoiceId})
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-foreground">
+                  <Volume2 className="size-3.5" aria-hidden />
+                  Preview before publishing
+                </span>
+                {voices.length === 0 ? <span>No voices are available yet.</span> : null}
+              </div>
+              <audio ref={previewAudioRef} className="hidden" preload="none" />
             </CardContent>
           </Card>
 
-          <Card className="bg-background shadow-sm ring-1 ring-border/50">
+          <Card size="sm" className="bg-background shadow-sm ring-1 ring-border/50">
             <CardHeader className="pb-2">
               <CardTitle>Phone number</CardTitle>
               <CardDescription>Choose which number should route to this agent.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <select
-                className={fieldClass}
-                value={primaryAttachedId}
-                disabled={saveBusy === 'phone'}
-                onChange={(e) => void onPhoneRoutingChange(e.target.value)}
-              >
-                <option value="">None attached</option>
-                {phones.map((p) => {
-                  const assignment =
-                    p.agent && !p.agent.deletedAt
-                      ? ` -> ${p.agent.name}`
-                      : ' (unassigned)';
-                  return (
-                    <option key={p.id} value={p.id}>
-                      {p.number}
-                      {p.friendlyName ? ` (${p.friendlyName})` : ''}
-                      {assignment}
-                    </option>
-                  );
-                })}
-              </select>
+            <CardContent className="space-y-3">
+              <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                {attachedPhones.length > 0 ? (
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Assigned number
+                    </p>
+                    <p className="font-medium text-sm">
+                      {attachedPhones[0].number}
+                      {attachedPhones[0].friendlyName ? ` → ${attachedPhones[0].friendlyName}` : ''}
+                    </p>
+                    <p className="text-muted-foreground text-xs">
+                      This number will ring this agent.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Assigned number
+                    </p>
+                    <p className="font-medium text-sm">No phone number assigned</p>
+                    <p className="text-muted-foreground text-xs">
+                      Add one when you want callers to reach this agent.
+                    </p>
+                  </div>
+                )}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => setPhoneEditOpen((current) => !current)}
+                  >
+                    {phoneEditOpen ? 'Close' : 'Change'}
+                  </Button>
+                  {saveBusy === 'phone' ? (
+                    <span className="text-xs text-muted-foreground">Saving…</span>
+                  ) : null}
+                </div>
+              </div>
+              {phoneEditOpen ? (
+                <div className="space-y-2 rounded-lg border border-border/60 p-3">
+                  <label className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Change assignment
+                  </label>
+                  <select
+                    className={cn(fieldClass, 'max-w-none')}
+                    value={primaryAttachedId}
+                    disabled={saveBusy === 'phone'}
+                    onChange={(e) => void onPhoneRoutingChange(e.target.value)}
+                  >
+                    <option value="">None attached</option>
+                    {phones.map((p) => {
+                      const assignment =
+                        p.agent && !p.agent.deletedAt
+                          ? ` -> ${p.agent.name}`
+                          : ' (unassigned)';
+                      return (
+                        <option key={p.id} value={p.id}>
+                          {p.number}
+                          {p.friendlyName ? ` (${p.friendlyName})` : ''}
+                          {assignment}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
-          <Card className="bg-background shadow-sm ring-1 ring-border/50">
+          <Card size="sm" className="bg-background shadow-sm ring-1 ring-border/50">
             <CardHeader className="pb-2">
               <CardTitle>Version history</CardTitle>
               <CardDescription>
-                Recent versions are highlighted. Open full history only when needed.
+                Recent versions are highlighted. Older snapshots are kept lighter.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -1391,9 +1493,24 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                       Recent versions
                     </p>
                     <ul className="max-h-[28rem] space-y-1 overflow-auto pr-1">
-                      {displayedVersions.map((v) => renderVersionRow(v))}
+                      {(showAllVersions
+                        ? displayedVersions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT)
+                        : displayedVersions
+                      ).map((v) => renderVersionRow(v))}
                     </ul>
                   </div>
+                  {showAllVersions && displayedVersions.length > VERSION_HISTORY_PREVIEW_LIMIT ? (
+                    <div className="space-y-2 pt-1">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        Older history
+                      </p>
+                      <ul className="space-y-1 border-l border-dashed border-border/60 pl-2">
+                        {displayedVersions
+                          .slice(VERSION_HISTORY_PREVIEW_LIMIT)
+                          .map((v) => renderVersionRow(v))}
+                      </ul>
+                    </div>
+                  ) : null}
                   {shouldRenderPinnedLive && pinnedLiveVersion ? (
                     <div className="space-y-2 pt-1">
                       <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
@@ -1628,10 +1745,13 @@ function VersionMenuButton({
       type="button"
       disabled={disabled}
       onClick={(event) => {
-        event.currentTarget.closest('details')?.removeAttribute('open');
         onClick();
+        const menuRoot = event.currentTarget.closest('[data-version-menu-root]');
+        if (menuRoot instanceof HTMLElement) {
+          menuRoot.focus?.();
+        }
       }}
-      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition hover:bg-muted/70 disabled:pointer-events-none disabled:opacity-50"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition hover:bg-muted/70 focus-visible:bg-muted/70 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
     >
       <Icon className="size-3.5" aria-hidden />
       {label}
