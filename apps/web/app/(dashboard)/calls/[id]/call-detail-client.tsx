@@ -3,11 +3,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { format } from 'date-fns';
-import { Loader2 } from 'lucide-react';
+import {
+  Activity,
+  Bot,
+  Calendar,
+  ChevronLeft,
+  Clock,
+  Cpu,
+  DollarSign,
+  Loader2,
+  Mic,
+  Phone,
+  PhoneCall,
+  Play,
+  Sparkles,
+  Timer,
+  User,
+  Volume2,
+} from 'lucide-react';
 import Link from 'next/link';
 
 import { Badge } from '@/components/ui/badge';
-import { buttonVariants } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Card,
   CardContent,
@@ -359,7 +376,12 @@ export function CallDetailClient({ callId }: { callId: string }) {
   }
 
   if (loading && !detail) {
-    return <p className="text-muted-foreground text-sm">Loading call…</p>;
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-3">
+        <Loader2 className="size-8 text-primary animate-spin" />
+        <p className="text-muted-foreground text-sm font-medium">Loading call session…</p>
+      </div>
+    );
   }
 
   if (error || !detail) {
@@ -367,11 +389,12 @@ export function CallDetailClient({ callId }: { callId: string }) {
       <div className="space-y-4">
         <Link
           href="/calls"
-          className={cn(buttonVariants({ variant: 'outline' }), 'inline-flex')}
+          className={cn(buttonVariants({ variant: 'outline' }), 'inline-flex gap-2 rounded-xl')}
         >
-          ← Call history
+          <ChevronLeft className="size-4" />
+          Call history
         </Link>
-        <p className="text-destructive text-sm">
+        <p className="text-destructive text-sm font-medium">
           {error ?? 'Unable to load this call.'}
         </p>
       </div>
@@ -386,81 +409,119 @@ export function CallDetailClient({ callId }: { callId: string }) {
   const totalStored = detail.totalCostUsd;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <Link href="/calls" className="text-muted-foreground text-sm hover:underline">
-          ← Calls
-        </Link>
+    <div className="space-y-8 max-w-7xl mx-auto">
+      {/* 1. Header & Navigation */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border/40 pb-5">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <Link
+              href="/calls"
+              className={cn(
+                buttonVariants({ variant: 'ghost', size: 'icon' }),
+                'h-8 w-8 text-muted-foreground hover:text-foreground rounded-lg transition-colors'
+              )}
+            >
+              <ChevronLeft className="size-4" />
+            </Link>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <PhoneCall className="size-5 text-muted-foreground shrink-0" />
+              Call Session
+            </h1>
+          </div>
+          <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground pl-10">
+            <span>ID:</span>
+            <span className="bg-muted px-1.5 py-0.5 rounded select-all">{detail.id}</span>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 pl-10 sm:pl-0">
+          <DirectionBadge dir={detail.direction} />
+          <StatusBadge status={detail.status} />
+          {testBadge ? (
+            <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary font-mono text-[10px]">
+              TEST
+            </Badge>
+          ) : null}
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle className="text-2xl">Call overview</CardTitle>
-            <DirectionBadge dir={detail.direction} />
-            <StatusBadge status={detail.status} />
-            {testBadge ? <Badge variant="secondary">Test</Badge> : null}
-          </div>
-          <CardDescription className="font-mono text-xs">
-            {detail.id}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-6 sm:grid-cols-2">
-          <div>
-            <h3 className="text-muted-foreground text-xs uppercase tracking-wide">
-              Agent
-            </h3>
-            <p className="font-medium">{detail.agent?.name ?? '—'}</p>
-          </div>
-          <div>
-            <h3 className="text-muted-foreground text-xs uppercase tracking-wide">
-              Timing
-            </h3>
-            <p className="text-sm">
-              Created&nbsp;
-              <span className="font-medium">
-                {formatWhen(detail.createdAt)}
-              </span>
-            </p>
-            <p className="text-sm">
-              Ended&nbsp;
-              <span className="font-medium">{formatWhen(detail.endedAt)}</span>
-            </p>
-          </div>
-          <div>
-            <h3 className="text-muted-foreground text-xs uppercase tracking-wide">
-              Numbers
-            </h3>
-            <p className="font-mono text-sm">
-              {stringOrMdash(detail.fromNumber)} → {stringOrMdash(detail.toNumber)}
-            </p>
-          </div>
-          <div>
-            <h3 className="text-muted-foreground text-xs uppercase tracking-wide">
-              Duration
-            </h3>
-            <p className="font-medium tabular-nums">
-              {formatDuration(detail.durationSeconds)}
-            </p>
+      {/* 2. Call Overview Grid */}
+      <Card className="overflow-hidden border-border/50 shadow-sm bg-card/[0.6] backdrop-blur-sm">
+        <CardContent className="p-6">
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {/* Agent Info */}
+            <div className="flex items-start gap-3.5">
+              <div className="p-2.5 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400 shrink-0">
+                <Bot className="size-5" />
+              </div>
+              <div className="space-y-1">
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">Agent</span>
+                <p className="font-semibold text-foreground text-sm leading-none">{detail.agent?.name ?? '—'}</p>
+              </div>
+            </div>
+
+            {/* Numbers Info */}
+            <div className="flex items-start gap-3.5">
+              <div className="p-2.5 rounded-xl bg-violet-500/10 text-violet-600 dark:text-violet-400 shrink-0">
+                <Phone className="size-5" />
+              </div>
+              <div className="space-y-1 min-w-0">
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">Routing</span>
+                <p className="font-mono text-xs text-foreground truncate leading-normal" title={`${stringOrMdash(detail.fromNumber)} → ${stringOrMdash(detail.toNumber)}`}>
+                  {stringOrMdash(detail.fromNumber)} <span className="text-muted-foreground/60 mx-1">→</span> {stringOrMdash(detail.toNumber)}
+                </p>
+              </div>
+            </div>
+
+            {/* Duration Info */}
+            <div className="flex items-start gap-3.5">
+              <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                <Clock className="size-5" />
+              </div>
+              <div className="space-y-1">
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">Duration</span>
+                <p className="font-semibold text-foreground text-sm tabular-nums leading-none">
+                  {formatDuration(detail.durationSeconds)}
+                </p>
+              </div>
+            </div>
+
+            {/* Timing Info */}
+            <div className="flex items-start gap-3.5">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                <Calendar className="size-5" />
+              </div>
+              <div className="space-y-1">
+                <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block">Date &amp; Time</span>
+                <p className="font-semibold text-foreground text-sm leading-none" title={detail.startedAt ?? detail.createdAt}>
+                  {formatWhen(detail.startedAt ?? detail.createdAt)}
+                </p>
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center gap-2">
-            <CardTitle>Recording</CardTitle>
+      {/* 3. Audio Player */}
+      <Card className="border-border/50 shadow-sm overflow-hidden">
+        <CardHeader className="pb-4 border-b border-border/40 bg-muted/[0.03]">
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Volume2 className="size-4.5 text-muted-foreground" />
+                Call Recording
+              </CardTitle>
+              <CardDescription>
+                Play, seek, and download call audio once processing completes.
+              </CardDescription>
+            </div>
             {recordingSavedBadge ? (
-              <Badge variant="secondary" className="text-xs">
+              <Badge variant="outline" className="text-xs border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400">
                 Recording saved
               </Badge>
             ) : null}
           </div>
-          <CardDescription>
-            Play, seek, and download call audio once processing completes.
-          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="p-6">
           {recordingState.phase === 'loading' ||
           recordingState.phase === 'idle' ? (
             <RecordingProcessingState message="Checking recording availability…" />
@@ -489,63 +550,94 @@ export function CallDetailClient({ callId }: { callId: string }) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Transcript</CardTitle>
-          <CardDescription>
-            Select a timestamp to jump to that moment in the recording.
-          </CardDescription>
+      {/* 4. Transcript */}
+      <Card className="border-border/50 shadow-sm overflow-hidden">
+        <CardHeader className="pb-4 border-b border-border/40 bg-muted/[0.03]">
+          <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              <CardTitle className="text-lg">Call Transcript</CardTitle>
+              <CardDescription>
+                Click a timestamp to jump to that moment in the recording.
+              </CardDescription>
+            </div>
+            {transcriptTurns.length > 0 ? (
+              <Badge variant="secondary" className="font-mono text-xs">
+                {transcriptTurns.length} turns
+              </Badge>
+            ) : null}
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-6">
           {transcriptTurns.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              The transcript will appear here after the call finishes and speech is
-              processed.
-            </p>
+            <div className="text-center py-12 border-2 border-dashed border-border/60 rounded-xl space-y-2">
+              <Phone className="size-8 text-muted-foreground/45 mx-auto" />
+              <p className="font-medium text-foreground text-sm">No transcript turns available</p>
+              <p className="text-muted-foreground text-xs max-w-sm mx-auto">
+                The transcript will appear here after the call finishes and speech is processed.
+              </p>
+            </div>
           ) : (
-            <ul className="space-y-3">
+            <ul className="space-y-4">
               {transcriptTurns.map((row, idx) => {
                 const rel = secondsFromEpoch(row.startedAt, callEpoch);
                 const canSeek =
                   recordingState.phase === 'ready' &&
                   isWaveformReady &&
                   rel !== null;
+                const isAgent = (row.speaker ?? '').toLowerCase() === 'agent';
+
                 return (
                   <li
                     key={`${idx}-${String(row.startedAt)}`}
-                    className="rounded-lg border border-border p-4"
+                    className={cn(
+                      "rounded-xl border p-4.5 transition-all",
+                      isAgent
+                        ? "bg-primary/[0.015] border-primary/15 hover:border-primary/25"
+                        : "bg-muted/[0.02] border-border/60 hover:border-border"
+                    )}
                   >
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline" className="font-mono text-[10px]">
-                          {(row.speaker ?? 'speaker').toUpperCase()}
-                        </Badge>
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-border/40 mb-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-1.5">
+                          <div className={cn(
+                            "p-1 rounded-full shrink-0",
+                            isAgent ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
+                          )}>
+                            {isAgent ? <Sparkles className="size-3" /> : <User className="size-3" />}
+                          </div>
+                          <span className={cn(
+                            "text-xs font-semibold tracking-wide uppercase",
+                            isAgent ? "text-primary" : "text-foreground"
+                          )}>
+                            {row.speaker ?? 'Customer'}
+                          </span>
+                        </div>
                         {rel !== null ? (
                           canSeek ? (
-                            <button
+                            <Button
                               type="button"
-                              className={cn(
-                                buttonVariants({ variant: 'ghost', size: 'sm' }),
-                                'font-mono text-[11px]',
-                              )}
+                              variant="outline"
+                              size="sm"
+                              className="h-6 rounded-full px-2.5 font-mono text-[10px] gap-1 transition-all hover:bg-primary/10 hover:text-primary hover:border-primary/30"
                               onClick={() => handleSeekFromTurn(row)}
                             >
+                              <Play className="size-2.5 fill-current shrink-0" />
                               {formatMmSs(rel)}
-                            </button>
+                            </Button>
                           ) : (
-                            <span className="rounded bg-muted px-2 py-0.5 font-mono text-muted-foreground text-[11px]">
+                            <span className="inline-flex h-6 items-center rounded-full bg-muted px-2.5 font-mono text-[10px] text-muted-foreground">
                               {formatMmSs(rel)}
                             </span>
                           )
                         ) : (
-                          <span className="text-muted-foreground text-[11px]">
+                          <span className="text-muted-foreground text-[10px] font-mono">
                             Timestamp n/a
                           </span>
                         )}
-                        <TurnTimingChips turn={row} />
                       </div>
+                      <TurnTimingChips turn={row} />
                     </div>
-                    <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90 pl-1">
                       {row.text || '…'}
                     </p>
                   </li>
@@ -556,6 +648,7 @@ export function CallDetailClient({ callId }: { callId: string }) {
         </CardContent>
       </Card>
 
+      {/* 5. Metrics & latency cards */}
       <div className="grid gap-6 lg:grid-cols-2">
         <CostCard
           breakdown={costParts}
@@ -722,7 +815,7 @@ function formatWhen(iso: string | null): string {
   if (Number.isNaN(d.getTime())) {
     return iso;
   }
-  return format(d, 'MMM d yyyy HH:mm');
+  return format(d, 'MMM d, yyyy h:mm a');
 }
 
 function stringOrMdash(val: string | null): string {
@@ -759,23 +852,59 @@ function formatMs(ms: number): string {
 
 function DirectionBadge({ dir }: { dir: string }) {
   if (dir === 'INBOUND') {
-    return <Badge variant="default">INBOUND</Badge>;
+    return (
+      <Badge variant="outline" className="font-mono text-[10px] border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300">
+        INBOUND
+      </Badge>
+    );
   }
   if (dir === 'OUTBOUND') {
-    return <Badge variant="secondary">OUTBOUND</Badge>;
+    return (
+      <Badge variant="outline" className="font-mono text-[10px] border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300">
+        OUTBOUND
+      </Badge>
+    );
   }
-  return <Badge variant="outline">{dir}</Badge>;
+  return (
+    <Badge variant="outline" className="font-mono text-[10px]">
+      {dir}
+    </Badge>
+  );
 }
 
 function StatusBadge({ status }: { status: string }) {
   switch (status) {
     case 'COMPLETED':
-      return <Badge variant="default">{status}</Badge>;
+      return (
+        <Badge variant="outline" className="font-mono text-[10px] border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+          {status}
+        </Badge>
+      );
     case 'FAILED':
     case 'ABANDONED':
-      return <Badge variant="destructive">{status}</Badge>;
+      return (
+        <Badge variant="destructive" className="font-mono text-[10px]">
+          {status}
+        </Badge>
+      );
+    case 'IN_PROGRESS':
+      return (
+        <Badge variant="outline" className="font-mono text-[10px] border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+          {status}
+        </Badge>
+      );
+    case 'INITIATED':
+      return (
+        <Badge variant="outline" className="font-mono text-[10px] border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300">
+          {status}
+        </Badge>
+      );
     default:
-      return <Badge variant="secondary">{status}</Badge>;
+      return (
+        <Badge variant="secondary" className="font-mono text-[10px]">
+          {status}
+        </Badge>
+      );
   }
 }
 
@@ -787,35 +916,38 @@ function TurnTimingChips({ turn }: { turn: TranscriptTurn }) {
   const firstAudio = turn.firstAudioLatencyMs ?? turn.latencyMs;
   const chips = [
     firstAudio != null
-      ? { label: 'First audio', value: formatMs(firstAudio) }
+      ? { label: 'First audio', value: formatMs(firstAudio), color: 'text-emerald-700 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-500/10 border-emerald-500/20' }
       : null,
     turn.playbackDurationMs != null
-      ? { label: 'Playback', value: formatMs(turn.playbackDurationMs) }
+      ? { label: 'Playback', value: formatMs(turn.playbackDurationMs), color: 'text-blue-700 bg-blue-50 dark:text-blue-400 dark:bg-blue-500/10 border-blue-500/20' }
       : null,
     turn.totalResponseMs != null
-      ? { label: 'Turn total', value: formatMs(turn.totalResponseMs) }
+      ? { label: 'Total', value: formatMs(turn.totalResponseMs), color: 'text-violet-700 bg-violet-50 dark:text-violet-400 dark:bg-violet-500/10 border-violet-500/20' }
       : null,
-  ].filter((chip): chip is { label: string; value: string } => chip !== null);
+  ].filter((chip): chip is { label: string; value: string; color: string } => chip !== null);
 
   if (chips.length === 0) {
     return (
-      <span className="text-muted-foreground text-[11px]">
+      <span className="text-muted-foreground text-[10px] font-mono opacity-80">
         Timing unavailable
       </span>
     );
   }
 
   return (
-    <>
+    <div className="flex flex-wrap gap-1.5">
       {chips.map((chip) => (
         <span
           key={chip.label}
-          className="rounded bg-muted px-2 py-0.5 text-muted-foreground text-[11px]"
+          className={cn(
+            "inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-mono font-medium tracking-tight",
+            chip.color
+          )}
         >
-          {chip.label}: <span className="tabular-nums">{chip.value}</span>
+          {chip.label}: {chip.value}
         </span>
       ))}
-    </>
+    </div>
   );
 }
 
@@ -834,64 +966,88 @@ function CostCard(props: {
   const hasAny = rows.some((r) => typeof r.value === 'number');
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Cost breakdown</CardTitle>
+    <Card className="border-border/50 shadow-sm overflow-hidden">
+      <CardHeader className="pb-4 border-b border-border/40 bg-muted/[0.03]">
+        <CardTitle className="text-lg flex items-center gap-2">
+          <DollarSign className="size-4.5 text-muted-foreground" />
+          Cost Breakdown
+        </CardTitle>
         <CardDescription>
           Cost details appear as they become available.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="p-6">
         {!hasAny && props.totalStored == null ? (
           <p className="text-muted-foreground text-sm">
             Cost details are still being calculated.
           </p>
         ) : (
-          <>
-            <table className="w-full border-collapse text-sm">
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.label} className="border-b border-border">
-                    <td className="py-2 pr-4">{r.label}</td>
-                    <td className="py-2 text-right tabular-nums">
-                      {typeof r.value === 'number'
-                        ? formatUsdCell(r.value)
-                        : '—'}
+          <div className="space-y-4">
+            <div className="rounded-xl border border-border/50 overflow-hidden bg-card">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/30">
+                    <th className="py-2.5 px-4 text-left font-medium text-xs text-muted-foreground uppercase tracking-wider">Service</th>
+                    <th className="py-2.5 px-4 text-right font-medium text-xs text-muted-foreground uppercase tracking-wider">Cost</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/40">
+                  {rows.map((r, idx) => {
+                    const Icon = [Mic, Cpu, Volume2, PhoneCall][idx];
+                    return (
+                      <tr key={r.label} className="hover:bg-muted/10 transition-colors">
+                        <td className="py-3 px-4 flex items-center gap-2">
+                          {Icon && <Icon className="size-4 text-muted-foreground" />}
+                          <span className="font-medium text-foreground">{r.label}</span>
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono text-sm tabular-nums">
+                          {typeof r.value === 'number' ? formatUsdCell(r.value) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="bg-emerald-500/[0.02] font-semibold border-t border-border">
+                    <td className="py-3.5 px-4 flex items-center gap-2 text-emerald-800 dark:text-emerald-400">
+                      <DollarSign className="size-4" />
+                      <span>Total Session Cost</span>
+                    </td>
+                    <td className="py-3.5 px-4 text-right text-emerald-800 dark:text-emerald-400 font-mono text-base tabular-nums">
+                      {props.totalStored == null ? '—' : formatUsdCell(props.totalStored)}
                     </td>
                   </tr>
-                ))}
-                <tr>
-                  <td className="py-2 pr-4 font-medium">Total</td>
-                  <td className="py-2 text-right font-medium tabular-nums">
-                    {props.totalStored == null ? '—' : formatUsd(props.totalStored)}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            {props.totalStored != null ? (
-              <p className="text-muted-foreground text-xs">
-                Line items total ${formatUsd(props.sumParts)} before rounding.
-              </p>
-            ) : null}
-            {props.breakdown.durationMinutes != null ? (
-              <p className="text-muted-foreground text-xs">
-                Estimated duration:&nbsp;
-                <strong className="text-foreground">
-                  {props.breakdown.durationMinutes.toFixed(4)} min
-                </strong>
-              </p>
-            ) : null}
-            {(props.breakdown.llmTokens != null ||
-              props.breakdown.ttsCharacters != null) && (
-              <p className="text-muted-foreground text-xs">
-                Language model tokens:{' '}
-                <strong>{props.breakdown.llmTokens ?? '—'}</strong>
-                {' · '}
-                Voice characters:&nbsp;
-                <strong>{props.breakdown.ttsCharacters ?? '—'}</strong>
-              </p>
-            )}
-          </>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="space-y-1.5 pt-1.5">
+              {props.totalStored != null ? (
+                <p className="text-muted-foreground text-[11px] flex items-center gap-1.5">
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
+                  Line items total ${formatUsd(props.sumParts)} before rounding.
+                </p>
+              ) : null}
+              {props.breakdown.durationMinutes != null ? (
+                <p className="text-muted-foreground text-[11px] flex items-center gap-1.5">
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
+                  Estimated duration:&nbsp;
+                  <strong className="text-foreground">
+                    {props.breakdown.durationMinutes.toFixed(4)} min
+                  </strong>
+                </p>
+              ) : null}
+              {(props.breakdown.llmTokens != null ||
+                props.breakdown.ttsCharacters != null) && (
+                <p className="text-muted-foreground text-[11px] flex items-center gap-1.5">
+                  <span className="h-1 w-1 rounded-full bg-muted-foreground/50" />
+                  Tokens:&nbsp;
+                  <strong className="text-foreground">{props.breakdown.llmTokens ?? '—'}</strong>
+                  <span className="mx-1.5 text-muted-foreground/40">•</span>
+                  Voice characters:&nbsp;
+                  <strong className="text-foreground">{props.breakdown.ttsCharacters ?? '—'}</strong>
+                </p>
+              )}
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -905,53 +1061,67 @@ function LatencyCard(props: { stats: LatencyStats }) {
     props.stats.total.values.length > 0;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Voice responsiveness</CardTitle>
+    <Card className="border-border/50 shadow-sm overflow-hidden">
+      <CardHeader className="pb-4 border-b border-border/40 bg-muted/[0.03]">
+        <CardTitle className="text-lg flex items-center gap-2">
+          <Activity className="size-4.5 text-muted-foreground" />
+          Voice Responsiveness
+        </CardTitle>
         <CardDescription>
           First audio measures perceived latency. Playback and total turn time are
           shown separately so long answers do not look like slow responses.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="p-6">
         {!has ? (
           <p className="text-muted-foreground text-sm">
             Voice timing is not available for this transcript yet.
           </p>
         ) : (
-          <>
-            <div className="grid gap-3 text-sm sm:grid-cols-3">
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-3">
               <TimingSummary
                 label="First audio"
                 summary={props.stats.firstAudio}
                 empty="Missing"
+                icon={Activity}
+                color="border-emerald-500/20 bg-emerald-500/[0.01]"
               />
               <TimingSummary
                 label="Playback"
                 summary={props.stats.playback}
                 empty="Missing"
+                icon={Volume2}
+                color="border-blue-500/20 bg-blue-500/[0.01]"
               />
               <TimingSummary
                 label="Turn total"
                 summary={props.stats.total}
                 empty="Missing"
+                icon={Timer}
+                color="border-violet-500/20 bg-violet-500/[0.01]"
               />
             </div>
-            {props.stats.usedLegacyLatency ? (
-              <p className="text-muted-foreground text-xs">
-                Some older turns only include basic timing, so first-audio detail
-                may be approximate.
-              </p>
-            ) : null}
-            <details className="text-xs">
-              <summary className="cursor-pointer text-muted-foreground">
-                View timing samples
-              </summary>
-              <pre className="mt-3 max-h-40 overflow-auto rounded bg-muted px-3 py-2 font-mono text-[11px]">
-                {props.stats.firstAudio.values.join(', ')}
-              </pre>
-            </details>
-          </>
+
+            <div className="space-y-3">
+              {props.stats.usedLegacyLatency ? (
+                <p className="text-muted-foreground text-[11px] flex items-center gap-1.5">
+                  <span className="h-1 w-1 rounded-full bg-amber-500/60 shrink-0" />
+                  Some older turns only include basic timing, so first-audio detail
+                  may be approximate.
+                </p>
+              ) : null}
+              <details className="text-xs group border border-border/40 rounded-lg overflow-hidden">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground font-medium p-2.5 bg-muted/20 select-none flex items-center justify-between transition-colors">
+                  <span>View raw timing samples (ms)</span>
+                  <span className="text-[10px] text-muted-foreground/60 font-mono">click to expand</span>
+                </summary>
+                <div className="p-3 bg-muted/40 border-t border-border/40 max-h-40 overflow-auto font-mono text-[11px] text-muted-foreground leading-relaxed break-all">
+                  {props.stats.firstAudio.values.join(', ')}
+                </div>
+              </details>
+            </div>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -962,26 +1132,32 @@ function TimingSummary({
   label,
   summary,
   empty,
+  icon: Icon,
+  color,
 }: {
   label: string;
   summary: MetricSummary;
   empty: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
 }) {
   return (
-    <div className="rounded-md border border-border p-3">
-      <div className="text-muted-foreground text-xs uppercase tracking-wide">
-        {label}
+    <div className={cn("rounded-xl border p-4 flex flex-col justify-between gap-3 shadow-sm transition-all hover:shadow-md", color)}>
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+        {Icon && <Icon className="size-4 text-muted-foreground/75" />}
       </div>
       {summary.values.length === 0 ? (
-        <div className="mt-1 text-muted-foreground">{empty}</div>
+        <div className="text-muted-foreground text-sm font-medium">{empty}</div>
       ) : (
-        <div className="mt-1 space-y-1">
-          <div className="font-semibold tabular-nums">
+        <div className="space-y-1">
+          <div className="text-2xl font-bold tracking-tight text-foreground tabular-nums">
             Avg {summary.avg != null ? formatMs(summary.avg) : '—'}
           </div>
-          <div className="text-muted-foreground text-xs tabular-nums">
-            Max {summary.max != null ? formatMs(summary.max) : '—'} ·{' '}
-            {summary.values.length} sample{summary.values.length === 1 ? '' : 's'}
+          <div className="text-[10px] text-muted-foreground/80 font-mono flex items-center gap-1.5 tabular-nums">
+            <span>Max: {summary.max != null ? formatMs(summary.max) : '—'}</span>
+            <span>•</span>
+            <span>{summary.values.length} sample{summary.values.length === 1 ? '' : 's'}</span>
           </div>
         </div>
       )}
@@ -1015,11 +1191,11 @@ function UnavailableRecording({
           : 'Try refreshing the page in a moment.';
 
   return (
-    <div className="space-y-2 rounded-lg border border-dashed border-muted-foreground/40 bg-muted/30 p-8 text-center text-sm">
-      <p className="font-medium text-base">{title}</p>
-      <p className="text-muted-foreground">{body}</p>
+    <div className="space-y-2 rounded-xl border border-dashed border-muted-foreground/30 bg-muted/15 p-8 text-center text-sm">
+      <p className="font-semibold text-base text-foreground">{title}</p>
+      <p className="text-muted-foreground text-xs">{body}</p>
       {state.detail ? (
-        <p className="text-muted-foreground text-xs">{state.detail}</p>
+        <p className="text-muted-foreground/80 text-[11px] font-mono mt-1 bg-muted/40 inline-block px-2 py-0.5 rounded border border-border/40">{state.detail}</p>
       ) : null}
     </div>
   );
@@ -1031,15 +1207,15 @@ function RecordingProcessingState(props: {
 }) {
   return (
     <div
-      className="flex items-center gap-3 rounded-md border border-dashed border-border bg-muted/30 px-4 py-6 text-sm"
+      className="flex items-center gap-3.5 rounded-xl border border-dashed border-border bg-muted/20 px-4 py-6 text-sm"
       role="status"
       aria-live="polite"
     >
-      <Loader2 className="h-5 w-5 shrink-0 animate-spin text-muted-foreground" />
+      <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary" />
       <div className="space-y-1 text-left">
-        <p className="font-medium">{props.message}</p>
+        <p className="font-medium text-foreground">{props.message}</p>
         {props.attempt != null && props.attempt > 0 ? (
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-xs font-mono">
             Retry {props.attempt} of 6
           </p>
         ) : null}

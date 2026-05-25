@@ -15,6 +15,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   PhoneCall,
+  Sparkles,
   Users,
   type LucideIcon,
 } from 'lucide-react';
@@ -38,15 +39,35 @@ interface NavItem {
   badge?: string;
 }
 
-const navItems: NavItem[] = [
-  { href: '/analytics', label: 'Analytics', icon: Activity },
-  { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/calls', label: 'Calls', icon: PhoneCall },
-  { href: '/phone-numbers', label: 'Phone Numbers', icon: Hash },
-  { href: '/settings/members', label: 'Members', icon: Users },
-  { href: '/settings/api-keys', label: 'API Keys', icon: KeyRound },
-  { href: '/settings/organization', label: 'Organization', icon: Building2 },
-  { href: '/qualicall', label: 'Qualicall', icon: ClipboardCheck },
+interface NavGroup {
+  title: string;
+  items: NavItem[];
+}
+
+const navGroups: NavGroup[] = [
+  {
+    title: 'Workspace',
+    items: [
+      { href: '/analytics', label: 'Analytics', icon: Activity },
+      { href: '/agents', label: 'Agents', icon: Bot },
+      { href: '/calls', label: 'Calls', icon: PhoneCall },
+      { href: '/phone-numbers', label: 'Phone Numbers', icon: Hash },
+    ],
+  },
+  {
+    title: 'Tools',
+    items: [
+      { href: '/qualicall', label: 'Qualicall', icon: ClipboardCheck },
+    ],
+  },
+  {
+    title: 'Settings',
+    items: [
+      { href: '/settings/members', label: 'Members', icon: Users },
+      { href: '/settings/api-keys', label: 'API Keys', icon: KeyRound },
+      { href: '/settings/organization', label: 'Organization', icon: Building2 },
+    ],
+  },
 ];
 
 export function DashboardShell({
@@ -66,7 +87,7 @@ export function DashboardShell({
       <div className="min-h-screen bg-background md:h-screen md:overflow-hidden">
         <aside
           className={cn(
-            'fixed inset-y-0 left-0 z-40 hidden h-screen flex-col border-r border-border/70 bg-muted/20 transition-[width] duration-200 ease-out md:flex',
+            'fixed inset-y-0 left-0 z-40 hidden h-screen flex-col border-r border-border/40 bg-card/[0.45] backdrop-blur-md transition-[width] duration-200 ease-out md:flex',
             sidebarCollapsed ? 'w-16' : 'w-56',
           )}
         >
@@ -87,9 +108,14 @@ export function DashboardShell({
           >
             <Menu />
           </Button>
-          <Link href="/agents" className="font-semibold">
-            Awaaz
-          </Link>
+          <div className="flex items-center gap-2">
+            <div className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60 text-primary-foreground shadow-sm">
+              <Sparkles className="size-3.5" />
+            </div>
+            <span className="font-bold text-sm tracking-tight text-foreground">
+              Awaaz
+            </span>
+          </div>
         </div>
 
         <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
@@ -134,14 +160,14 @@ function SidebarContent({
   return (
     <div
       className={cn(
-        'flex h-full min-h-0 flex-col gap-3.5 p-3.5',
-        collapsed && 'items-center gap-2.5 p-2.5',
+        'flex h-full min-h-0 flex-col gap-4 p-4',
+        collapsed && 'items-center gap-3 p-3',
       )}
     >
       <div
         className={cn(
           'flex shrink-0 items-center gap-2',
-          collapsed ? 'flex-col' : 'justify-between',
+          collapsed ? 'flex-col gap-3' : 'justify-between',
         )}
       >
         <Link
@@ -149,17 +175,23 @@ function SidebarContent({
           title="Awaaz"
           onClick={onNavigate}
           className={cn(
-            'inline-flex min-w-0 items-center rounded-md font-semibold text-foreground outline-none transition-colors hover:text-primary focus-visible:ring-2 focus-visible:ring-ring',
-            collapsed ? 'size-9 justify-center bg-background shadow-sm' : 'px-1 text-lg',
+            'inline-flex min-w-0 items-center rounded-xl outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring',
+            collapsed ? 'size-9 justify-center' : 'px-1',
           )}
         >
           {collapsed ? (
-            <>
-              <span aria-hidden>A</span>
-              <span className="sr-only">Awaaz</span>
-            </>
+            <div className="flex size-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60 text-primary-foreground shadow-sm hover:scale-105 transition-transform duration-200">
+              <Sparkles className="size-4.5" />
+            </div>
           ) : (
-            'Awaaz'
+            <div className="flex items-center gap-2.5">
+              <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60 text-primary-foreground shadow-md">
+                <Sparkles className="size-4" />
+              </div>
+              <span className="font-bold text-base tracking-tight bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text text-transparent">
+                Awaaz
+              </span>
+            </div>
           )}
         </Link>
         {onToggleCollapsed ? (
@@ -167,34 +199,48 @@ function SidebarContent({
             type="button"
             variant="ghost"
             size="icon-sm"
+            className="h-8 w-8 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             onClick={onToggleCollapsed}
           >
-            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+            {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
           </Button>
         ) : null}
       </div>
 
       <nav
         className={cn(
-          'flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto text-sm',
-          collapsed && 'items-center',
+          'flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pr-0.5 text-sm scrollbar-thin',
+          collapsed && 'items-center gap-3',
         )}
         aria-label="Dashboard navigation"
       >
-        {navItems.map((item) => (
-          <SidebarNavLink
-            key={item.href}
-            item={item}
-            active={isActivePath(pathname, item.href)}
-            collapsed={collapsed}
-            onNavigate={onNavigate}
-          />
+        {navGroups.map((group, groupIdx) => (
+          <div key={group.title} className="w-full space-y-1.5">
+            {!collapsed ? (
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/45 px-3 block">
+                {group.title}
+              </span>
+            ) : groupIdx > 0 ? (
+              <div className="h-[1px] bg-border/40 my-1 w-8 mx-auto" />
+            ) : null}
+            <div className="space-y-1">
+              {group.items.map((item) => (
+                <SidebarNavLink
+                  key={item.href}
+                  item={item}
+                  active={isActivePath(pathname, item.href)}
+                  collapsed={collapsed}
+                  onNavigate={onNavigate}
+                />
+              ))}
+            </div>
+          </div>
         ))}
       </nav>
 
-      <div className="w-full shrink-0">
+      <div className="w-full shrink-0 border-t border-border/40 pt-4">
         <OrgSwitcher compact={collapsed} />
       </div>
     </div>
@@ -221,26 +267,30 @@ function SidebarNavLink({
       aria-label={collapsed ? item.label : undefined}
       onClick={onNavigate}
       className={cn(
-        'flex shrink-0 items-center rounded-md text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        active && 'bg-background font-medium text-foreground shadow-sm',
+        'group flex shrink-0 items-center rounded-lg text-muted-foreground transition-all duration-200 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        active
+          ? 'bg-primary/[0.08] font-semibold text-primary shadow-[0_1px_2px_rgba(0,0,0,0.01)]'
+          : 'hover:bg-muted/65',
         collapsed
           ? 'size-9 justify-center'
-          : 'h-9 w-full justify-between gap-2 px-2.5',
+          : 'h-9.5 w-full justify-between gap-2 px-3',
       )}
     >
       <span
         className={cn(
-          'flex min-w-0 items-center gap-2',
+          'flex min-w-0 items-center gap-2.5',
           collapsed && 'justify-center',
         )}
       >
-        <Icon className="size-4 shrink-0" />
+        <Icon className={cn("size-4 shrink-0 transition-transform duration-200 group-hover:scale-105", active ? "text-primary" : "text-muted-foreground/80")} />
         <span className={cn('truncate', collapsed && 'sr-only')}>
           {item.label}
         </span>
       </span>
       {!collapsed && item.badge ? (
-        <Badge variant="secondary">{item.badge}</Badge>
+        <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0">
+          {item.badge}
+        </Badge>
       ) : null}
     </Link>
   );
