@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CustomSelect } from '@/components/ui/custom-select';
 import {
   Card,
   CardContent,
@@ -184,13 +185,14 @@ function MemberTableRow({ member }: { member: MemberRow }) {
       <TableCell>{displayName(member)}</TableCell>
       <TableCell>{member.email ?? '—'}</TableCell>
       <TableCell>
-        <select className={SELECT_CLASS} value={member.role} disabled>
-          {ROLES.map((role) => (
-            <option key={role} value={role}>
-              {role}
-            </option>
-          ))}
-        </select>
+        <CustomSelect
+          className="min-w-[9rem]"
+          buttonClassName={SELECT_CLASS}
+          value={member.role}
+          ariaLabel={`Role for ${displayName(member)}`}
+          disabled
+          options={ROLES.map((role) => ({ value: role, label: role }))}
+        />
       </TableCell>
       <TableCell className="font-mono text-xs">{member.userId}</TableCell>
     </TableRow>

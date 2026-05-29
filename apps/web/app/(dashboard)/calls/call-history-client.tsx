@@ -31,6 +31,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { useOrgContext } from '@/components/org-context';
+import { CustomSelect } from '@/components/ui/custom-select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
@@ -354,63 +355,66 @@ export function CallHistoryClient() {
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex min-w-[10rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
             Agent
-            <select
-              className={fieldClass}
+            <CustomSelect
               value={filters.agentId}
-              onChange={(e) => {
+              ariaLabel="Filter by agent"
+              placeholder="All agents"
+              buttonClassName={fieldClass}
+              options={[
+                { value: '', label: 'All agents' },
+                ...agents.map((a) => ({ value: a.id, label: a.name })),
+              ]}
+              onValueChange={(value) => {
                 setPage(1);
-                setFilters((f) => ({ ...f, agentId: e.target.value }));
+                setFilters((f) => ({ ...f, agentId: value }));
               }}
-            >
-              <option value="">All agents</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+            />
           </label>
           <label className="flex min-w-[8rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
             Direction
-            <select
-              className={fieldClass}
+            <CustomSelect
               value={filters.direction}
-              onChange={(e) => {
+              ariaLabel="Filter by direction"
+              placeholder="Any"
+              buttonClassName={fieldClass}
+              options={[
+                { value: '', label: 'Any' },
+                ...CALL_DIRECTIONS.map((d) => ({
+                  value: d,
+                  label: formatEnumLabel(d),
+                })),
+              ]}
+              onValueChange={(value) => {
                 setPage(1);
                 setFilters((f) => ({
                   ...f,
-                  direction: e.target.value as FilterState['direction'],
+                  direction: value as FilterState['direction'],
                 }));
               }}
-            >
-              <option value="">Any</option>
-              {CALL_DIRECTIONS.map((d) => (
-                <option key={d} value={d}>
-                  {formatEnumLabel(d)}
-                </option>
-              ))}
-            </select>
+            />
           </label>
           <label className="flex min-w-[9rem] flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
             Status
-            <select
-              className={fieldClass}
+            <CustomSelect
               value={filters.status}
-              onChange={(e) => {
+              ariaLabel="Filter by status"
+              placeholder="Any"
+              buttonClassName={fieldClass}
+              options={[
+                { value: '', label: 'Any' },
+                ...CALL_STATUSES.map((s) => ({
+                  value: s,
+                  label: formatEnumLabel(s),
+                })),
+              ]}
+              onValueChange={(value) => {
                 setPage(1);
                 setFilters((f) => ({
                   ...f,
-                  status: e.target.value as FilterState['status'],
+                  status: value as FilterState['status'],
                 }));
               }}
-            >
-              <option value="">Any</option>
-              {CALL_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {formatEnumLabel(s)}
-                </option>
-              ))}
-            </select>
+            />
           </label>
           <label className="flex flex-col gap-1 text-muted-foreground text-xs uppercase tracking-wide">
             From date

@@ -48,7 +48,7 @@ export class VoicesService {
     );
     return this.rime.synthesizePreview({
       rimeVoiceId: resolved.rimeVoiceId,
-      name: resolved.rimeVoiceId,
+      name: voiceRow?.name ?? resolved.rimeVoiceId,
       language: resolved.lang,
       lang: resolved.lang,
       modelId: resolved.modelId,

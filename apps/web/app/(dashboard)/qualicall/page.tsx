@@ -15,6 +15,7 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CustomSelect } from '@/components/ui/custom-select';
 import {
   Card,
   CardContent,
@@ -562,20 +563,24 @@ export default function QualicallPage() {
 
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">Available scripts</span>
-              <select
-                className={inputClassName}
+              <CustomSelect
+                buttonClassName={inputClassName}
                 value={selectedScriptId}
-                onChange={(event) => setSelectedScriptId(event.target.value)}
-              >
-                <option value="">
-                  {scriptsLoading ? 'Loading scripts...' : 'Select a script'}
-                </option>
-                {scripts.map((script) => (
-                  <option key={script.id} value={script.id}>
-                    {script.name}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="Available scripts"
+                placeholder={scriptsLoading ? 'Loading scripts...' : 'Select a script'}
+                loading={scriptsLoading}
+                options={[
+                  {
+                    value: '',
+                    label: scriptsLoading ? 'Loading scripts...' : 'Select a script',
+                  },
+                  ...scripts.map((script) => ({
+                    value: script.id,
+                    label: script.name,
+                  })),
+                ]}
+                onValueChange={setSelectedScriptId}
+              />
             </label>
 
             {uploadedScript ? (
@@ -622,18 +627,20 @@ export default function QualicallPage() {
                 </label>
                 <label className="grid gap-1.5 text-sm">
                   <span className="font-medium">Script</span>
-                  <select
-                    className={inputClassName}
+                  <CustomSelect
+                    buttonClassName={inputClassName}
                     value={selectedScriptId}
-                    onChange={(event) => setSelectedScriptId(event.target.value)}
-                  >
-                    <option value="">Select script</option>
-                    {scripts.map((script) => (
-                      <option key={script.id} value={script.id}>
-                        {script.name}
-                      </option>
-                    ))}
-                  </select>
+                    ariaLabel="Script"
+                    placeholder="Select script"
+                    options={[
+                      { value: '', label: 'Select script' },
+                      ...scripts.map((script) => ({
+                        value: script.id,
+                        label: script.name,
+                      })),
+                    ]}
+                    onValueChange={setSelectedScriptId}
+                  />
                 </label>
               </div>
               <div className="grid gap-3 sm:grid-cols-3">
@@ -648,14 +655,16 @@ export default function QualicallPage() {
                 </label>
                 <label className="grid gap-1.5 text-sm">
                   <span className="font-medium">Agent speaker</span>
-                  <select
-                    className={inputClassName}
+                  <CustomSelect
+                    buttonClassName={inputClassName}
                     value={agentSpeakerLabel}
-                    onChange={(event) => setAgentSpeakerLabel(event.target.value)}
-                  >
-                    <option value="A">A</option>
-                    <option value="B">B</option>
-                  </select>
+                    ariaLabel="Agent speaker"
+                    options={[
+                      { value: 'A', label: 'A' },
+                      { value: 'B', label: 'B' },
+                    ]}
+                    onValueChange={setAgentSpeakerLabel}
+                  />
                 </label>
               </div>
               <label className="grid gap-1.5 text-sm">

@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { UserPlus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { CustomSelect } from '@/components/ui/custom-select';
 import {
   Dialog,
   DialogContent,
@@ -104,20 +105,17 @@ export function InviteMemberDialog({
             </label>
             <label className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Role
-              <select
-                className={FIELD_CLASS}
+              <CustomSelect
+                buttonClassName={FIELD_CLASS}
                 value={role}
+                ariaLabel="Invitation role"
                 disabled={busy}
-                onChange={(event) =>
-                  setRole(event.target.value as InviteMemberInput['role'])
-                }
-              >
-                {ROLE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
+                options={ROLE_OPTIONS.map((option) => ({
+                  value: option,
+                  label: option,
+                }))}
+                onValueChange={(value) => setRole(value as InviteMemberInput['role'])}
+              />
             </label>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             <DialogFooter>

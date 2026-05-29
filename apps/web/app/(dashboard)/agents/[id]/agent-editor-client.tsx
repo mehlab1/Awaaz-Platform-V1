@@ -33,6 +33,7 @@ import useLocalStorageState from 'use-local-storage-state';
 import { AgentSystemPromptEditor } from '@/components/agent-system-prompt-editor';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { CustomSelect } from '@/components/ui/custom-select';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import {
@@ -88,6 +89,8 @@ const TTS_OPTIONS = [
 const STT_OPTIONS = [
   { value: 'deepgram', label: 'Deepgram STT' },
 ] as const;
+
+const VOICE_PREVIEW_FALLBACK_TEXT = 'Hi, I am Awaaz’s voice agent.';
 
 const BLUEPRINTS = [
   {
@@ -160,6 +163,8 @@ interface VoiceDto {
   rimeVoiceId: string;
   name: string;
   previewAudioUrl: string | null;
+  lang?: string | null;
+  modelId?: string | null;
 }
 
 interface PhoneDto {
@@ -183,6 +188,10 @@ interface PipelineOption {
 export function AgentEditorClient({ agentId }: { agentId: string }) {
   const { activeOrgId, apiCall } = useOrgContext();
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewCacheRef = useRef<Map<string, string>>(new Map());
+  const previewInFlightRef = useRef<Map<string, Promise<string>>>(new Map());
+  const preloadedVoiceKeysRef = useRef<Set<string>>(new Set());
+  const previewPlayRequestRef = useRef(0);
   const saveInFlightRef = useRef(false);
   const voicesLoadedRef = useRef(false);
   const phonesLoadedOrgRef = useRef<string | undefined>(undefined);
@@ -209,8 +218,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [saveBusy, setSaveBusy] = useState<
     'update' | 'create' | 'publish' | 'phone' | null
   >(null);
-  const [previewBusy, setPreviewBusy] = useState(false);
-  const [previewObjectUrl, setPreviewObjectUrl] = useState<string | null>(null);
+  const [loadingPreviewKey, setLoadingPreviewKey] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -581,13 +589,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
   };
 
-  useEffect(() => {
-    return () => {
-      if (previewObjectUrl) {
-        URL.revokeObjectURL(previewObjectUrl);
-      }
-    };
-  }, [previewObjectUrl]);
+  const disposePreviewCache = useCallback(() => {
+    previewPlayRequestRef.current += 1;
+    previewAudioRef.current?.pause();
+    for (const objectUrl of previewCacheRef.current.values()) {
+      URL.revokeObjectURL(objectUrl);
+    }
+    previewCacheRef.current.clear();
+    previewInFlightRef.current.clear();
+    preloadedVoiceKeysRef.current.clear();
+  }, []);
+
+  useEffect(() => disposePreviewCache, [disposePreviewCache]);
 
   const openPromptDiff = useCallback(async (v: AgentVersion) => {
     let diffVersions = versions;
@@ -958,6 +971,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
+  const selectedVoicePreviewKey = selectedVoice
+    ? voicePreviewCacheKey(selectedVoice)
+    : null;
+  const selectedVoicePreviewLoading =
+    selectedVoicePreviewKey !== null && loadingPreviewKey === selectedVoicePreviewKey;
   const selectedModelValue =
     selectedVersion?.model ?? liveVersion?.model ?? DEFAULT_LLM_MODEL;
   const llmOptions = modelOptionsFor(selectedModelValue);
@@ -1026,6 +1044,93 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     versionPanelBusy,
   ]);
 
+  const getVoicePreviewObjectUrl = useCallback(
+    async (voice: VoiceDto): Promise<string> => {
+      const cacheKey = voicePreviewCacheKey(voice);
+      const cached = previewCacheRef.current.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
+      const inFlight = previewInFlightRef.current.get(cacheKey);
+      if (inFlight) {
+        return inFlight;
+      }
+
+      const request = (async () => {
+        const res = await apiCall('/api/v1/voices/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voiceId: voice.rimeVoiceId }),
+        });
+        if (!res.ok) {
+          throw new Error(await readApiError(res));
+        }
+
+        const audioBlob = await res.blob();
+        const objectUrl = URL.createObjectURL(audioBlob);
+        previewCacheRef.current.set(cacheKey, objectUrl);
+        return objectUrl;
+      })();
+
+      previewInFlightRef.current.set(cacheKey, request);
+      try {
+        return await request;
+      } finally {
+        previewInFlightRef.current.delete(cacheKey);
+      }
+    },
+    [apiCall],
+  );
+
+  useEffect(() => {
+    if (!voiceModalOpen || voiceSearchQuery.trim()) {
+      return undefined;
+    }
+
+    const unique = new Map<string, VoiceDto>();
+    if (selectedVoice) {
+      unique.set(selectedVoice.rimeVoiceId, selectedVoice);
+    }
+    for (const voice of voices) {
+      unique.set(voice.rimeVoiceId, voice);
+      if (unique.size >= 3) {
+        break;
+      }
+    }
+
+    const candidates = [...unique.values()].filter((voice) => {
+      const cacheKey = voicePreviewCacheKey(voice);
+      return (
+        !previewCacheRef.current.has(cacheKey) &&
+        !previewInFlightRef.current.has(cacheKey) &&
+        !preloadedVoiceKeysRef.current.has(cacheKey)
+      );
+    });
+
+    if (candidates.length === 0) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      for (const voice of candidates) {
+        const cacheKey = voicePreviewCacheKey(voice);
+        preloadedVoiceKeysRef.current.add(cacheKey);
+        void getVoicePreviewObjectUrl(voice).catch(() => {
+          preloadedVoiceKeysRef.current.delete(cacheKey);
+        });
+      }
+    }, 350);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    getVoicePreviewObjectUrl,
+    selectedVoice,
+    voiceModalOpen,
+    voiceSearchQuery,
+    voices,
+  ]);
+
   const playVoicePreview = async (voiceToPreview?: VoiceDto) => {
     const targetVoice = voiceToPreview ?? selectedVoice;
     if (!targetVoice) {
@@ -1038,46 +1143,51 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       return;
     }
 
-    // Ensure a prior preview does not continue playing underneath the next one.
+    const cacheKey = voicePreviewCacheKey(targetVoice);
+    const playRequestId = previewPlayRequestRef.current + 1;
+    previewPlayRequestRef.current = playRequestId;
+
     el.pause();
     el.currentTime = 0;
+    setPlayingVoiceId(null);
+    setNavVoicePlaying(false);
 
-    setPreviewBusy(true);
-    if (voiceToPreview) {
-      setPlayingVoiceId(voiceToPreview.rimeVoiceId);
-    } else {
-      setNavVoicePlaying(true);
+    if (!previewCacheRef.current.has(cacheKey)) {
+      setLoadingPreviewKey(cacheKey);
     }
+
     try {
       console.debug('[AgentEditor] Voice preview request', {
         selectedVoiceId: targetVoice.rimeVoiceId,
         rimeVoiceId: targetVoice.rimeVoiceId,
         voiceName: targetVoice.name,
+        previewText: voicePreviewText(targetVoice),
+        cached: previewCacheRef.current.has(cacheKey),
       });
-      const res = await apiCall('/api/v1/voices/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voiceId: targetVoice.rimeVoiceId }),
-      });
-      if (!res.ok) {
-        throw new Error(await readApiError(res));
+      const nextUrl = await getVoicePreviewObjectUrl(targetVoice);
+      if (playRequestId !== previewPlayRequestRef.current) {
+        return;
       }
 
-      const audioBlob = await res.blob();
-      const nextUrl = URL.createObjectURL(audioBlob);
-      if (previewObjectUrl) {
-        URL.revokeObjectURL(previewObjectUrl);
+      if (el.src !== nextUrl) {
+        el.src = nextUrl;
       }
-      setPreviewObjectUrl(nextUrl);
-      el.src = nextUrl;
+      el.currentTime = 0;
+      el.playbackRate = 1;
       await el.play();
+      if (playRequestId !== previewPlayRequestRef.current) {
+        return;
+      }
+      if (voiceToPreview) {
+        setPlayingVoiceId(targetVoice.rimeVoiceId);
+      } else {
+        setNavVoicePlaying(true);
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setToast(message || 'Could not play preview.');
     } finally {
-      setPreviewBusy(false);
-      setPlayingVoiceId(null);
-      setNavVoicePlaying(false);
+      setLoadingPreviewKey((current) => (current === cacheKey ? null : current));
     }
   };
 
@@ -1393,10 +1503,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 type="button"
                 className="flex items-center justify-center h-5 w-5 rounded-full hover:bg-muted/60 transition-colors"
                 title={selectedVoice ? `Play ${selectedVoice.name}` : 'Select a voice first'}
-                disabled={!selectedVoiceId || previewBusy}
+                disabled={!selectedVoiceId || selectedVoicePreviewLoading}
                 onClick={() => void playVoicePreview()}
               >
-                {previewBusy && navVoicePlaying ? (
+                {selectedVoicePreviewLoading ? (
                   <Loader2 className="size-3 animate-spin text-primary" />
                 ) : navVoicePlaying ? (
                   <div className="flex items-end gap-[1.5px] h-3 px-0.5" title="Pause preview">
@@ -1454,28 +1564,28 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-2 py-1">
                     Assign Phone Number
                   </p>
-                  <select
-                    className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs shadow-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  <CustomSelect
+                    buttonClassName="mt-1 h-8 rounded-md px-2.5 py-1.5 text-xs focus-visible:ring-1"
                     value={primaryAttachedId}
+                    ariaLabel="Assign phone number"
                     disabled={saveBusy === 'phone'}
-                    onChange={(e) => {
-                      void onPhoneRoutingChange(e.target.value);
+                    loading={saveBusy === 'phone'}
+                    options={[
+                      { value: '', label: 'None (unassigned)' },
+                      ...phones.map((p) => ({
+                        value: p.id,
+                        label: p.number,
+                        description:
+                          p.agent && !p.agent.deletedAt
+                            ? `Assigned to ${p.agent.name}`
+                            : undefined,
+                      })),
+                    ]}
+                    onValueChange={(value) => {
+                      void onPhoneRoutingChange(value);
                       setPhoneDropdownOpen(false);
                     }}
-                  >
-                    <option value="">None (unassigned)</option>
-                    {phones.map((p) => {
-                      const assignment =
-                        p.agent && !p.agent.deletedAt
-                          ? ` (-> ${p.agent.name})`
-                          : '';
-                      return (
-                        <option key={p.id} value={p.id}>
-                          {p.number}{assignment}
-                        </option>
-                      );
-                    })}
-                  </select>
+                  />
                 </div>
               )}
             </div>
@@ -1920,7 +2030,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       </div>
 
       {/* Hidden audio element */}
-      <audio ref={previewAudioRef} className="hidden" preload="none" />
+      <audio
+        ref={previewAudioRef}
+        className="hidden"
+        preload="none"
+        onEnded={() => {
+          setPlayingVoiceId(null);
+          setNavVoicePlaying(false);
+        }}
+        onPause={() => {
+          setPlayingVoiceId(null);
+          setNavVoicePlaying(false);
+        }}
+      />
 
       {/* ═══════════════════════ DIALOGS ═══════════════════════ */}
 
@@ -2111,21 +2233,23 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Prompt Template</p>
-              <div className="rounded-lg border border-border/30 bg-muted/[0.03] p-4 h-[calc(100%-20px)] overflow-y-auto">
-                <pre className="whitespace-pre-wrap text-[13px] leading-[1.8] text-foreground font-[system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,sans-serif]">
-                  {selectedBlueprint.template}
-                </pre>
+            <div className="flex-1 overflow-hidden px-6 py-6 min-h-0">
+              <div className="flex h-full min-h-0 flex-col gap-2.5">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Prompt Template</p>
+                <div className="flex-1 min-h-0 overflow-y-auto rounded-xl border border-border/40 bg-muted/[0.04] p-5">
+                  <pre className="whitespace-pre-wrap text-[13px] leading-[1.8] text-foreground font-[system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,sans-serif]">
+                    {selectedBlueprint.template}
+                  </pre>
+                </div>
               </div>
             </div>
 
-            <DialogFooter className="px-6 py-3 border-t border-border/40 bg-muted/[0.02] flex items-center justify-end gap-2.5 shrink-0">
+            <DialogFooter className="px-6 py-4 border-t border-border/40 bg-muted/[0.02] flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-2.5 shrink-0">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs px-4"
+                className="h-10 w-full rounded-xl border-border/60 bg-background/80 px-5 text-sm font-medium text-foreground shadow-none hover:bg-muted/60 sm:w-auto sm:min-w-[112px]"
                 onClick={() => setSelectedBlueprint(null)}
               >
                 Cancel
@@ -2134,7 +2258,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 type="button"
                 variant="default"
                 size="sm"
-                className="h-8 text-xs px-4 bg-primary text-primary-foreground hover:bg-primary/95"
+                className="h-10 w-full rounded-xl px-5 text-sm font-medium shadow-none sm:w-auto sm:min-w-[140px] bg-foreground text-background hover:bg-foreground/90"
                 onClick={() => {
                   setPrompt(selectedBlueprint.template);
                   setPromptViewMode('edit');
@@ -2188,6 +2312,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               .map((v) => {
                 const isTempSelected = tempSelectedVoiceId === v.rimeVoiceId;
                 const isPlaying = playingVoiceId === v.rimeVoiceId;
+                const previewKey = voicePreviewCacheKey(v);
+                const isLoadingPreview = loadingPreviewKey === previewKey;
                 return (
                   <div
                     key={v.id}
@@ -2209,10 +2335,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                           e.stopPropagation();
                           void playVoicePreview(v);
                         }}
-                        disabled={previewBusy && !isPlaying}
+                        disabled={isLoadingPreview}
                       >
-                        {isPlaying ? (
+                        {isLoadingPreview ? (
                           <Loader2 className="size-3 animate-spin" />
+                        ) : isPlaying ? (
+                          <Volume2 className="size-3" />
                         ) : (
                           <Play className="size-3 text-muted-foreground fill-muted-foreground" />
                         )}
@@ -2523,18 +2651,17 @@ function PipelineSelect({
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {label}
       </span>
-      <select
-        className="mt-1 h-9 w-full cursor-not-allowed rounded-lg border border-border/50 bg-background/70 px-2.5 text-xs font-medium text-foreground shadow-sm outline-none disabled:opacity-100"
+      <CustomSelect
+        className="mt-1"
+        buttonClassName="h-9 cursor-not-allowed border-border/50 bg-background/70 px-2.5 text-xs font-medium disabled:opacity-100"
         value={value}
+        ariaLabel={`${label} provider`}
         disabled
-        aria-label={`${label} provider`}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+        }))}
+      />
       <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
         {note}
       </span>
@@ -2734,6 +2861,35 @@ function safeRelativeTime(iso: string): string {
     return iso;
   }
   return formatDistanceToNow(d, { addSuffix: true });
+}
+
+function voicePreviewText(voice: VoiceDto): string {
+  const name = cleanVoicePreviewName(voice.name);
+  if (!name) {
+    return VOICE_PREVIEW_FALLBACK_TEXT;
+  }
+  return `Hi, this is ${name}. I am Awaaz’s voice agent.`;
+}
+
+function voicePreviewCacheKey(voice: VoiceDto): string {
+  return [
+    voice.rimeVoiceId,
+    voice.modelId ?? 'default-model',
+    voice.lang ?? 'default-lang',
+    voicePreviewText(voice),
+  ].join('|');
+}
+
+function cleanVoicePreviewName(name: string): string {
+  return name
+    .replace(/[_-]+/g, ' ')
+    .replace(/[^\p{L}\p{N}' ]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 }
 
 async function readApiError(res: Response): Promise<string> {

@@ -15,6 +15,7 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { CustomSelect } from '@/components/ui/custom-select';
 import {
   Card,
   CardContent,
@@ -279,21 +280,23 @@ function PhoneNumberTableRow({
       </TableCell>
       <TableCell>{row.friendlyName ?? '—'}</TableCell>
       <TableCell>
-        <select
-          className={SELECT_CLASS}
+        <CustomSelect
+          className="min-w-[12rem]"
+          buttonClassName={SELECT_CLASS}
           value={row.agentId ?? ''}
+          ariaLabel={`Assign agent for ${row.number}`}
           disabled={isBusy}
-          onChange={(event) => {
-            void onAssign(row.id, event.target.value);
+          options={[
+            { value: '', label: 'Unassigned' },
+            ...agents.map((agent) => ({
+              value: agent.id,
+              label: agent.name,
+            })),
+          ]}
+          onValueChange={(value) => {
+            void onAssign(row.id, value);
           }}
-        >
-          <option value="">Unassigned</option>
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.name}
-            </option>
-          ))}
-        </select>
+        />
       </TableCell>
       <TableCell>
         <StatusBadge isActive={row.isActive} />

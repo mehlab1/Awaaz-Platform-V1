@@ -10,6 +10,8 @@ const RIME_TTS_URL = 'https://users.rime.ai/v1/rime-tts';
 const SAMPLE_RATE = 16_000;
 const CHANNELS = 1;
 const BITS_PER_SAMPLE = 16;
+const PREVIEW_SPEED_ALPHA = 1.12;
+const PREVIEW_TIME_SCALE_FACTOR = 1.12;
 
 export interface RimeVoice {
   rimeVoiceId: string;
@@ -46,6 +48,7 @@ export class RimeService {
   async synthesizePreview(voice: RimeVoice): Promise<Uint8Array> {
     const modelId = voice.modelId ?? 'mistv2';
     const lang = voice.lang ?? 'eng';
+    const previewText = this.previewText(voice.name);
 
     const response = await this.fetchRime(RIME_TTS_URL, {
       method: 'POST',
@@ -55,12 +58,12 @@ export class RimeService {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        text: 'Hello, this is an Awaaz voice preview.',
+        text: previewText,
         modelId,
         speaker: voice.rimeVoiceId,
         lang,
         samplingRate: SAMPLE_RATE,
-        speedAlpha: 1,
+        ...this.previewSpeedFields(modelId),
       }),
     });
     if (!response.ok) {
@@ -94,9 +97,41 @@ export class RimeService {
       );
     }
     this.logger.log(
-      `Rime preview succeeded speaker=${voice.rimeVoiceId} modelId=${modelId} lang=${lang} bytes=${pcm.byteLength} contentType=${contentType}`,
+      `Rime preview succeeded speaker=${voice.rimeVoiceId} modelId=${modelId} lang=${lang} chars=${previewText.length} bytes=${pcm.byteLength} contentType=${contentType}`,
     );
     return this.wavFromPcm(pcm);
+  }
+
+  private previewText(rawName: string): string {
+    const name = this.cleanPreviewName(rawName);
+    if (!name) {
+      return 'Hi, I am Awaaz’s voice agent.';
+    }
+    return `Hi, this is ${name}. I am Awaaz’s voice agent.`;
+  }
+
+  private cleanPreviewName(rawName: string): string {
+    return rawName
+      .replace(/[_-]+/g, ' ')
+      .replace(/[^\p{L}\p{N}' ]+/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
+  }
+
+  private previewSpeedFields(modelId: string): Record<string, number> {
+    const normalized = modelId.toLowerCase();
+    if (
+      normalized.includes('arcana') ||
+      normalized.includes('coda') ||
+      normalized.includes('mistv3')
+    ) {
+      return { timeScaleFactor: PREVIEW_TIME_SCALE_FACTOR };
+    }
+    return { speedAlpha: PREVIEW_SPEED_ALPHA };
   }
 
   private apiKey(): string {
