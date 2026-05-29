@@ -47,7 +47,7 @@ const OrgContext = createContext<OrgContextValue | null>(null);
 export function OrgProvider({ children }: { children: React.ReactNode }) {
   const { getToken, isLoaded } = useAuth();
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
-  const [loadingOrgs, setLoadingOrgs] = useState(false);
+  const [loadingOrgs, setLoadingOrgs] = useState(true);
   const [activeOrgId, setActiveOrgId] = useLocalStorageState<
     string | undefined
   >('awaaz_active_org', { defaultValue: undefined });

@@ -30,6 +30,7 @@ export interface CreateAgentInput {
 interface CreateAgentDialogProps {
   isBusy: boolean;
   canCreate: boolean;
+  disabledReason?: string;
   voices: VoiceOption[];
   onSubmit: (input: CreateAgentInput) => Promise<void>;
 }
@@ -45,6 +46,7 @@ const FIELD_CLASS =
 export function CreateAgentDialog({
   isBusy,
   canCreate,
+  disabledReason,
   voices,
   onSubmit,
 }: CreateAgentDialogProps) {
@@ -89,17 +91,28 @@ export function CreateAgentDialog({
     }
   };
 
+  const createDisabledReason =
+    !canCreate
+      ? disabledReason ?? 'BUILDER role or higher required.'
+      : undefined;
+
   return (
     <>
-      <Button
-        type="button"
-        disabled={!canCreate || isBusy}
-        title={canCreate ? 'Create agent' : 'BUILDER role or higher required.'}
-        onClick={() => setOpen(true)}
+      <span
+        className="inline-flex"
+        tabIndex={createDisabledReason ? 0 : undefined}
+        title={createDisabledReason ?? 'Create agent'}
+        aria-label={createDisabledReason}
       >
-        <Plus />
-        New Agent
-      </Button>
+        <Button
+          type="button"
+          disabled={!canCreate || isBusy}
+          onClick={() => setOpen(true)}
+        >
+          <Plus />
+          New Agent
+        </Button>
+      </span>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-lg">
           <form onSubmit={submit} className="space-y-4">

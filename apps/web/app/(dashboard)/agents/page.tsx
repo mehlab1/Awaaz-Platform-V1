@@ -4,8 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@clerk/nextjs';
 import { format } from 'date-fns';
 import {
+  Building2,
   Bot,
   Grid3X3,
   LayoutList,
@@ -25,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
 import { useOrgContext } from '@/components/org-context';
 import { cn } from '@/lib/utils';
 import {
@@ -93,7 +96,8 @@ function getInitials(name: string): string {
 
 export default function AgentsPage() {
   const router = useRouter();
-  const { activeOrgId, apiCall, orgs } = useOrgContext();
+  const { isLoaded: authLoaded } = useAuth();
+  const { activeOrgId, apiCall, loadingOrgs, orgs } = useOrgContext();
   const [agents, setAgents] = useState<AgentListRow[]>([]);
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -137,7 +141,14 @@ export default function AgentsPage() {
   }, [loadData]);
 
   const activeOrg = orgs.find((org) => org.id === activeOrgId);
+  const organizationsReady = authLoaded && !loadingOrgs;
+  const hasNoWorkspace =
+    organizationsReady && !activeOrgId && orgs.length === 0;
+  const showNoWorkspaceState = hasNoWorkspace && !loading;
   const canCreateAgent = CREATE_AGENT_ROLES.has(activeOrg?.role ?? '');
+  const createAgentDisabledReason = hasNoWorkspace
+    ? 'Create or join a workspace before creating an agent.'
+    : undefined;
 
   const createAgent = async (input: CreateAgentInput) => {
     if (!activeOrgId) {
@@ -255,6 +266,7 @@ export default function AgentsPage() {
           <CreateAgentDialog
             isBusy={creating}
             canCreate={canCreateAgent}
+            disabledReason={createAgentDisabledReason}
             voices={voices}
             onSubmit={createAgent}
           />
@@ -268,11 +280,30 @@ export default function AgentsPage() {
         </div>
       ) : null}
 
-      {/* ─── NO ORG ─── */}
-      {!activeOrgId ? (
-        <p className="text-sm text-muted-foreground">
-          Select an organization to load agents.
-        </p>
+      {/* ─── NO WORKSPACE ─── */}
+      {showNoWorkspaceState ? (
+        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border/60 bg-muted/[0.02] px-8 py-20 text-center">
+          <div className="mb-5 flex size-16 items-center justify-center rounded-2xl border border-border/60 bg-background shadow-sm">
+            <Building2 className="size-7 text-muted-foreground" />
+          </div>
+          <h3 className="text-lg font-semibold text-foreground">
+            Create your workspace first
+          </h3>
+          <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+            Create a workspace to manage agents, calls, phone numbers, and team
+            members.
+          </p>
+          <div className="mt-6">
+            <CreateOrganizationDialog
+              buttonLabel="Create organization"
+              buttonClassName="h-9 px-4"
+            />
+          </div>
+          <p className="mt-4 max-w-sm text-xs leading-relaxed text-muted-foreground">
+            Already part of a team? Ask an owner to invite you to an existing
+            workspace.
+          </p>
+        </div>
       ) : null}
 
       {/* ─── LOADING SKELETON ─── */}
@@ -314,6 +345,7 @@ export default function AgentsPage() {
             <CreateAgentDialog
               isBusy={creating}
               canCreate={canCreateAgent}
+              disabledReason={createAgentDisabledReason}
               voices={voices}
               onSubmit={createAgent}
             />
