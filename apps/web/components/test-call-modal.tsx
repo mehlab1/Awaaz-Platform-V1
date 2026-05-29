@@ -22,7 +22,7 @@ import {
   useRoomContext,
   useTracks,
   useTrackVolume,
-  useTranscriptions,
+  
   useVoiceAssistant,
 } from '@livekit/components-react';
 import {
@@ -205,12 +205,7 @@ type VoiceUiMode =
   | 'muted'
   | 'failed';
 
-type TranscriptMessage = {
-  id: string;
-  role: 'user' | 'agent';
-  text: string;
-  timeLabel: string;
-};
+
 
 const voiceModeMeta: Record<
   VoiceUiMode,
@@ -304,16 +299,7 @@ function phaseLabel(p: BrowserTestPhaseBadge): string {
   return labels[p];
 }
 
-function formatTranscriptTime(timestamp: number): string {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) {
-    return '';
-  }
-  const normalized = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
-  return new Date(normalized).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+
 
 function deriveVoiceMode(
   input: {
@@ -531,100 +517,7 @@ function EndCallToolbar({
   );
 }
 
-function TranscriptPanel({
-  messages,
-}: {
-  messages: TranscriptMessage[];
-}) {
-  const endRef = useRef<HTMLDivElement | null>(null);
-  const lastMessageText =
-    messages.length > 0 ? messages[messages.length - 1].text : '';
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  }, [messages.length, lastMessageText]);
-
-  return (
-    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border/70 bg-card shadow-md overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border/40 px-5 py-3.5 bg-muted/[0.02]">
-        <div>
-          <h3 className="font-semibold text-sm">Conversation</h3>
-          <p className="text-muted-foreground text-xs">
-            Live turns appear here as the call is transcribed.
-          </p>
-        </div>
-        <Badge variant="outline">{messages.length} turns</Badge>
-      </div>
-
-      <div
-        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
-        aria-live="polite"
-      >
-        {messages.length === 0 ? (
-          <div className="grid h-full min-h-64 place-items-center text-center">
-            <div className="max-w-xs space-y-3">
-              <div className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-muted text-muted-foreground">
-                <Bot className="h-5 w-5" aria-hidden />
-              </div>
-              <div>
-                <p className="font-medium text-sm">Waiting for the first turn</p>
-                <p className="mt-1 text-muted-foreground text-xs">
-                  Start speaking once the status changes to Listening.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          messages.map((message) => (
-            <div
-              key={message.id}
-              className={cn(
-                'flex gap-3',
-                message.role === 'user' ? 'justify-end' : 'justify-start',
-              )}
-            >
-              {message.role === 'agent' ? (
-                <div className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/10 text-primary border border-primary/10 shadow-sm">
-                  <Bot className="h-4 w-4" aria-hidden />
-                </div>
-              ) : null}
-
-              <div
-                className={cn(
-                  'max-w-[82%] rounded-2xl px-4 py-3 text-[13.5px] leading-relaxed shadow-sm transition-all duration-200',
-                  message.role === 'user'
-                    ? 'bg-primary text-primary-foreground rounded-tr-sm'
-                    : 'border border-border/70 bg-muted/15 text-foreground rounded-tl-sm',
-                )}
-              >
-                <p className="whitespace-pre-wrap break-words">{message.text}</p>
-                {message.timeLabel ? (
-                  <p
-                    className={cn(
-                      'mt-2 text-[11px]',
-                      message.role === 'user'
-                        ? 'text-primary-foreground/70'
-                        : 'text-muted-foreground',
-                    )}
-                  >
-                    {message.timeLabel}
-                  </p>
-                ) : null}
-              </div>
-
-              {message.role === 'user' ? (
-                <div className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-muted/70 text-muted-foreground border border-border/60 shadow-sm">
-                  <Mic className="h-4 w-4" aria-hidden />
-                </div>
-              ) : null}
-            </div>
-          ))
-        )}
-        <div ref={endRef} />
-      </div>
-    </section>
-  );
-}
 
 interface RoomChromeProps {
   showEndButton: boolean;
@@ -661,7 +554,7 @@ function BrowserTestRoomChrome({
     onlySubscribed: true,
   });
   const connectionState = useConnectionState();
-  const transcriptions = useTranscriptions();
+  
   const [muteBusy, setMuteBusy] = useState(false);
   const autoMicAttemptRef = useRef(0);
   const readinessLoggedRef = useRef(false);
@@ -716,36 +609,7 @@ function BrowserTestRoomChrome({
   const agentDisplayName =
     detectedAgent?.name || detectedAgent?.identity || 'Local agent';
 
-  const messages = useMemo<TranscriptMessage[]>(() => {
-    return transcriptions
-      .map((item, index): TranscriptMessage & { order: number; index: number } => {
-        const text = item.text.trim();
-        const identity = item.participantInfo.identity;
-        const role: TranscriptMessage['role'] =
-          identity === localParticipant.identity ? 'user' : 'agent';
-        return {
-          id:
-            item.streamInfo.id ||
-            `${identity}:${item.streamInfo.timestamp}:${text.slice(0, 16)}`,
-          role,
-          text,
-          timeLabel: formatTranscriptTime(item.streamInfo.timestamp),
-          order:
-            Number.isFinite(item.streamInfo.timestamp) &&
-            item.streamInfo.timestamp > 0
-              ? item.streamInfo.timestamp
-              : index,
-          index,
-        };
-      })
-      .filter((message) => message.text.length > 0)
-      .sort((a, b) => a.order - b.order || a.index - b.index)
-      .map(({ order, index, ...message }) => {
-        void order;
-        void index;
-        return message;
-      });
-  }, [localParticipant.identity, transcriptions]);
+  
 
   const toggleMute = useCallback(async () => {
     const nextEnabled = !isMicrophoneEnabled;
@@ -1039,10 +903,13 @@ function BrowserTestRoomChrome({
       />
       <RoomAudioRenderer />
 
-      <div className="grid min-h-0 flex-1 gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_400px] overflow-hidden">
+      <div className="grid min-h-0 flex-1 gap-6 p-8 overflow-hidden">
         <section className="flex min-h-[500px] flex-col rounded-2xl border border-border/70 bg-card shadow-md overflow-hidden justify-between">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 px-6 py-3.5 bg-muted/[0.02]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 px-6 py-4 bg-muted/[0.02]">
             <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-[10px] px-2 py-0.5">
+                Browser Preview
+              </Badge>
               <Badge variant={detectedAgent ? 'default' : 'secondary'} className="text-[10px] px-2 py-0.5">
                 <Wifi className="h-3 w-3 mr-1" aria-hidden />
                 {detectedAgent ? 'Agent joined' : 'Waiting'}
@@ -1131,7 +998,7 @@ function BrowserTestRoomChrome({
           </div>
         </section>
 
-        <TranscriptPanel messages={messages} />
+        
       </div>
     </div>
   );
