@@ -14,6 +14,10 @@ import { Check, ChevronDown, Loader2 } from 'lucide-react';
 
 import { useOrgContext } from '@/components/org-context';
 import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
+import {
+  OrganizationAvatar,
+  getOrganizationInitials,
+} from '@/components/organization-avatar';
 import { cn } from '@/lib/utils';
 
 interface OrgSwitcherProps {
@@ -206,7 +210,7 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
             {disabled ? (
               <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
             ) : (
-              getOrgInitials(activeOrg?.name ?? activeOrgId ?? 'Org')
+              getOrganizationInitials(activeOrg?.name ?? activeOrgId)
             )}
           </button>
         ) : (
@@ -250,7 +254,12 @@ export function OrgSwitcher({ compact = false }: OrgSwitcherProps) {
           onClick={toggleMenu}
           onKeyDown={handleTriggerKeyDown}
         >
-          <span className="min-w-0">
+          <OrganizationAvatar
+            name={activeOrg?.name ?? activeOrgId}
+            className="size-7"
+            textClassName="text-[10px]"
+          />
+          <span className="min-w-0 flex-1">
             <span className="block truncate text-xs font-semibold text-foreground" title={title}>
               {displayName}
             </span>
@@ -373,17 +382,4 @@ function OrganizationMenu({
       })}
     </div>
   );
-}
-
-function getOrgInitials(name: string) {
-  const parts = name
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-
-  if (parts.length >= 2) {
-    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  }
-
-  return (parts[0] ?? 'Org').slice(0, 2).toUpperCase();
 }

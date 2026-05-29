@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
+import { OrganizationAvatar } from '@/components/organization-avatar';
 import { useOrganizationSettings } from '@/hooks/use-organization-settings';
 
 const FIELD_CLASS =
@@ -68,9 +69,11 @@ export function OrganizationSettingsClient() {
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4 pb-4 border-b border-border/40 mb-4">
-            <div className="size-14 rounded-full bg-gradient-to-br from-primary/80 to-primary/30 flex items-center justify-center text-primary-foreground font-bold text-lg shadow-md">
-              {name.trim().charAt(0).toUpperCase() || 'O'}
-            </div>
+            <OrganizationAvatar
+              name={name}
+              className="size-14"
+              textClassName="text-lg"
+            />
             <div>
               <p className="font-semibold text-foreground">{name || 'Untitled Organization'}</p>
               <p className="text-xs text-muted-foreground">Workspace settings</p>
