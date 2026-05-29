@@ -104,6 +104,8 @@ export function CallHistoryClient() {
   const [reloadKey, setReloadKey] = useState(0);
   const [payload, setPayload] = useState<CallsListPayload | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [unfilteredTotal, setUnfilteredTotal] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -168,56 +170,7 @@ export function CallHistoryClient() {
     [filters, phoneQuery],
   );
 
-  useEffect(() => {
-    if (!activeOrgId) {
-      setLoading(false);
-      setPayload(null);
-      return undefined;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void (async () => {
-      try {
-        const res = await apiCall(queryPath(page), { method: 'GET' });
-        if (cancelled) {
-          return;
-        }
-        if (!res.ok) {
-          const t = await res.text();
-          throw new Error(t || res.statusText);
-        }
-        const body = (await res.json()) as CallsListPayload;
-        setPayload(body);
-        setPage(body.page);
-      } catch (e) {
-        if (!cancelled) {
-          const message = e instanceof Error ? e.message : String(e);
-          setError(message);
-          setPayload(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeOrgId, apiCall, queryPath, page, reloadKey]);
-
-  useEffect(() => {
-    const handler = () => setReloadKey((k) => k + 1);
-    window.addEventListener('awaaz:call-started', handler as EventListener);
-    window.addEventListener('awaaz:call-ended', handler as EventListener);
-    return () => {
-      window.removeEventListener('awaaz:call-started', handler as EventListener);
-      window.removeEventListener('awaaz:call-ended', handler as EventListener);
-    };
-  }, []);
-
-  const filterActive = useMemo(() => {
+  const filtersApplied = useMemo(() => {
     return (
       Boolean(filters.agentId) ||
       Boolean(filters.direction) ||
@@ -234,6 +187,61 @@ export function CallHistoryClient() {
     filters.dateTo,
     phoneQuery,
   ]);
+
+  useEffect(() => {
+    if (!activeOrgId) {
+      setLoading(false);
+      setPayload(null);
+      setHasLoadedOnce(false);
+      setUnfilteredTotal(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const requestHasFilters = filtersApplied;
+    setLoading(true);
+    setError(null);
+    void (async () => {
+      try {
+        const res = await apiCall(queryPath(page), { method: 'GET' });
+        if (cancelled) {
+          return;
+        }
+        if (!res.ok) {
+          const t = await res.text();
+          throw new Error(t || res.statusText);
+        }
+        const body = (await res.json()) as CallsListPayload;
+        setPayload(body);
+        setPage(body.page);
+        setHasLoadedOnce(true);
+        if (!requestHasFilters) {
+          setUnfilteredTotal(body.total);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : String(e);
+          setError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeOrgId, apiCall, filtersApplied, queryPath, page, reloadKey]);
+
+  useEffect(() => {
+    const handler = () => setReloadKey((k) => k + 1);
+    window.addEventListener('awaaz:call-started', handler as EventListener);
+    window.addEventListener('awaaz:call-ended', handler as EventListener);
+    return () => {
+      window.removeEventListener('awaaz:call-started', handler as EventListener);
+      window.removeEventListener('awaaz:call-ended', handler as EventListener);
+    };
+  }, []);
 
   const clearFilters = (): void => {
     setPage(1);
@@ -293,8 +301,12 @@ export function CallHistoryClient() {
     'rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring transition-colors';
 
   const rows = payload?.items ?? [];
-  const initialLoading = loading && payload === null;
-  const refreshing = loading && payload !== null;
+  const isInitialLoading = loading && !hasLoadedOnce && payload === null;
+  const isRefreshing = loading && hasLoadedOnce;
+  const hasFilteredCalls = rows.length > 0;
+  const hasCalls =
+    (unfilteredTotal ?? (!filtersApplied ? payload?.total : null) ?? 0) > 0;
+  const showFilterEmpty = filtersApplied && hasCalls;
 
   if (!activeOrgId && !loading) {
     return (
@@ -326,7 +338,7 @@ export function CallHistoryClient() {
             <Filter className="size-3" />
             Filters
           </span>
-          {filterActive && (
+          {filtersApplied && (
             <Button
               type="button"
               variant="ghost"
@@ -454,20 +466,17 @@ export function CallHistoryClient() {
           ) : null}
         </CardHeader>
         <CardContent>
-          {initialLoading ? (
-            <CallsTableSkeleton />
-          ) : rows.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border p-12 text-center text-muted-foreground text-sm flex flex-col items-center gap-3">
-              <Phone className="size-8 text-muted-foreground/40" />
-              <p>
-                {filterActive
-                  ? 'No calls match these filters. Try widening the date range or broadening phone search.'
-                  : 'No recorded calls yet for this organization.'}
-              </p>
-            </div>
+          {isInitialLoading ? (
+            <CallsLoadingState />
+          ) : !hasFilteredCalls ? (
+            <CallsEmptyState
+              filtersApplied={showFilterEmpty}
+              onClearFilters={clearFilters}
+              onGoToAgents={() => router.push('/agents')}
+            />
           ) : (
             <div className="overflow-x-auto">
-              {refreshing ? (
+              {isRefreshing ? (
                 <div className="mb-3 inline-flex items-center gap-2 rounded-md border border-border/50 bg-muted/30 px-2.5 py-1 text-[11px] text-muted-foreground">
                   <span className="size-1.5 rounded-full bg-primary animate-pulse" />
                   Refreshing calls...
@@ -593,44 +602,66 @@ export function CallHistoryClient() {
   );
 }
 
-function CallsTableSkeleton() {
+function CallsLoadingState() {
   return (
-    <div className="space-y-3">
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Date / time</TableHead>
-              <TableHead>Direction</TableHead>
-              <TableHead>Caller</TableHead>
-              <TableHead>Callee</TableHead>
-              <TableHead>Agent</TableHead>
-              <TableHead>Duration</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Cost</TableHead>
-              <TableHead>Test</TableHead>
-              <TableHead className="w-10 text-right">
-                <span className="sr-only">Open call</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {Array.from({ length: 8 }).map((_, index) => (
-              <TableRow key={index}>
-                <TableCell><Skeleton className="h-4 w-28" /></TableCell>
-                <TableCell><Skeleton className="h-5 w-16 rounded-full" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-20" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-12" /></TableCell>
-                <TableCell><Skeleton className="h-5 w-20 rounded-full" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-12" /></TableCell>
-                <TableCell><Skeleton className="h-4 w-10" /></TableCell>
-                <TableCell className="text-right"><Skeleton className="ml-auto h-4 w-4" /></TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+    <div className="rounded-xl border border-border/50 bg-muted/[0.025] p-5">
+      <div className="flex items-center justify-between gap-4 border-b border-border/40 pb-4">
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-36" />
+          <Skeleton className="h-3 w-56" />
+        </div>
+        <Skeleton className="h-7 w-24 rounded-full" />
+      </div>
+      <div className="space-y-3 pt-4">
+        {Array.from({ length: 5 }).map((_, index) => (
+          <div
+            key={index}
+            className="grid gap-3 rounded-lg border border-border/40 bg-background/70 p-3 sm:grid-cols-[1.1fr_0.7fr_1fr_1fr_0.8fr]"
+          >
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-5 w-16 rounded-full" />
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-5 w-20 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CallsEmptyState({
+  filtersApplied,
+  onClearFilters,
+  onGoToAgents,
+}: {
+  filtersApplied: boolean;
+  onClearFilters: () => void;
+  onGoToAgents: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-dashed border-border/70 bg-muted/[0.02] px-6 py-14 text-center">
+      <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Phone className="size-5" />
+      </div>
+      <h3 className="mt-4 text-base font-semibold text-foreground">
+        {filtersApplied ? 'No calls match these filters' : 'No calls yet'}
+      </h3>
+      <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+        {filtersApplied
+          ? 'Try changing the filters or clearing your search.'
+          : 'Test an agent or connect a phone number to start seeing calls here.'}
+      </p>
+      <div className="mt-5">
+        {filtersApplied ? (
+          <Button type="button" variant="outline" size="sm" onClick={onClearFilters}>
+            Clear filters
+          </Button>
+        ) : (
+          <Button type="button" variant="outline" size="sm" onClick={onGoToAgents}>
+            Go to Agents
+          </Button>
+        )}
       </div>
     </div>
   );
