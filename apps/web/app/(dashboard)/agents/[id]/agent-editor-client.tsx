@@ -23,6 +23,7 @@ import {
   Rocket,
   RotateCcw,
   Save,
+  Search,
   Settings2,
   Sparkles,
   type LucideIcon,
@@ -85,6 +86,17 @@ const LLM_OPTIONS = [
 const TTS_OPTIONS = [
   { value: 'rime', label: 'Rime TTS' },
 ] as const;
+
+const VOICE_PROVIDERS = [
+  { id: 'rime', label: 'Rime' },
+  { id: 'elevenlabs', label: 'ElevenLabs' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'cartesia', label: 'Cartesia' },
+  { id: 'fish-audio', label: 'Fish Audio' },
+  { id: 'future', label: 'Future providers' },
+] as const;
+
+type VoiceProviderId = (typeof VOICE_PROVIDERS)[number]['id'];
 
 const STT_OPTIONS = [
   { value: 'deepgram', label: 'Deepgram STT' },
@@ -254,6 +266,10 @@ interface VoiceDto {
   id: string;
   rimeVoiceId: string;
   name: string;
+  provider?: string | null;
+  description?: string | null;
+  language?: string | null;
+  gender?: string | null;
   previewAudioUrl: string | null;
   previewPlaybackUrl?: string | null;
   previewPlaybackExpiresInSeconds?: number | null;
@@ -286,6 +302,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const previewInFlightRef = useRef<Map<string, Promise<string>>>(new Map());
   const preloadedVoiceKeysRef = useRef<Set<string>>(new Set());
   const previewPlayRequestRef = useRef(0);
+  const voiceListRef = useRef<HTMLDivElement | null>(null);
+  const voiceRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const saveInFlightRef = useRef(false);
   const voicesLoadedRef = useRef(false);
   const phonesLoadedOrgRef = useRef<string | undefined>(undefined);
@@ -334,6 +352,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [testCallOpen, setTestCallOpen] = useState(false);
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
   const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
+  const [selectedVoiceProvider, setSelectedVoiceProvider] =
+    useState<VoiceProviderId>('rime');
+  const [voiceGenderFilter, setVoiceGenderFilter] = useState('all');
+  const [voiceAccentFilter, setVoiceAccentFilter] = useState('all');
+  const [voiceTypeFilter, setVoiceTypeFilter] = useState('all');
   const [voiceSaveBusy, setVoiceSaveBusy] = useState(false);
   const [phoneDropdownOpen, setPhoneDropdownOpen] = useState(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
@@ -348,9 +371,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   useEffect(() => {
     if (voiceModalOpen) {
+      const currentVoice = voices.find((voice) => voice.rimeVoiceId === selectedVoiceId);
       setTempSelectedVoiceId(selectedVoiceId);
+      setSelectedVoiceProvider(voiceProviderId(currentVoice));
+      setVoiceGenderFilter('all');
+      setVoiceAccentFilter('all');
+      setVoiceTypeFilter('all');
     }
-  }, [voiceModalOpen, selectedVoiceId]);
+  }, [voiceModalOpen, selectedVoiceId, voices]);
 
   useEffect(() => {
     setPromptHydrated(false);
@@ -1065,6 +1093,29 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
+  const currentVoiceProviderId = voiceProviderId(selectedVoice);
+  const currentVoiceProviderLabel = voiceProviderLabel(currentVoiceProviderId);
+  const providerVoices = voices.filter(
+    (voice) => voiceProviderId(voice) === selectedVoiceProvider,
+  );
+  const filteredVoices = providerVoices.filter((voice) =>
+    voiceMatchesFilters(
+      voice,
+      voiceSearchQuery,
+      voiceGenderFilter,
+      voiceAccentFilter,
+      voiceTypeFilter,
+    ),
+  );
+  const voiceGenderOptions = uniqueVoiceFilterOptions(
+    providerVoices.map((voice) => voiceGenderLabel(voice)),
+  );
+  const voiceAccentOptions = uniqueVoiceFilterOptions(
+    providerVoices.map((voice) => voiceAccentLabel(voice)),
+  );
+  const voiceTypeOptions = uniqueVoiceFilterOptions(
+    providerVoices.map((voice) => voiceTypeLabel(voice)),
+  );
   const selectedVoicePreviewKey = selectedVoice
     ? voicePreviewCacheKey(selectedVoice)
     : null;
@@ -1077,6 +1128,43 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     liveVersion != null &&
     liveVersion.systemPrompt.trim().length > 0 &&
     liveVersion.voiceId.trim().length > 0;
+
+  useEffect(() => {
+    if (!voiceModalOpen) {
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      if (!tempSelectedVoiceId) {
+        if (voiceListRef.current) {
+          voiceListRef.current.scrollTop = 0;
+        }
+        return;
+      }
+
+      const selectedRow = voiceRowRefs.current.get(tempSelectedVoiceId);
+      if (!selectedRow) {
+        if (voiceListRef.current) {
+          voiceListRef.current.scrollTop = 0;
+        }
+        return;
+      }
+
+      selectedRow.scrollIntoView({ block: 'center' });
+      selectedRow.focus({ preventScroll: true });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    filteredVoices.length,
+    selectedVoiceProvider,
+    tempSelectedVoiceId,
+    voiceAccentFilter,
+    voiceGenderFilter,
+    voiceModalOpen,
+    voiceSearchQuery,
+    voiceTypeFilter,
+  ]);
 
   const testCallBlockedReason = loading
     ? 'Agent is still loading.'
@@ -2415,33 +2503,118 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           }
         }}
       >
-        <DialogContent className="max-h-[80vh] w-[min(480px,calc(100vw-2rem))] max-w-none gap-4 overflow-hidden sm:max-w-none flex flex-col p-6 rounded-2xl border border-border/80 shadow-2xl">
-          <DialogHeader className="pb-2 border-b border-border/40">
-            <DialogTitle className="text-lg font-semibold tracking-tight">Select Agent Voice</DialogTitle>
-            <DialogDescription className="text-xs text-muted-foreground">
-              Choose the voice your assistant will use. Search from our list of available voices.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent className="flex h-[calc(100vh-1rem)] max-h-[calc(100vh-1rem)] w-[calc(100vw-1rem)] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border border-border/80 p-0 shadow-2xl sm:h-[88vh] sm:max-h-[90vh] sm:w-[92vw] sm:max-w-none">
+          <div className="shrink-0 border-b border-border/50 bg-background px-4 py-4 sm:px-6">
+            <DialogHeader className="gap-1">
+              <DialogTitle className="text-xl font-semibold tracking-tight">Select Agent Voice</DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground">
+                Browse provider voices, preview samples, and choose the voice your assistant will use.
+              </DialogDescription>
+            </DialogHeader>
 
-          {/* Search box */}
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Search voices by name or ID..."
-              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              value={voiceSearchQuery}
-              onChange={(e) => setVoiceSearchQuery(e.target.value)}
-            />
+            <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Voice Provider
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2" role="tablist" aria-label="Voice provider">
+                  {VOICE_PROVIDERS.map((provider) => {
+                    const isActive = selectedVoiceProvider === provider.id;
+                    const providerCount = voices.filter(
+                      (voice) => voiceProviderId(voice) === provider.id,
+                    ).length;
+                    return (
+                      <button
+                        key={provider.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={isActive}
+                        className={cn(
+                          'flex min-h-9 items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
+                          isActive
+                            ? 'border-foreground bg-foreground text-background shadow-sm'
+                            : 'border-border/70 bg-background text-muted-foreground hover:border-foreground/40 hover:text-foreground',
+                        )}
+                        onClick={() => {
+                          setSelectedVoiceProvider(provider.id);
+                          setVoiceGenderFilter('all');
+                          setVoiceAccentFilter('all');
+                          setVoiceTypeFilter('all');
+                        }}
+                      >
+                        <span>{provider.label}</span>
+                        <span
+                          className={cn(
+                            'rounded-full px-1.5 py-0.5 text-[10px]',
+                            isActive ? 'bg-background/15' : 'bg-muted text-muted-foreground',
+                          )}
+                        >
+                          {providerCount}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="min-w-0 rounded-lg border border-border/60 bg-muted/[0.16] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Currently Selected Voice
+                </p>
+                <div className="mt-3 flex items-center gap-3">
+                  <VoiceAvatar voice={selectedVoice} fallback={selectedVoiceId || 'Voice'} />
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-medium text-muted-foreground">Current Voice</p>
+                    <p className="truncate text-sm font-semibold text-foreground">
+                      {selectedVoice?.name ?? (selectedVoiceId ? selectedVoiceId : 'No voice selected')}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {selectedVoice ? currentVoiceProviderLabel : voiceProviderLabel(selectedVoiceProvider)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          {/* Scrollable voice list */}
-          <div className="flex-1 overflow-y-auto min-h-0 pr-1 py-1 space-y-1">
-            {voices
-              .filter((v) => {
-                const q = voiceSearchQuery.toLowerCase();
-                return v.name.toLowerCase().includes(q) || v.rimeVoiceId.toLowerCase().includes(q);
-              })
-              .map((v) => {
+          <div className="shrink-0 border-b border-border/50 bg-background/95 px-4 py-3 sm:px-6">
+            <div className="grid gap-3 xl:grid-cols-[minmax(260px,1fr)_160px_160px_160px]">
+              <label className="relative block min-w-0">
+                <span className="sr-only">Search voices</span>
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search voices by name, ID, or trait"
+                  className="h-10 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
+                  value={voiceSearchQuery}
+                  onChange={(e) => setVoiceSearchQuery(e.target.value)}
+                />
+              </label>
+
+              <VoiceFilterSelect
+                label="Gender"
+                value={voiceGenderFilter}
+                options={voiceGenderOptions}
+                onChange={setVoiceGenderFilter}
+              />
+              <VoiceFilterSelect
+                label="Accent"
+                value={voiceAccentFilter}
+                options={voiceAccentOptions}
+                onChange={setVoiceAccentFilter}
+              />
+              <VoiceFilterSelect
+                label="Type"
+                value={voiceTypeFilter}
+                options={voiceTypeOptions}
+                onChange={setVoiceTypeFilter}
+              />
+            </div>
+          </div>
+
+          <div ref={voiceListRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/[0.05] px-4 py-4 sm:px-6">
+            <div className="mx-auto flex max-w-6xl flex-col gap-2">
+              {filteredVoices.map((v) => {
                 const isTempSelected = tempSelectedVoiceId === v.rimeVoiceId;
                 const isPlaying = playingVoiceId === v.rimeVoiceId;
                 const previewKey = voicePreviewCacheKey(v);
@@ -2449,85 +2622,128 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 return (
                   <div
                     key={v.id}
+                    ref={(node) => {
+                      if (node) {
+                        voiceRowRefs.current.set(v.rimeVoiceId, node);
+                      } else {
+                        voiceRowRefs.current.delete(v.rimeVoiceId);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
                     className={cn(
-                      "flex items-center justify-between gap-3 p-2 rounded-lg border transition-all cursor-pointer",
-                      isTempSelected 
-                        ? "bg-primary/[0.06] border-primary/20 shadow-sm" 
-                        : "border-transparent hover:bg-muted/40"
+                      'grid min-h-[88px] cursor-pointer grid-cols-[minmax(0,1fr)] gap-3 rounded-lg border bg-background p-3 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring md:grid-cols-[minmax(220px,0.9fr)_minmax(260px,1.1fr)_auto]',
+                      isTempSelected
+                        ? 'border-foreground/30 bg-muted/30'
+                        : 'border-border/60 hover:border-foreground/20 hover:bg-muted/[0.18]',
                     )}
                     onClick={() => setTempSelectedVoiceId(v.rimeVoiceId)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setTempSelectedVoiceId(v.rimeVoiceId);
+                      }
+                    }}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <VoiceAvatar voice={v} fallback={v.name} />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-foreground">{v.name}</p>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">{v.rimeVoiceId}</p>
+                      </div>
+                    </div>
+
+                    <div className="min-w-0">
+                      <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">
+                        {voiceTraitText(v)}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <VoiceMetaPill>{voiceProviderLabel(voiceProviderId(v))}</VoiceMetaPill>
+                        <VoiceMetaPill>{voiceGenderLabel(v)}</VoiceMetaPill>
+                        <VoiceMetaPill>{voiceAccentLabel(v)}</VoiceMetaPill>
+                        <VoiceMetaPill>{voiceTypeLabel(v)}</VoiceMetaPill>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 md:justify-end">
                       <Button
                         type="button"
-                        size="icon-xs"
-                        variant={isPlaying ? "default" : "outline"}
-                        className="rounded-full shrink-0 h-6 w-6"
+                        size="sm"
+                        variant={isPlaying ? 'default' : 'outline'}
+                        className="h-9 shrink-0 gap-2 rounded-full px-3 text-xs"
                         onClick={(e) => {
                           e.stopPropagation();
                           void playVoicePreview(v);
                         }}
                         disabled={isLoadingPreview}
+                        title={`Preview ${v.name}`}
                       >
                         {isLoadingPreview ? (
-                          <Loader2 className="size-3 animate-spin" />
+                          <Loader2 className="size-3.5 animate-spin" />
                         ) : isPlaying ? (
-                          <Volume2 className="size-3" />
+                          <Volume2 className="size-3.5" />
                         ) : (
-                          <Play className="size-3 text-muted-foreground fill-muted-foreground" />
+                          <Play className="size-3.5 fill-current" />
                         )}
+                        <span>{isLoadingPreview ? 'Loading' : 'Preview'}</span>
                       </Button>
-                      <div className="min-w-0">
-                        <p className="font-semibold text-xs truncate">{v.name}</p>
-                        <p className="text-[9px] text-muted-foreground truncate">{v.rimeVoiceId}</p>
-                      </div>
+                      {isTempSelected ? (
+                        <span className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-foreground/20 bg-background px-2.5 text-xs font-semibold text-foreground">
+                          <Check className="size-3.5" aria-hidden />
+                          Selected
+                        </span>
+                      ) : null}
                     </div>
-                    {isTempSelected ? (
-                      <span className="text-[10px] font-semibold text-primary px-2 py-1 rounded-full bg-primary/10 border border-primary/20 flex items-center gap-1 shrink-0">
-                        <Check className="size-3 text-primary" aria-hidden />
-                        Selected
-                      </span>
-                    ) : null}
                   </div>
                 );
               })}
-            {voices.filter((v) => {
-              const q = voiceSearchQuery.toLowerCase();
-              return v.name.toLowerCase().includes(q) || v.rimeVoiceId.toLowerCase().includes(q);
-            }).length === 0 && (
-              <p className="text-center text-xs text-muted-foreground py-8">No voices match your search.</p>
-            )}
+
+              {filteredVoices.length === 0 && (
+                <div className="grid min-h-[220px] place-items-center rounded-lg border border-dashed border-border/70 bg-background/70 px-4 text-center">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">
+                      No {voiceProviderLabel(selectedVoiceProvider)} voices match this view.
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Try a different provider, search, or filter.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          <DialogFooter className="pt-2 border-t border-border/40 flex items-center justify-between gap-2">
-            <span className="text-[10px] text-muted-foreground">
-              {voices.length} voices available
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => {
-                  setVoiceModalOpen(false);
-                  setVoiceSearchQuery('');
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="default"
-                size="sm"
-                className="h-8 text-xs px-4"
-                disabled={!tempSelectedVoiceId || voiceSaveBusy}
-                onClick={() => {
-                  void onVoiceSelect(tempSelectedVoiceId);
-                }}
-              >
-                {voiceSaveBusy ? 'Saving...' : 'Select Voice'}
-              </Button>
+          <DialogFooter className="shrink-0 border-t border-border/50 bg-background px-4 py-3 sm:px-6">
+            <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-xs text-muted-foreground">
+                {filteredVoices.length} of {providerVoices.length} {voiceProviderLabel(selectedVoiceProvider)} voices
+              </span>
+              <div className="flex w-full items-center gap-2 sm:w-auto">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-9 flex-1 text-xs sm:flex-none"
+                  onClick={() => {
+                    setVoiceModalOpen(false);
+                    setVoiceSearchQuery('');
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="h-9 flex-1 px-4 text-xs sm:flex-none"
+                  disabled={!tempSelectedVoiceId || voiceSaveBusy}
+                  onClick={() => {
+                    void onVoiceSelect(tempSelectedVoiceId);
+                  }}
+                >
+                  {voiceSaveBusy ? 'Saving...' : 'Select Voice'}
+                </Button>
+              </div>
             </div>
           </DialogFooter>
         </DialogContent>
@@ -3022,6 +3238,212 @@ function cleanVoicePreviewName(name: string): string {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+}
+
+interface VoiceFilterOption {
+  value: string;
+  label: string;
+}
+
+function VoiceFilterSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: VoiceFilterOption[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block min-w-0">
+      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <option value="all">All</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function VoiceAvatar({
+  voice,
+  fallback,
+}: {
+  voice?: VoiceDto | null;
+  fallback: string;
+}) {
+  return (
+    <div className="grid size-11 shrink-0 place-items-center rounded-full border border-border/70 bg-muted text-xs font-semibold text-foreground">
+      {voiceInitials(voice?.name ?? fallback)}
+    </div>
+  );
+}
+
+function VoiceMetaPill({ children }: { children: string }) {
+  return (
+    <span className="inline-flex min-h-6 items-center rounded-full border border-border/60 bg-muted/30 px-2 text-[11px] font-medium text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+function voiceProviderId(voice?: VoiceDto | null): VoiceProviderId {
+  const provider = normalizeVoiceFilterValue(voice?.provider ?? '');
+  if (provider) {
+    const match = VOICE_PROVIDERS.find((item) => item.id === provider);
+    if (match) {
+      return match.id;
+    }
+  }
+  return 'rime';
+}
+
+function voiceProviderLabel(providerId: VoiceProviderId): string {
+  return (
+    VOICE_PROVIDERS.find((provider) => provider.id === providerId)?.label ??
+    'Rime'
+  );
+}
+
+function voiceGenderLabel(voice: VoiceDto): string {
+  return humanizeVoiceToken(voice.gender) || 'Any gender';
+}
+
+function voiceAccentLabel(voice: VoiceDto): string {
+  return (
+    languageLabel(voice.language) ||
+    languageLabel(voice.lang) ||
+    'English'
+  );
+}
+
+function voiceTypeLabel(voice: VoiceDto): string {
+  return humanizeVoiceToken(voice.modelId) || 'Default';
+}
+
+function voiceTraitText(voice: VoiceDto): string {
+  return (
+    voice.description?.trim() ||
+    `${voiceAccentLabel(voice)} ${voiceTypeLabel(voice)} voice.`
+  );
+}
+
+function voiceMatchesFilters(
+  voice: VoiceDto,
+  searchQuery: string,
+  genderFilter: string,
+  accentFilter: string,
+  typeFilter: string,
+): boolean {
+  const search = searchQuery.trim().toLowerCase();
+  const searchHaystack = [
+    voice.name,
+    voice.rimeVoiceId,
+    voice.description,
+    voiceGenderLabel(voice),
+    voiceAccentLabel(voice),
+    voiceTypeLabel(voice),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return (
+    (!search || searchHaystack.includes(search)) &&
+    (genderFilter === 'all' ||
+      normalizeVoiceFilterValue(voiceGenderLabel(voice)) === genderFilter) &&
+    (accentFilter === 'all' ||
+      normalizeVoiceFilterValue(voiceAccentLabel(voice)) === accentFilter) &&
+    (typeFilter === 'all' ||
+      normalizeVoiceFilterValue(voiceTypeLabel(voice)) === typeFilter)
+  );
+}
+
+function uniqueVoiceFilterOptions(labels: string[]): VoiceFilterOption[] {
+  const byValue = new Map<string, string>();
+  for (const label of labels) {
+    const cleanLabel = label.trim();
+    const value = normalizeVoiceFilterValue(cleanLabel);
+    if (cleanLabel && !byValue.has(value)) {
+      byValue.set(value, cleanLabel);
+    }
+  }
+
+  return [...byValue.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([value, label]) => ({ value, label }));
+}
+
+function normalizeVoiceFilterValue(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+function languageLabel(value: string | null | undefined): string {
+  const raw = value?.trim();
+  if (!raw) {
+    return '';
+  }
+
+  const normalized = raw.toLowerCase();
+  const labels: Record<string, string> = {
+    en: 'English',
+    eng: 'English',
+    es: 'Spanish',
+    spa: 'Spanish',
+    fr: 'French',
+    fra: 'French',
+    de: 'German',
+    ger: 'German',
+    ar: 'Arabic',
+    ara: 'Arabic',
+    he: 'Hebrew',
+    heb: 'Hebrew',
+    hi: 'Hindi',
+    hin: 'Hindi',
+    ja: 'Japanese',
+    jpn: 'Japanese',
+    pt: 'Portuguese',
+    por: 'Portuguese',
+  };
+  return labels[normalized] ?? humanizeVoiceToken(raw);
+}
+
+function humanizeVoiceToken(value: string | null | undefined): string {
+  const raw = value?.trim();
+  if (!raw) {
+    return '';
+  }
+  return raw
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function voiceInitials(value: string): string {
+  const words = humanizeVoiceToken(value).split(' ').filter(Boolean);
+  if (words.length === 0) {
+    return 'V';
+  }
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }
 
 function storedVoicePreviewUrl(voice: VoiceDto): string | null {
