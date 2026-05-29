@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -97,6 +98,14 @@ const VOICE_PROVIDERS = [
 ] as const;
 
 type VoiceProviderId = (typeof VOICE_PROVIDERS)[number]['id'];
+
+const VOICE_AVATAR_COUNTS = {
+  female: 12,
+  male: 12,
+  neutral: 6,
+} as const;
+
+type VoiceAvatarFolder = keyof typeof VOICE_AVATAR_COUNTS;
 
 const STT_OPTIONS = [
   { value: 'deepgram', label: 'Deepgram STT' },
@@ -3284,9 +3293,18 @@ function VoiceAvatar({
   voice?: VoiceDto | null;
   fallback: string;
 }) {
+  const label = voice?.name ?? fallback;
+  const src = voiceAvatarSrc(voice, fallback);
   return (
-    <div className="grid size-11 shrink-0 place-items-center rounded-full border border-border/70 bg-muted text-xs font-semibold text-foreground">
-      {voiceInitials(voice?.name ?? fallback)}
+    <div className="size-11 shrink-0 overflow-hidden rounded-full border border-border/70 bg-muted">
+      <Image
+        src={src}
+        alt={`${label} avatar`}
+        width={44}
+        height={44}
+        className="size-full object-cover"
+        draggable={false}
+      />
     </div>
   );
 }
@@ -3435,15 +3453,36 @@ function humanizeVoiceToken(value: string | null | undefined): string {
     .join(' ');
 }
 
-function voiceInitials(value: string): string {
-  const words = humanizeVoiceToken(value).split(' ').filter(Boolean);
-  if (words.length === 0) {
-    return 'V';
+function voiceAvatarSrc(
+  voice: VoiceDto | null | undefined,
+  fallback: string,
+): string {
+  const folder = voiceAvatarFolder(voice);
+  const count = VOICE_AVATAR_COUNTS[folder];
+  const key = voice?.rimeVoiceId || voice?.name || fallback || 'voice';
+  const index = (stableAvatarHash(key) % count) + 1;
+  return `/voices-avatars/${folder}/${String(index).padStart(2, '0')}.png`;
+}
+
+function voiceAvatarFolder(
+  voice: VoiceDto | null | undefined,
+): VoiceAvatarFolder {
+  const gender = normalizeVoiceFilterValue(voice?.gender ?? '');
+  if (gender === 'male') {
+    return 'male';
   }
-  if (words.length === 1) {
-    return words[0].slice(0, 2).toUpperCase();
+  if (gender === 'female') {
+    return 'female';
   }
-  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+  return 'neutral';
+}
+
+function stableAvatarHash(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
 function storedVoicePreviewUrl(voice: VoiceDto): string | null {
