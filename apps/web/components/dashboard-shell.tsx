@@ -1,8 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { usePathname } from 'next/navigation';
 import {
@@ -45,6 +55,13 @@ interface NavGroup {
   items: NavItem[];
 }
 
+const SIDEBAR_WIDTH_STORAGE_KEY = 'awaaz-dashboard-sidebar-width';
+const DEFAULT_SIDEBAR_WIDTH = 272;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 380;
+const COLLAPSED_SIDEBAR_WIDTH = 64;
+const LOGO_SRC = '/logo.png';
+
 const navGroups: NavGroup[] = [
   {
     title: 'Workspace',
@@ -74,13 +91,172 @@ const navGroups: NavGroup[] = [
 export function DashboardShell({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const pathname = usePathname();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageState(
     'awaaz-dashboard-sidebar-collapsed',
     { defaultValue: false },
+  );
+  const sidebarWidthRef = useRef(DEFAULT_SIDEBAR_WIDTH);
+  const resizeStartRef = useRef({
+    pointerX: 0,
+    width: DEFAULT_SIDEBAR_WIDTH,
+  });
+  const resizeAnimationFrameRef = useRef<number | null>(null);
+  const activeSidebarWidth = sidebarCollapsed
+    ? COLLAPSED_SIDEBAR_WIDTH
+    : sidebarWidth;
+  const sidebarOffsetStyle = {
+    '--sidebar-offset': `${activeSidebarWidth}px`,
+  } as CSSProperties;
+
+  useEffect(() => {
+    try {
+      const storedWidth = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+
+      if (!storedWidth) {
+        return;
+      }
+
+      const parsedWidth = Number(storedWidth);
+
+      if (!Number.isFinite(parsedWidth)) {
+        return;
+      }
+
+      const nextWidth = clampSidebarWidth(parsedWidth);
+      sidebarWidthRef.current = nextWidth;
+      setSidebarWidth(nextWidth);
+    } catch {
+      // Local storage can be unavailable in hardened browser contexts.
+    }
+  }, []);
+
+  useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth;
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (sidebarCollapsed && isResizingSidebar) {
+      setIsResizingSidebar(false);
+    }
+  }, [isResizingSidebar, sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!isResizingSidebar) {
+      return;
+    }
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const updateWidth = (width: number) => {
+      const nextWidth = clampSidebarWidth(width);
+      sidebarWidthRef.current = nextWidth;
+
+      if (resizeAnimationFrameRef.current !== null) {
+        return;
+      }
+
+      resizeAnimationFrameRef.current = window.requestAnimationFrame(() => {
+        resizeAnimationFrameRef.current = null;
+        setSidebarWidth(sidebarWidthRef.current);
+      });
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      event.preventDefault();
+      updateWidth(
+        resizeStartRef.current.width
+          + event.clientX
+          - resizeStartRef.current.pointerX,
+      );
+    };
+
+    const finishResize = () => {
+      if (resizeAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeAnimationFrameRef.current);
+        resizeAnimationFrameRef.current = null;
+      }
+
+      const finalWidth = sidebarWidthRef.current;
+      setSidebarWidth(finalWidth);
+      persistSidebarWidth(finalWidth);
+      setIsResizingSidebar(false);
+    };
+
+    document.addEventListener('pointermove', handlePointerMove);
+    document.addEventListener('pointerup', finishResize);
+    document.addEventListener('pointercancel', finishResize);
+
+    return () => {
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', finishResize);
+      document.removeEventListener('pointercancel', finishResize);
+
+      if (resizeAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeAnimationFrameRef.current);
+        resizeAnimationFrameRef.current = null;
+      }
+
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+  }, [isResizingSidebar]);
+
+  const handleResizeStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (sidebarCollapsed) {
+        return;
+      }
+
+      event.preventDefault();
+      resizeStartRef.current = {
+        pointerX: event.clientX,
+        width: sidebarWidthRef.current,
+      };
+      setIsResizingSidebar(true);
+    },
+    [sidebarCollapsed],
+  );
+
+  const handleResizeKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (sidebarCollapsed) {
+        return;
+      }
+
+      const step = event.shiftKey ? 24 : 12;
+      let nextWidth: number | undefined;
+
+      if (event.key === 'ArrowLeft') {
+        nextWidth = sidebarWidthRef.current - step;
+      } else if (event.key === 'ArrowRight') {
+        nextWidth = sidebarWidthRef.current + step;
+      } else if (event.key === 'Home') {
+        nextWidth = MIN_SIDEBAR_WIDTH;
+      } else if (event.key === 'End') {
+        nextWidth = MAX_SIDEBAR_WIDTH;
+      }
+
+      if (nextWidth === undefined) {
+        return;
+      }
+
+      event.preventDefault();
+      const clampedWidth = clampSidebarWidth(nextWidth);
+      sidebarWidthRef.current = clampedWidth;
+      setSidebarWidth(clampedWidth);
+      persistSidebarWidth(clampedWidth);
+    },
+    [sidebarCollapsed],
   );
 
   return (
@@ -88,15 +264,24 @@ export function DashboardShell({
       <div className="min-h-screen bg-background md:h-screen md:overflow-hidden">
         <aside
           className={cn(
-            'fixed inset-y-0 left-0 z-40 hidden h-screen flex-col border-r border-border/40 bg-card/[0.45] backdrop-blur-md transition-[width] duration-200 ease-out md:flex',
-            sidebarCollapsed ? 'w-16' : 'w-56',
+            'fixed inset-y-0 left-0 z-40 hidden h-screen flex-col border-r border-border/40 bg-card/[0.45] backdrop-blur-md transition-[width] duration-[220ms] ease-out will-change-[width] md:flex',
+            isResizingSidebar && 'transition-none',
           )}
+          style={{ width: activeSidebarWidth }}
         >
           <SidebarContent
             collapsed={sidebarCollapsed}
             pathname={pathname}
             onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           />
+          {!sidebarCollapsed ? (
+            <SidebarResizeHandle
+              width={sidebarWidth}
+              resizing={isResizingSidebar}
+              onPointerDown={handleResizeStart}
+              onKeyDown={handleResizeKeyDown}
+            />
+          ) : null}
         </aside>
 
         <div className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border bg-background/95 px-4 backdrop-blur md:hidden">
@@ -110,9 +295,7 @@ export function DashboardShell({
             <Menu />
           </Button>
           <div className="flex items-center gap-2">
-            <div className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60 text-primary-foreground shadow-sm">
-              <Sparkles className="size-3.5" />
-            </div>
+            <LogoMark className="size-7 rounded-lg" iconClassName="size-3.5" />
             <span className="font-bold text-sm tracking-tight text-foreground">
               Awaaz
             </span>
@@ -136,9 +319,10 @@ export function DashboardShell({
 
         <main
           className={cn(
-            'min-w-0 p-4 sm:p-6 md:h-screen md:overflow-y-auto md:p-7 md:transition-[margin-left] md:duration-200 md:ease-out',
-            sidebarCollapsed ? 'md:ml-16' : 'md:ml-56',
+            'min-w-0 p-4 sm:p-6 md:ml-[var(--sidebar-offset)] md:h-screen md:overflow-y-auto md:p-7 md:transition-[margin-left] md:duration-[220ms] md:ease-out md:will-change-[margin-left]',
+            isResizingSidebar && 'md:transition-none',
           )}
+          style={sidebarOffsetStyle}
         >
           {children}
         </main>
@@ -167,8 +351,10 @@ function SidebarContent({
     >
       <div
         className={cn(
-          'flex shrink-0 items-center gap-2',
-          collapsed ? 'flex-col gap-3' : 'justify-between',
+          'w-full shrink-0 border-b border-border/40 pb-3',
+          collapsed
+            ? 'flex flex-col items-center gap-2'
+            : 'flex h-11 items-center gap-2',
         )}
       >
         <Link
@@ -177,30 +363,29 @@ function SidebarContent({
           onClick={onNavigate}
           className={cn(
             'inline-flex min-w-0 items-center rounded-xl outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring',
-            collapsed ? 'size-9 justify-center' : 'px-1',
+            collapsed ? 'size-10 justify-center' : 'min-w-0 flex-1 gap-3 px-1 py-1',
           )}
         >
-          {collapsed ? (
-            <div className="flex size-9 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60 text-primary-foreground shadow-sm hover:scale-105 transition-transform duration-200">
-              <Sparkles className="size-4.5" />
-            </div>
-          ) : (
-            <div className="flex items-center gap-2.5">
-              <div className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/60 text-primary-foreground shadow-md">
-                <Sparkles className="size-4" />
-              </div>
-              <span className="font-bold text-base tracking-tight bg-gradient-to-r from-foreground to-foreground/80 bg-clip-text text-transparent">
-                Awaaz
-              </span>
-            </div>
-          )}
+          <LogoMark
+            className={cn('size-9', collapsed && 'hover:scale-105')}
+            iconClassName="size-4"
+          />
+          <span
+            aria-hidden={collapsed}
+            className={cn(
+              'min-w-0 overflow-hidden whitespace-nowrap text-lg font-bold tracking-tight text-foreground transition-opacity duration-150 ease-out',
+              collapsed ? 'w-0 opacity-0' : 'opacity-100',
+            )}
+          >
+            Awaaz
+          </span>
         </Link>
         {onToggleCollapsed ? (
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            className="h-8 w-8 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0"
+            className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             onClick={onToggleCollapsed}
@@ -271,10 +456,10 @@ function SidebarNavLink({
       onMouseEnter={() => router.prefetch(item.href)}
       onFocus={() => router.prefetch(item.href)}
       className={cn(
-        'group flex shrink-0 items-center rounded-lg text-muted-foreground transition-all duration-200 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'group flex shrink-0 items-center rounded-lg border border-transparent text-muted-foreground transition-[background-color,border-color,color,box-shadow,width] duration-200 ease-out hover:border-border/60 hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         active
-          ? 'bg-primary/[0.08] font-semibold text-primary shadow-[0_1px_2px_rgba(0,0,0,0.01)]'
-          : 'hover:bg-muted/65',
+          ? 'border-border/80 bg-muted/85 font-semibold text-foreground shadow-[inset_2px_0_0_var(--foreground)] hover:bg-muted'
+          : '',
         collapsed
           ? 'size-9 justify-center'
           : 'h-9.5 w-full justify-between gap-2 px-3',
@@ -282,12 +467,18 @@ function SidebarNavLink({
     >
       <span
         className={cn(
-          'flex min-w-0 items-center gap-2.5',
-          collapsed && 'justify-center',
+          'flex min-w-0 items-center',
+          collapsed ? 'justify-center gap-0' : 'gap-2.5',
         )}
       >
-        <Icon className={cn("size-4 shrink-0 transition-transform duration-200 group-hover:scale-105", active ? "text-primary" : "text-muted-foreground/80")} />
-        <span className={cn('truncate', collapsed && 'sr-only')}>
+        <Icon className={cn("size-4 shrink-0 transition-transform duration-200 group-hover:scale-105", active ? "text-foreground" : "text-muted-foreground/80")} />
+        <span
+          aria-hidden={collapsed}
+          className={cn(
+            'min-w-0 truncate whitespace-nowrap transition-opacity duration-150 ease-out',
+            collapsed ? 'w-0 opacity-0' : 'opacity-100',
+          )}
+        >
           {item.label}
         </span>
       </span>
@@ -302,4 +493,104 @@ function SidebarNavLink({
 
 function isActivePath(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function SidebarResizeHandle({
+  width,
+  resizing,
+  onPointerDown,
+  onKeyDown,
+}: {
+  width: number;
+  resizing: boolean;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-label="Resize sidebar"
+      aria-orientation="vertical"
+      aria-valuemin={MIN_SIDEBAR_WIDTH}
+      aria-valuemax={MAX_SIDEBAR_WIDTH}
+      aria-valuenow={width}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onKeyDown={onKeyDown}
+      className={cn(
+        'group absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize touch-none select-none items-center justify-center outline-none transition-colors md:flex',
+        resizing
+          ? 'bg-foreground/[0.03]'
+          : 'hover:bg-muted/50 focus-visible:bg-muted/70',
+      )}
+    >
+      <span
+        className={cn(
+          'h-12 w-px rounded-full bg-border transition-colors',
+          resizing ? 'bg-foreground/30' : 'group-hover:bg-foreground/20',
+        )}
+      />
+    </div>
+  );
+}
+
+function LogoMark({
+  className,
+  iconClassName,
+}: {
+  className?: string;
+  iconClassName?: string;
+}) {
+  const [logoState, setLogoState] = useState<'loading' | 'loaded' | 'error'>(
+    'loading',
+  );
+
+  return (
+    <span
+      className={cn(
+        'relative flex shrink-0 items-center justify-center transition-transform duration-200',
+        className,
+      )}
+    >
+      {logoState !== 'error' ? (
+        <Image
+          src={LOGO_SRC}
+          alt=""
+          aria-hidden="true"
+          fill
+          sizes="36px"
+          unoptimized
+          draggable={false}
+          onLoad={() => setLogoState('loaded')}
+          onError={() => setLogoState('error')}
+          className={cn(
+            'absolute inset-0 h-full w-full object-contain transition-opacity duration-150',
+            logoState === 'loaded' ? 'opacity-100' : 'opacity-0',
+          )}
+        />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <Sparkles className={cn('size-4', iconClassName)} aria-hidden="true" />
+        </span>
+      )}
+    </span>
+  );
+}
+
+function clampSidebarWidth(width: number) {
+  return Math.min(
+    MAX_SIDEBAR_WIDTH,
+    Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)),
+  );
+}
+
+function persistSidebarWidth(width: number) {
+  try {
+    window.localStorage.setItem(
+      SIDEBAR_WIDTH_STORAGE_KEY,
+      String(clampSidebarWidth(width)),
+    );
+  } catch {
+    // Local storage can be unavailable in hardened browser contexts.
+  }
 }
