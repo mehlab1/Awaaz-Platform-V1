@@ -2566,7 +2566,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         <DialogContent className="flex h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border border-border/60 bg-background p-0 shadow-2xl sm:h-[86vh] sm:max-h-[86vh] sm:w-[90vw] sm:max-w-[1400px]">
 
           {/* ── Modal Header ── */}
-          <div className="shrink-0 border-b border-border/40 bg-background px-5 pb-5 pt-5 sm:px-8">
+          <div className="shrink-0 border-b border-border/40 bg-background px-5 pb-3.5 pt-4 sm:px-8 sm:pb-4 sm:pt-5">
             <DialogHeader className="gap-0.5">
               <DialogTitle className="text-lg font-semibold tracking-tight sm:text-xl">Select Agent Voice</DialogTitle>
               <DialogDescription className="text-[13px] text-muted-foreground">
@@ -2575,7 +2575,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </DialogHeader>
 
             {/* Provider pills — horizontal scroll on mobile, flex-wrap on desktop */}
-            <div className="mt-4">
+            <div className="mt-3">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
                   Provider
@@ -2584,7 +2584,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   {voiceProviderLabel(selectedVoiceProvider)} · {voiceProviderCounts[selectedVoiceProvider] ?? 0} voices
                 </p>
               </div>
-              <div className="mt-2.5 flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap sm:overflow-visible" role="tablist" aria-label="Voice provider">
+              <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap sm:overflow-visible" role="tablist" aria-label="Voice provider">
                 {VOICE_PROVIDERS.map((provider) => {
                   const isActive = selectedVoiceProvider === provider.id;
                   const providerCount = voiceProviderCounts[provider.id];
@@ -2595,7 +2595,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                       role="tab"
                       aria-selected={isActive}
                       className={cn(
-                        'group relative flex shrink-0 items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring sm:shrink',
+                        'group relative flex shrink-0 items-center gap-2.5 rounded-xl border px-3.5 py-2 text-left outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring sm:shrink',
                         isActive
                           ? 'border-foreground/20 bg-foreground/[0.05] shadow-sm'
                           : 'border-border/50 bg-background hover:border-foreground/15 hover:bg-muted/30',
@@ -2632,7 +2632,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             {/* Left: Voice Library */}
             <section className="flex min-h-0 min-w-0 flex-1 flex-col">
               {/* Search + Filters */}
-              <div className="shrink-0 border-b border-border/30 bg-background px-5 py-3.5 sm:px-8">
+              <div className="shrink-0 border-b border-border/30 bg-background px-5 py-2.5 sm:px-8">
                 <div className="flex items-center gap-3">
                   <label className="relative flex-1">
                     <span className="sr-only">Search voices</span>
@@ -2667,7 +2667,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   </div>
                 </div>
                 {/* Mobile-only filter row */}
-                <div className="mt-2.5 grid grid-cols-3 gap-2 sm:hidden">
+                <div className="mt-2 grid grid-cols-3 gap-2 sm:hidden">
                   <VoiceFilterSelect
                     label="Gender"
                     value={voiceGenderFilter}
@@ -2687,14 +2687,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     onChange={setVoiceTypeFilter}
                   />
                 </div>
-                <p className="mt-2 text-[11px] text-muted-foreground/70">
-                  Showing {filteredVoices.length} of {providerVoices.length} voices
-                </p>
               </div>
 
               {/* Voice list */}
-              <div ref={voiceListRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 sm:px-8">
-                <div className="flex flex-col gap-2">
+              <div ref={voiceListRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-3 sm:px-8">
+                <div className="flex flex-col gap-1.5">
                   {filteredVoices.map((v) => {
                     const isTempSelected = tempSelectedVoiceId === v.rimeVoiceId;
                     const isPlaying = playingVoiceId === v.rimeVoiceId;
@@ -2713,7 +2710,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         role="button"
                         tabIndex={0}
                         className={cn(
-                          'group relative flex cursor-pointer items-center gap-4 rounded-xl border p-3.5 outline-none transition-all duration-200 [contain-intrinsic-size:72px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-ring',
+                          'group relative flex cursor-pointer items-center justify-between gap-4 rounded-xl border px-4 py-2 outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring',
                           isTempSelected
                             ? 'border-foreground/25 bg-foreground/[0.03] shadow-sm ring-1 ring-foreground/[0.08]'
                             : 'border-border/50 bg-background hover:border-foreground/15 hover:bg-muted/20 hover:shadow-sm',
@@ -2726,34 +2723,41 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                           }
                         }}
                       >
-                        {/* Avatar */}
-                        <VoiceAvatar voice={v} fallback={v.name} />
+                        {/* Left: Avatar + Name + Description + Pills */}
+                        <div className="flex flex-1 items-center gap-4 min-w-0">
+                          {/* Avatar */}
+                          <VoiceAvatar voice={v} fallback={v.name} size="sm" />
 
-                        {/* Name + meta */}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
+                          {/* Name */}
+                          <div className="min-w-[100px] shrink-0 flex items-center gap-1.5">
                             <p className="truncate text-sm font-semibold text-foreground">{v.name}</p>
                             {isTempSelected && (
-                              <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
-                                <Check className="size-3" aria-hidden />
+                              <span className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                                <Check className="size-2.5" aria-hidden />
                               </span>
                             )}
                           </div>
-                          <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{voiceTraitText(v)}</p>
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+
+                          {/* Description */}
+                          <p className="hidden md:block text-xs text-muted-foreground truncate max-w-[200px] lg:max-w-[280px]">
+                            {voiceTraitText(v)}
+                          </p>
+
+                          {/* Pills */}
+                          <div className="hidden sm:flex items-center gap-1.5 min-w-0">
                             <VoiceMetaPill>{voiceGenderLabel(v)}</VoiceMetaPill>
                             <VoiceMetaPill>{voiceAccentLabel(v)}</VoiceMetaPill>
                             <VoiceMetaPill>{voiceTypeLabel(v)}</VoiceMetaPill>
                           </div>
                         </div>
 
-                        {/* Actions */}
-                        <div className="flex shrink-0 items-center gap-1.5">
+                        {/* Right: Actions */}
+                        <div className="flex shrink-0 items-center gap-2">
                           <Button
                             type="button"
                             size="sm"
                             variant={isPlaying ? 'default' : 'ghost'}
-                            className="h-9 w-9 rounded-full p-0"
+                            className="h-8 w-8 rounded-full p-0"
                             onClick={(e) => {
                               e.stopPropagation();
                               void playVoicePreview(v);
@@ -2762,11 +2766,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                             title={`Preview ${v.name}`}
                           >
                             {isLoadingPreview ? (
-                              <Loader2 className="size-3.5 animate-spin" />
+                              <Loader2 className="size-3 animate-spin" />
                             ) : isPlaying ? (
                               <VoiceWaveform />
                             ) : (
-                              <Play className="size-3.5 fill-current" />
+                              <Play className="size-3 fill-current" />
                             )}
                           </Button>
                           <Button
@@ -2774,15 +2778,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                             size="sm"
                             variant={isTempSelected ? 'default' : 'outline'}
                             className={cn(
-                              'hidden h-8 rounded-full px-3 text-[11px] font-medium sm:inline-flex',
-                              isTempSelected && 'gap-1.5',
+                              'hidden h-7 rounded-full px-2.5 text-[11px] font-medium sm:inline-flex items-center gap-1',
                             )}
                             onClick={(e) => {
                               e.stopPropagation();
                               setTempSelectedVoiceId(v.rimeVoiceId);
                             }}
                           >
-                            {isTempSelected && <Check className="size-3" aria-hidden />}
+                            {isTempSelected && <Check className="size-2.5" aria-hidden />}
                             {isTempSelected ? 'Selected' : 'Select'}
                           </Button>
                         </div>
@@ -3489,16 +3492,16 @@ function VoiceAvatar({
 }: {
   voice?: VoiceDto | null;
   fallback: string;
-  size?: 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg';
 }) {
   const label = voice?.name ?? fallback;
   const src = voiceAvatarSrc(voice, fallback);
-  const imageSize = size === 'lg' ? 80 : 52;
+  const imageSize = size === 'lg' ? 80 : size === 'md' ? 52 : 36;
   return (
     <div
       className={cn(
         'shrink-0 overflow-hidden rounded-full border border-border/70 bg-muted shadow-sm',
-        size === 'lg' ? 'size-20' : 'size-[52px]',
+        size === 'lg' ? 'size-20' : size === 'md' ? 'size-[52px]' : 'size-9',
       )}
     >
       <Image
