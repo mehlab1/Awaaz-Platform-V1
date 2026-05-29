@@ -28,7 +28,6 @@ import {
 import {
   AlertCircle,
   AudioLines,
-  Bot,
   Loader2,
   Mic,
   MicOff,
