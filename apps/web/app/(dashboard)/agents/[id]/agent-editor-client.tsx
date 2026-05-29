@@ -2442,8 +2442,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         }}
       >
         {selectedBlueprint ? (
-          <DialogContent className="w-[min(720px,calc(100vw-1rem))] max-w-none gap-0 overflow-hidden rounded-2xl border border-border/80 p-0 shadow-2xl sm:max-w-none">
-            <DialogHeader className="shrink-0 border-b border-border/40 px-6 pb-4 pt-5">
+          <DialogContent className="flex h-[min(82vh,720px)] w-[min(760px,calc(100vw-1rem))] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border border-border/80 p-0 shadow-2xl sm:max-w-none">
+            <DialogHeader className="shrink-0 border-b border-border/40 px-6 pb-4 pt-5 sm:px-7">
               <DialogTitle className="text-base font-semibold tracking-tight flex items-center gap-2">
                 <Sparkles className="size-4 text-amber-500" />
                 Blueprint: {selectedBlueprint.name}
@@ -2453,10 +2453,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
+            <div className="min-h-0 flex-1 overflow-hidden px-6 py-5 sm:px-7">
               <div className="flex h-full min-h-0 flex-col gap-2.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Prompt Template</p>
-                <div className="min-h-0 flex-1 overflow-y-auto rounded-xl border border-border/40 bg-muted/[0.04] p-5 pr-4">
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-border/40 bg-muted/[0.04] p-5 pr-4">
                   <pre className="whitespace-pre-wrap text-[13px] leading-[1.8] text-foreground font-[system-ui,-apple-system,BlinkMacSystemFont,'Segoe_UI',Roboto,sans-serif]">
                     {selectedBlueprint.template}
                   </pre>
@@ -2464,7 +2464,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               </div>
             </div>
 
-            <DialogFooter className="shrink-0 border-t border-border/40 bg-muted/[0.02] px-6 py-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end sm:gap-3">
+            <DialogFooter className="shrink-0 border-t border-border/40 bg-muted/[0.02] px-6 py-5 sm:px-7 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end sm:gap-3">
               <Button
                 type="button"
                 variant="outline"
