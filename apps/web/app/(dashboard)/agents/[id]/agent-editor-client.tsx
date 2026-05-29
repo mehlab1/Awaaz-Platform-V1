@@ -255,6 +255,8 @@ interface VoiceDto {
   rimeVoiceId: string;
   name: string;
   previewAudioUrl: string | null;
+  previewPlaybackUrl?: string | null;
+  previewPlaybackExpiresInSeconds?: number | null;
   lang?: string | null;
   modelId?: string | null;
 }
@@ -1136,6 +1138,28 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     versionPanelBusy,
   ]);
 
+  const preloadStoredVoicePreviewObjectUrl = useCallback(
+    async (voice: VoiceDto): Promise<void> => {
+      const cacheKey = voicePreviewCacheKey(voice);
+      if (previewCacheRef.current.has(cacheKey)) {
+        return;
+      }
+
+      const storedUrl = storedVoicePreviewUrl(voice);
+      if (!storedUrl) {
+        return;
+      }
+
+      const objectUrl = await fetchStoredVoicePreviewObjectUrl(storedUrl);
+      if (previewCacheRef.current.has(cacheKey)) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      previewCacheRef.current.set(cacheKey, objectUrl);
+    },
+    [],
+  );
+
   const getVoicePreviewObjectUrl = useCallback(
     async (voice: VoiceDto): Promise<string> => {
       const cacheKey = voicePreviewCacheKey(voice);
@@ -1150,6 +1174,20 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       }
 
       const request = (async () => {
+        const storedUrl = storedVoicePreviewUrl(voice);
+        if (storedUrl) {
+          try {
+            const objectUrl = await fetchStoredVoicePreviewObjectUrl(storedUrl);
+            previewCacheRef.current.set(cacheKey, objectUrl);
+            return objectUrl;
+          } catch (e) {
+            console.warn('[AgentEditor] Stored voice preview failed; using live fallback', {
+              voiceId: voice.rimeVoiceId,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        }
+
         const res = await apiCall('/api/v1/voices/preview', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1194,6 +1232,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const candidates = [...unique.values()].filter((voice) => {
       const cacheKey = voicePreviewCacheKey(voice);
       return (
+        storedVoicePreviewUrl(voice) !== null &&
         !previewCacheRef.current.has(cacheKey) &&
         !previewInFlightRef.current.has(cacheKey) &&
         !preloadedVoiceKeysRef.current.has(cacheKey)
@@ -1208,7 +1247,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       for (const voice of candidates) {
         const cacheKey = voicePreviewCacheKey(voice);
         preloadedVoiceKeysRef.current.add(cacheKey);
-        void getVoicePreviewObjectUrl(voice).catch(() => {
+        void preloadStoredVoicePreviewObjectUrl(voice).catch(() => {
           preloadedVoiceKeysRef.current.delete(cacheKey);
         });
       }
@@ -1216,7 +1255,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
     return () => window.clearTimeout(timeoutId);
   }, [
-    getVoicePreviewObjectUrl,
+    preloadStoredVoicePreviewObjectUrl,
     selectedVoice,
     voiceModalOpen,
     voiceSearchQuery,
@@ -1254,6 +1293,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         rimeVoiceId: targetVoice.rimeVoiceId,
         voiceName: targetVoice.name,
         previewText: voicePreviewText(targetVoice),
+        stored: storedVoicePreviewUrl(targetVoice) !== null,
         cached: previewCacheRef.current.has(cacheKey),
       });
       const nextUrl = await getVoicePreviewObjectUrl(targetVoice);
@@ -2982,6 +3022,24 @@ function cleanVoicePreviewName(name: string): string {
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
+}
+
+function storedVoicePreviewUrl(voice: VoiceDto): string | null {
+  const url = voice.previewPlaybackUrl?.trim();
+  return url ? url : null;
+}
+
+async function fetchStoredVoicePreviewObjectUrl(url: string): Promise<string> {
+  const res = await fetch(url, { cache: 'force-cache' });
+  if (!res.ok) {
+    throw new Error(`Stored preview audio failed with ${res.status}.`);
+  }
+
+  const audioBlob = await res.blob();
+  if (audioBlob.size === 0) {
+    throw new Error('Stored preview audio was empty.');
+  }
+  return URL.createObjectURL(audioBlob);
 }
 
 async function readApiError(res: Response): Promise<string> {

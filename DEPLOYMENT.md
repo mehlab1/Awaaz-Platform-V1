@@ -88,6 +88,7 @@ node apps/api/dist/main.js
 |----------|---------|---------|
 | `LIVEKIT_BROWSER_RECORDING_ENABLED` | `true` | Room composite egress to R2 |
 | `DISABLE_REDIS` | unset | **Leave unset** in production |
+| `PUBLIC_ASSET_BASE_URL` | unset | Optional R2 custom-domain base URL for cached voice previews |
 
 ### LiveKit webhooks (API)
 

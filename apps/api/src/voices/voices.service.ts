@@ -4,7 +4,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Voice } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -17,6 +17,14 @@ export interface ResolvedRimeVoice {
   lang: string;
 }
 
+export type VoiceListItem = Voice & {
+  previewPlaybackUrl: string | null;
+  previewPlaybackExpiresInSeconds: number | null;
+};
+
+const VOICE_PREVIEW_EXPIRES_IN_SECONDS = 3_600;
+const VOICE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
 @Injectable()
 export class VoicesService {
   private readonly logger = new Logger(VoicesService.name);
@@ -27,18 +35,18 @@ export class VoicesService {
     private readonly storage: StorageService,
   ) {}
 
-  list() {
-    return this.prisma.voice.findMany({
+  async list(): Promise<VoiceListItem[]> {
+    const voices = await this.prisma.voice.findMany({
       where: { isActive: true },
       orderBy: { name: 'asc' },
     });
+
+    return Promise.all(voices.map((voice) => this.withPreviewPlayback(voice)));
   }
 
   async preview(voiceId: string): Promise<Uint8Array> {
     const trimmed = voiceId.trim();
-    const voiceRow = await this.prisma.voice.findUnique({
-      where: { rimeVoiceId: trimmed },
-    });
+    const voiceRow = await this.findVoiceRow(trimmed);
     if (voiceRow && !voiceRow.isActive) {
       throw new NotFoundException('Voice not found');
     }
@@ -46,13 +54,16 @@ export class VoicesService {
     this.logger.log(
       `Voice preview request voiceId=${trimmed} rimeSpeaker=${resolved.rimeVoiceId} modelId=${resolved.modelId} lang=${resolved.lang}`,
     );
-    return this.rime.synthesizePreview({
+    const rimeVoice = {
       rimeVoiceId: resolved.rimeVoiceId,
       name: voiceRow?.name ?? resolved.rimeVoiceId,
       language: resolved.lang,
       lang: resolved.lang,
       modelId: resolved.modelId,
-    });
+    };
+    const audio = await this.rime.synthesizePreview(rimeVoice);
+    await this.storePreviewIfNeeded(rimeVoice, audio, voiceRow?.previewAudioUrl);
+    return audio;
   }
 
   /**
@@ -65,13 +76,7 @@ export class VoicesService {
       throw new NotFoundException('Voice not found');
     }
 
-    const voiceRow =
-      (await this.prisma.voice.findUnique({
-        where: { rimeVoiceId: trimmed },
-      })) ??
-      (await this.prisma.voice.findUnique({
-        where: { id: trimmed },
-      }));
+    const voiceRow = await this.findVoiceRow(trimmed);
 
     const rimeVoice: RimeVoice = voiceRow
       ? {
@@ -112,6 +117,9 @@ export class VoicesService {
     const syncedAt = new Date();
     let previewCount = 0;
     const shouldUploadPreviews = this.storage.isConfigured();
+    const existingPreviewByVoiceId = shouldUploadPreviews
+      ? await this.existingPreviewMap(voices.map((voice) => voice.rimeVoiceId))
+      : new Map<string, string | null>();
 
     if (!shouldUploadPreviews) {
       const synced = await this.syncWithoutPreviews(voices, syncedAt);
@@ -126,14 +134,15 @@ export class VoicesService {
       voices,
       2,
       async (voice) => {
-        let previewAudioUrl: string | undefined;
-        if (shouldUploadPreviews) {
+        let previewAudioUrl =
+          existingPreviewByVoiceId.get(voice.rimeVoiceId) ?? undefined;
+        const previewObjectKey = this.previewObjectKey(voice);
+        if (
+          shouldUploadPreviews &&
+          !this.previewCanBeReused(previewAudioUrl, previewObjectKey)
+        ) {
           const preview = await this.rime.synthesizePreview(voice);
-          previewAudioUrl = await this.storage.uploadBuffer(
-            `voice-previews/${voice.rimeVoiceId}.wav`,
-            preview,
-            'audio/wav',
-          );
+          previewAudioUrl = await this.uploadPreviewAudio(previewObjectKey, preview);
           previewCount += 1;
         }
 
@@ -222,6 +231,163 @@ export class VoicesService {
       },
       orderBy: { name: 'asc' },
     });
+  }
+
+  private async withPreviewPlayback(voice: Voice): Promise<VoiceListItem> {
+    try {
+      const playback = await this.previewPlaybackForStoredValue(
+        voice.previewAudioUrl,
+      );
+      return {
+        ...voice,
+        previewPlaybackUrl: playback?.url ?? null,
+        previewPlaybackExpiresInSeconds: playback?.expiresInSeconds ?? null,
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Could not prepare stored preview URL for voice=${voice.rimeVoiceId}: ${message}`,
+      );
+      return {
+        ...voice,
+        previewPlaybackUrl: null,
+        previewPlaybackExpiresInSeconds: null,
+      };
+    }
+  }
+
+  private async previewPlaybackForStoredValue(
+    value: string | null,
+  ): Promise<{ url: string; expiresInSeconds: number | null } | null> {
+    const raw = value?.trim();
+    if (!raw) {
+      return null;
+    }
+    if (this.isHttpUrl(raw)) {
+      return { url: raw, expiresInSeconds: null };
+    }
+
+    const publicUrl = this.storage.getPublicUrl(raw);
+    if (publicUrl) {
+      return { url: publicUrl, expiresInSeconds: null };
+    }
+    if (!this.storage.isConfigured()) {
+      return null;
+    }
+
+    const objectKey = this.storage.normalizeObjectKey(raw);
+    if (!objectKey) {
+      return null;
+    }
+
+    return {
+      url: await this.storage.getPresignedUrl(
+        objectKey,
+        VOICE_PREVIEW_EXPIRES_IN_SECONDS,
+        'audio/wav',
+      ),
+      expiresInSeconds: VOICE_PREVIEW_EXPIRES_IN_SECONDS,
+    };
+  }
+
+  private async existingPreviewMap(
+    rimeVoiceIds: string[],
+  ): Promise<Map<string, string | null>> {
+    if (rimeVoiceIds.length === 0) {
+      return new Map();
+    }
+
+    const existing = await this.prisma.voice.findMany({
+      where: { rimeVoiceId: { in: rimeVoiceIds } },
+      select: { rimeVoiceId: true, previewAudioUrl: true },
+    });
+    return new Map(
+      existing.map((voice) => [voice.rimeVoiceId, voice.previewAudioUrl]),
+    );
+  }
+
+  private async findVoiceRow(storedVoiceId: string): Promise<Voice | null> {
+    const trimmed = storedVoiceId.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return (
+      (await this.prisma.voice.findUnique({
+        where: { rimeVoiceId: trimmed },
+      })) ??
+      (await this.prisma.voice.findUnique({
+        where: { id: trimmed },
+      }))
+    );
+  }
+
+  private async storePreviewIfNeeded(
+    voice: RimeVoice,
+    audio: Uint8Array,
+    existingPreviewAudioUrl: string | null | undefined,
+  ): Promise<void> {
+    if (!this.storage.isConfigured()) {
+      return;
+    }
+
+    const objectKey = this.previewObjectKey(voice);
+    if (this.previewCanBeReused(existingPreviewAudioUrl, objectKey)) {
+      return;
+    }
+
+    try {
+      await this.uploadPreviewAudio(objectKey, audio);
+      await this.prisma.voice.updateMany({
+        where: { rimeVoiceId: voice.rimeVoiceId },
+        data: { previewAudioUrl: objectKey },
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Could not store generated preview for voice=${voice.rimeVoiceId}: ${message}`,
+      );
+    }
+  }
+
+  private previewCanBeReused(
+    storedValue: string | null | undefined,
+    expectedObjectKey: string,
+  ): boolean {
+    const raw = storedValue?.trim();
+    if (!raw) {
+      return false;
+    }
+    if (this.isHttpUrl(raw)) {
+      return true;
+    }
+    return this.storage.normalizeObjectKey(raw) === expectedObjectKey;
+  }
+
+  private uploadPreviewAudio(
+    objectKey: string,
+    audio: Uint8Array,
+  ): Promise<string> {
+    return this.storage.uploadBuffer(objectKey, audio, 'audio/wav', {
+      cacheControl: VOICE_PREVIEW_CACHE_CONTROL,
+    });
+  }
+
+  private previewObjectKey(voice: RimeVoice): string {
+    const modelId = this.cleanPreviewObjectKeyPart(voice.modelId ?? 'mistv2');
+    const lang = this.cleanPreviewObjectKeyPart(voice.lang ?? 'eng');
+    const speaker = this.cleanPreviewObjectKeyPart(voice.rimeVoiceId);
+    return `voice-previews/${modelId}/${lang}/${speaker}.wav`;
+  }
+
+  private cleanPreviewObjectKeyPart(value: string): string {
+    return value
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'unknown';
+  }
+
+  private isHttpUrl(value: string): boolean {
+    return /^https?:\/\//i.test(value);
   }
 
   private async mapWithConcurrency<T, R>(

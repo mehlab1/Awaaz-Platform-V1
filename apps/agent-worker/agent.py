@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass
 
+from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, llm
 from livekit.agents.llm import ChatContext, LLMStream
 from livekit.agents.voice_assistant import VoiceAssistant
@@ -27,6 +28,40 @@ MAX_DURATION_MESSAGE = (
     "We've reached the maximum session time, so I'll end the call now. Thank you."
 )
 CONTROL_TOPIC = "awaaz.call.control"
+# Keep the native LiveKit playout queue small so interruption drains room audio quickly.
+# 200ms is a compromise between near-immediate barge-in and enough buffering to avoid underruns.
+LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS = 200
+
+
+def install_livekit_interrupt_patches() -> None:
+    """Apply tracked, deployable patches for lower-latency barge-in.
+
+    The LiveKit assistant creates rtc.AudioSource without an explicit queue size,
+    so we clamp the default queue in the worker process instead of modifying site-packages.
+    """
+
+    if getattr(rtc.AudioSource, "_awaaz_interrupt_patch_applied", False):
+        return
+
+    original_init = rtc.AudioSource.__init__
+
+    def patched_init(
+        self: object,
+        sample_rate: int,
+        num_channels: int,
+        queue_size_ms: int = 1000,
+        loop: asyncio.AbstractEventLoop | None = None,
+    ) -> None:
+        if queue_size_ms == 1000:
+            queue_size_ms = LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS
+        original_init(self, sample_rate, num_channels, queue_size_ms, loop)
+
+    rtc.AudioSource.__init__ = patched_init  # type: ignore[method-assign]
+    setattr(rtc.AudioSource, "_awaaz_interrupt_patch_applied", True)
+    logger.info(
+        "livekit_audio_source_queue_patch_applied queue_size_ms=%s",
+        LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS,
+    )
 
 
 def canonical_end_reason(reason: str | None) -> str:
@@ -623,6 +658,7 @@ class AwaazAgent:
     @staticmethod
     async def entrypoint(ctx: JobContext) -> None:
         await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_ALL)
+        install_livekit_interrupt_patches()
         register_room_debug_events(ctx.room)
 
         room_metadata = parse_json_object(ctx.room.metadata)
@@ -739,7 +775,7 @@ def create_assistant(
     vad_activation = float_env("LIVEKIT_VAD_ACTIVATION_THRESHOLD", 0.45)
     interrupt_speech_duration = float_env(
         "LIVEKIT_INTERRUPT_SPEECH_SECONDS",
-        0.35,
+        0.18,
     )
     interrupt_min_words = int_env("LIVEKIT_INTERRUPT_MIN_WORDS", 1)
     logger.info(
@@ -912,6 +948,10 @@ class PipelineTiming:
         self.last_response: ResponseTiming | None = None
         self.barge_in_requested_at: float | None = None
         self.barge_in_reason: str | None = None
+        self.interruption_requested_at: float | None = None
+        self.audio_queue_flushed_at: float | None = None
+        self.audio_queue_flushed_before_ms: int | None = None
+        self.audio_queue_flushed_after_ms: int | None = None
         self._lifecycle: CallLifecycle | None = None
 
     def set_lifecycle(self, lifecycle: CallLifecycle) -> None:
@@ -1093,9 +1133,15 @@ class PipelineTiming:
         response.playback_stopped_at_iso = utc_now_iso()
         response.interrupted = interrupted
         self.last_response = response
+        interruption_to_silence_ms = None
+        if interrupted and self.barge_in_requested_at is not None:
+            interruption_to_silence_ms = elapsed_ms(
+                self.barge_in_requested_at,
+                response.playback_stopped_at,
+            )
         logger.info(
             "voice_playback_stopped turn=%s response=%s interrupted=%s first_audio_latency_ms=%s "
-            "playback_ms=%s total_response_ms=%s total_turn_ms=%s",
+            "playback_ms=%s total_response_ms=%s total_turn_ms=%s interruption_to_silence_ms=%s",
             response.turn_id,
             response.response_id,
             interrupted,
@@ -1103,6 +1149,7 @@ class PipelineTiming:
             elapsed_ms(response.playback_started_at, response.playback_stopped_at),
             self.total_response_ms(response),
             elapsed_ms(response.user_started_at, response.playback_stopped_at),
+            interruption_to_silence_ms,
         )
 
     def mark_barge_in_requested(self, reason: str) -> None:
@@ -1520,6 +1567,46 @@ def register_barge_in_events(
             return None
         return speech
 
+    def clear_audio_queue(reason: str) -> None:
+        agent_output = getattr(assistant, "_agent_output", None)
+        if agent_output is None:
+            return
+
+        playout = getattr(agent_output, "playout", None)
+        audio_source = getattr(playout, "_source", None)
+        if audio_source is None or not hasattr(audio_source, "clear_queue"):
+            return
+
+        try:
+            queued_before = float(getattr(audio_source, "queued_duration", 0.0) or 0.0)
+        except Exception:
+            queued_before = None
+
+        try:
+            audio_source.clear_queue()
+        except Exception:
+            logger.debug("audio_queue_flush_failed reason=%s", reason, exc_info=True)
+            return
+
+        try:
+            queued_after = float(getattr(audio_source, "queued_duration", 0.0) or 0.0)
+        except Exception:
+            queued_after = None
+
+        timing.audio_queue_flushed_at = time.monotonic()
+        timing.audio_queue_flushed_before_ms = None if queued_before is None else round(queued_before * 1000)
+        timing.audio_queue_flushed_after_ms = None if queued_after is None else round(queued_after * 1000)
+
+        logger.warning(
+            "audio_queue_flushed reason=%s queued_duration_before_flush_ms=%s queued_duration_after_flush_ms=%s interruption_to_silence_ms=%s",
+            reason,
+            timing.audio_queue_flushed_before_ms,
+            timing.audio_queue_flushed_after_ms,
+            None
+            if timing.barge_in_requested_at is None
+            else round((time.monotonic() - timing.barge_in_requested_at) * 1000),
+        )
+
     def transcript_text(event: object) -> str:
         alternatives = getattr(event, "alternatives", [])
         if not alternatives:
@@ -1557,16 +1644,23 @@ def register_barge_in_events(
             text[:100],
         )
 
-    def request_interrupt(reason: str, text: str, speech_duration: float) -> None:
+    def request_interrupt(
+        reason: str,
+        text: str,
+        speech_duration: float,
+        *,
+        bypass_word_gate: bool = False,
+    ) -> None:
         speech = playing_speech()
         if speech is None:
             return
 
-        words = count_words(text)
         if speech_duration < interrupt_seconds:
+            words = count_words(text)
             log_threshold_not_met(reason, text, words, speech_duration)
             return
-        if min_words > 0 and words < min_words:
+        words = count_words(text)
+        if not bypass_word_gate and min_words > 0 and words < min_words:
             log_threshold_not_met(reason, text, words, speech_duration)
             return
 
@@ -1574,6 +1668,15 @@ def register_barge_in_events(
             setattr(assistant, "_transcribed_interim_text", text)
 
         timing.mark_barge_in_requested(reason)
+        timing.interruption_requested_at = timing.barge_in_requested_at
+        logger.warning(
+            "interruption_requested reason=%s turn=%s speech_ms=%s words=%s bypass_word_gate=%s",
+            reason,
+            timing.turn_id,
+            round(speech_duration * 1000),
+            words,
+            bypass_word_gate,
+        )
         logger.warning(
             "barge_in_tts_cancellation_requested reason=%s words=%s speech_ms=%s "
             "turn=%s text=%r",
@@ -1594,6 +1697,9 @@ def register_barge_in_events(
             if callable(interrupt):
                 interrupt()
                 interrupted = bool(getattr(speech, "interrupted", False))
+
+        if interrupted:
+            clear_audio_queue(reason)
 
         logger.warning(
             "barge_in_agent_speech_interrupt_result interrupted=%s reason=%s turn=%s",
@@ -1618,7 +1724,12 @@ def register_barge_in_events(
         speech_duration = float(
             getattr(event, "speech_duration", current_speech_duration()) or 0.0,
         )
-        request_interrupt("vad_speech_duration", last_interim_text, speech_duration)
+        request_interrupt(
+            "vad_speech_duration",
+            last_interim_text,
+            speech_duration,
+            bypass_word_gate=True,
+        )
 
     def on_interim_transcript(event: object) -> None:
         nonlocal last_interim_text

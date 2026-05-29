@@ -32,6 +32,7 @@ export class StorageService {
     key: string,
     body: Uint8Array,
     contentType: string,
+    options?: { cacheControl?: string },
   ): Promise<string> {
     const r2 = this.getR2Config();
     const client = this.createClient(r2);
@@ -42,6 +43,7 @@ export class StorageService {
         Key: key,
         Body: body,
         ContentType: contentType,
+        ...(options?.cacheControl ? { CacheControl: options.cacheControl } : {}),
       }),
     );
     return key;
@@ -87,6 +89,21 @@ export class StorageService {
       }
       throw error;
     }
+  }
+
+  getPublicUrl(key: string): string | null {
+    const baseUrl =
+      this.config.get<string>('PUBLIC_ASSET_BASE_URL') ??
+      this.config.get<string>('CLOUDFLARE_R2_PUBLIC_BASE_URL');
+    const normalizedBaseUrl = baseUrl?.trim().replace(/\/+$/, '');
+    if (!normalizedBaseUrl) {
+      return null;
+    }
+
+    const objectKey = this.normalizeObjectKey(key);
+    return objectKey
+      ? `${normalizedBaseUrl}/${encodeObjectKey(objectKey)}`
+      : null;
   }
 
   getS3UploadConfig(): R2S3UploadConfig {
@@ -208,4 +225,8 @@ function decodePath(value: string): string {
   } catch {
     return value;
   }
+}
+
+function encodeObjectKey(value: string): string {
+  return value.split('/').map(encodeURIComponent).join('/');
 }
