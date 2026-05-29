@@ -59,6 +59,11 @@ const browserAudioCaptureOptions: AudioCaptureOptions = {
   autoGainControl: true,
   voiceIsolation: true,
 };
+const CLIENT_BARGE_IN_DUCK_VOLUME = 0.15;
+const CLIENT_BARGE_IN_DUCK_START_VOLUME = 0.05;
+const CLIENT_BARGE_IN_DUCK_END_VOLUME = 0.025;
+const CLIENT_BARGE_IN_DUCK_RELEASE_MS = 250;
+const CLIENT_BARGE_IN_AGENT_VOLUME_FLOOR = 0.012;
 
 function logTestCallDebug(event: string, detail?: Record<string, unknown>) {
   console.info('[awaaz:test-call]', event, detail ?? {});
@@ -555,9 +560,13 @@ function BrowserTestRoomChrome({
   const connectionState = useConnectionState();
   
   const [muteBusy, setMuteBusy] = useState(false);
+  const [agentAudioDucked, setAgentAudioDucked] = useState(false);
   const autoMicAttemptRef = useRef(0);
   const readinessLoggedRef = useRef(false);
   const userMutedRef = useRef(false);
+  const bargeInDuckedRef = useRef(false);
+  const localNoiseFloorRef = useRef(0.006);
+  const lastLocalSpeechAtRef = useRef(0);
 
   const localMicPublication = localParticipant.getTrackPublication(
     Track.Source.Microphone,
@@ -607,8 +616,95 @@ function BrowserTestRoomChrome({
   const isAudioActive = mode === 'listening' || mode === 'speaking';
   const agentDisplayName =
     detectedAgent?.name || detectedAgent?.identity || 'Local agent';
+  const agentAudioRenderVolume = agentAudioDucked
+    ? CLIENT_BARGE_IN_DUCK_VOLUME
+    : 1;
 
   
+
+  const setBargeInDucked = useCallback(
+    (nextDucked: boolean, reason: string, threshold: number) => {
+      if (bargeInDuckedRef.current === nextDucked) {
+        return;
+      }
+
+      bargeInDuckedRef.current = nextDucked;
+      setAgentAudioDucked(nextDucked);
+      logTestCallDebug(
+        nextDucked ? 'client_barge_in_duck_started' : 'client_barge_in_duck_ended',
+        {
+          reason,
+          localVolume: Number(localVolume.toFixed(4)),
+          agentVolume: Number(agentVolume.toFixed(4)),
+          threshold: Number(threshold.toFixed(4)),
+          renderVolume: nextDucked ? CLIENT_BARGE_IN_DUCK_VOLUME : 1,
+        },
+      );
+    },
+    [agentVolume, localVolume],
+  );
+
+  useEffect(() => {
+    const now = performance.now();
+    const agentAudible =
+      isRoomConnected &&
+      (agentState === 'speaking' ||
+        mode === 'speaking' ||
+        agentVolume > CLIENT_BARGE_IN_AGENT_VOLUME_FLOOR);
+    const canDuck =
+      agentAudible &&
+      isMicrophoneEnabled &&
+      isMicrophonePublished &&
+      Boolean(localAudioTrack);
+    const floor = localNoiseFloorRef.current;
+
+    if (!canDuck) {
+      localNoiseFloorRef.current = floor * 0.92 + localVolume * 0.08;
+      lastLocalSpeechAtRef.current = 0;
+      setBargeInDucked(
+        false,
+        agentAudible ? 'mic_unavailable' : 'agent_not_speaking',
+        CLIENT_BARGE_IN_DUCK_END_VOLUME,
+      );
+      return;
+    }
+
+    const startThreshold = Math.max(
+      CLIENT_BARGE_IN_DUCK_START_VOLUME,
+      floor * 2.5 + 0.012,
+    );
+    const endThreshold = Math.max(
+      CLIENT_BARGE_IN_DUCK_END_VOLUME,
+      floor * 1.4 + 0.006,
+    );
+    const threshold = bargeInDuckedRef.current ? endThreshold : startThreshold;
+
+    if (localVolume >= threshold) {
+      lastLocalSpeechAtRef.current = now;
+      setBargeInDucked(true, 'local_speech_detected', threshold);
+      return;
+    }
+
+    if (!bargeInDuckedRef.current) {
+      localNoiseFloorRef.current = floor * 0.95 + localVolume * 0.05;
+      return;
+    }
+
+    if (now - lastLocalSpeechAtRef.current >= CLIENT_BARGE_IN_DUCK_RELEASE_MS) {
+      localNoiseFloorRef.current = Math.max(floor, localVolume * 0.8);
+      setBargeInDucked(false, 'local_speech_released', threshold);
+    }
+  }, [
+    agentState,
+    agentVolume,
+    isMicrophoneEnabled,
+    isMicrophonePublished,
+    isRoomConnected,
+    localAudioTrack,
+    localVolume,
+    mode,
+    setBargeInDucked,
+  ]);
 
   const toggleMute = useCallback(async () => {
     const nextEnabled = !isMicrophoneEnabled;
@@ -900,7 +996,7 @@ function BrowserTestRoomChrome({
           'font-medium text-sm shadow-sm transition hover:bg-muted',
         )}
       />
-      <RoomAudioRenderer />
+      <RoomAudioRenderer volume={agentAudioRenderVolume} />
 
       <div className="grid min-h-0 flex-1 gap-4 sm:gap-6 p-4 sm:p-8 overflow-y-auto overflow-x-hidden">
         <section className="flex min-h-[400px] sm:min-h-[500px] flex-col rounded-2xl border border-border/70 bg-card shadow-md overflow-hidden justify-between">

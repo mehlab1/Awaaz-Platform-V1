@@ -15,8 +15,10 @@ RIME_TTS_URL = "https://users.rime.ai/v1/rime-tts"
 RIME_SAMPLE_RATE = 16_000
 RIME_CHANNELS = 1
 PCM_BYTES_PER_SAMPLE = 2
-DEFAULT_FIRST_CHUNK_CHARS = 36
-DEFAULT_CHUNK_CHARS = 90
+# Defaults favor fast barge-in while leaving enough text for natural Rime prosody.
+# Keep RIME_TTS_FIRST_CHUNK_CHARS/RIME_TTS_CHUNK_CHARS env overrides available.
+DEFAULT_FIRST_CHUNK_CHARS = 24
+DEFAULT_CHUNK_CHARS = 48
 DEFAULT_IDLE_FLUSH_SECONDS = 0.35
 SENTENCE_BOUNDARY_RE = re.compile(r"^(.+?[.!?])(\s+|$)", re.DOTALL)
 WHITESPACE_RE = re.compile(r"\s+")
@@ -63,11 +65,15 @@ class RimeTTS(tts.TTS):
         )
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0))
         logger.info(
-            "rime_tts_initialized voice=%s model=%s lang=%s sample_rate=%s",
+            "rime_tts_initialized voice=%s model=%s lang=%s sample_rate=%s "
+            "first_chunk_chars=%s chunk_chars=%s idle_flush_seconds=%s",
             self._voice_id,
             self._model_id,
             self._language,
             self.sample_rate,
+            self._first_chunk_chars,
+            self._chunk_chars,
+            self._idle_flush_seconds,
         )
 
     def synthesize(self, text: str) -> "RimeStream":
@@ -166,7 +172,7 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if not done:
-                    chunk, buffer = take_ready_text(
+                    chunk, buffer, split_reason = take_ready_text(
                         buffer,
                         force=True,
                         target_chars=self._first_chunk_chars
@@ -174,25 +180,36 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
                         else self._chunk_chars,
                     )
                     if chunk:
+                        await self._emit_chunk(
+                            chunk,
+                            is_first=not emitted_any,
+                            flush_reason="idle_timeout",
+                            split_reason=split_reason,
+                        )
                         emitted_any = True
-                        await self._synthesize_chunk(chunk)
                     continue
 
                 try:
                     item = read_task.result()
                     read_task = asyncio.create_task(self._input_ch.__anext__())
+                    flush_reason = "explicit_flush"
                 except StopAsyncIteration:
                     input_closed = True
                     item = self._FlushSentinel()
+                    flush_reason = "input_closed"
 
                 if isinstance(item, self._FlushSentinel):
-                    emitted_any = await self._flush_buffer(buffer, emitted_any)
+                    emitted_any = await self._flush_buffer(
+                        buffer,
+                        emitted_any,
+                        flush_reason,
+                    )
                     buffer = ""
                     continue
 
                 buffer += item
                 while True:
-                    chunk, buffer = take_ready_text(
+                    chunk, buffer, split_reason = take_ready_text(
                         buffer,
                         force=False,
                         target_chars=self._first_chunk_chars
@@ -201,15 +218,25 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
                     )
                     if not chunk:
                         break
+                    await self._emit_chunk(
+                        chunk,
+                        is_first=not emitted_any,
+                        flush_reason="streaming_text",
+                        split_reason=split_reason,
+                    )
                     emitted_any = True
-                    await self._synthesize_chunk(chunk)
         finally:
             if read_task is not None and not read_task.done():
                 await utils.aio.gracefully_cancel(read_task)
 
-    async def _flush_buffer(self, buffer: str, emitted_any: bool) -> bool:
+    async def _flush_buffer(
+        self,
+        buffer: str,
+        emitted_any: bool,
+        flush_reason: str,
+    ) -> bool:
         while buffer.strip():
-            chunk, buffer = take_ready_text(
+            chunk, buffer, split_reason = take_ready_text(
                 buffer,
                 force=True,
                 target_chars=self._first_chunk_chars
@@ -218,9 +245,35 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
             )
             if not chunk:
                 break
+            await self._emit_chunk(
+                chunk,
+                is_first=not emitted_any,
+                flush_reason=flush_reason,
+                split_reason=split_reason,
+            )
             emitted_any = True
-            await self._synthesize_chunk(chunk)
         return emitted_any
+
+    async def _emit_chunk(
+        self,
+        text: str,
+        *,
+        is_first: bool,
+        flush_reason: str,
+        split_reason: str,
+    ) -> None:
+        logger.info(
+            "rime_tts_text_chunk_created rime_tts_chunk_chars=%s "
+            "rime_tts_chunk_flush_reason=%s split_reason=%s is_first=%s preview=%r",
+            len(text),
+            flush_reason,
+            split_reason,
+            is_first,
+            text[:80],
+        )
+        if is_first:
+            logger.info("rime_tts_first_chunk_chars chars=%s", len(text))
+        await self._synthesize_chunk(text)
 
     async def _synthesize_chunk(self, text: str) -> None:
         if not text.strip():
@@ -238,6 +291,7 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
 
         first_frame = True
         frame_count = 0
+        generated_samples = 0
         stream = RimeStream(
             client=self._client,
             api_key=self._api_key,
@@ -252,31 +306,49 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
         )
         try:
             async for audio in stream:
+                frame = getattr(audio, "frame", None)
+                samples_per_channel = int(
+                    getattr(frame, "samples_per_channel", 0) or 0,
+                )
+                generated_samples += samples_per_channel
                 if first_frame:
                     first_frame = False
                     logger.info(
-                        "rime_tts_first_audio_ms=%s chars=%s",
+                        "rime_tts_audio_first_frame_ms=%s chars=%s",
                         round((time.monotonic() - start) * 1000),
                         len(text),
                     )
                 frame_count += 1
                 self._event_ch.send_nowait(audio)
         except asyncio.CancelledError:
+            generated_audio_ms = (
+                round((generated_samples / self._sample_rate) * 1000)
+                if generated_samples
+                else None
+            )
             logger.info(
-                "rime_tts_chunk_cancelled_ms=%s chars=%s frames=%s",
+                "rime_tts_chunk_cancelled tts_stream_cancelled elapsed_ms=%s "
+                "chars=%s frames=%s generated_audio_ms=%s",
                 round((time.monotonic() - start) * 1000),
                 len(text),
                 frame_count,
+                generated_audio_ms,
             )
             raise
         finally:
             await stream.aclose()
 
+        generated_audio_ms = (
+            round((generated_samples / self._sample_rate) * 1000)
+            if generated_samples
+            else None
+        )
         logger.info(
-            "rime_tts_chunk_done_ms=%s chars=%s frames=%s",
+            "rime_tts_chunk_done_ms=%s chars=%s frames=%s generated_audio_ms=%s",
             round((time.monotonic() - start) * 1000),
             len(text),
             frame_count,
+            generated_audio_ms,
         )
 
 
@@ -417,9 +489,9 @@ def take_ready_text(
     *,
     force: bool,
     target_chars: int = DEFAULT_CHUNK_CHARS,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     if not text.strip():
-        return "", ""
+        return "", "", "empty"
 
     candidate = text.lstrip()
     sentence_match = SENTENCE_BOUNDARY_RE.match(candidate)
@@ -427,14 +499,14 @@ def take_ready_text(
         force or len(normalize_chunk(sentence_match.group(1))) >= 8
     ):
         chunk = normalize_chunk(sentence_match.group(1))
-        return chunk, candidate[sentence_match.end() :].lstrip()
+        return chunk, candidate[sentence_match.end() :].lstrip(), "sentence_boundary"
 
     normalized_candidate = normalize_chunk(candidate)
     if not force and len(normalized_candidate) < target_chars:
-        return "", text
+        return "", text, "waiting_for_target_chars"
 
     if force and len(normalized_candidate) <= target_chars:
-        return normalized_candidate, ""
+        return normalized_candidate, "", "forced_flush"
 
     limit = min(len(candidate), target_chars)
     boundary = max(
@@ -448,7 +520,8 @@ def take_ready_text(
 
     chunk = normalize_chunk(candidate[:boundary])
     rest = candidate[boundary:].lstrip()
-    return chunk, rest
+    split_reason = "punctuation_boundary" if candidate[boundary : boundary + 1] in {",", ";", ":"} else "target_chars"
+    return chunk, rest, split_reason
 
 
 def normalize_chunk(text: str) -> str:

@@ -29,8 +29,25 @@ MAX_DURATION_MESSAGE = (
 )
 CONTROL_TOPIC = "awaaz.call.control"
 # Keep the native LiveKit playout queue small so interruption drains room audio quickly.
-# 200ms is a compromise between near-immediate barge-in and enough buffering to avoid underruns.
-LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS = 200
+# Default to 100ms so barge-in has less queued speech to drain. Override with
+# LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS if a deployment needs more buffer headroom.
+DEFAULT_LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS = 100
+
+
+def livekit_audio_source_queue_size_ms() -> int:
+    raw = os.getenv("LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS")
+    if not raw:
+        return DEFAULT_LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid integer env LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS=%r; using %s",
+            raw,
+            DEFAULT_LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS,
+        )
+        return DEFAULT_LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS
+    return max(50, value)
 
 
 def install_livekit_interrupt_patches() -> None:
@@ -43,6 +60,7 @@ def install_livekit_interrupt_patches() -> None:
     if getattr(rtc.AudioSource, "_awaaz_interrupt_patch_applied", False):
         return
 
+    patched_queue_size_ms = livekit_audio_source_queue_size_ms()
     original_init = rtc.AudioSource.__init__
 
     def patched_init(
@@ -53,14 +71,15 @@ def install_livekit_interrupt_patches() -> None:
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         if queue_size_ms == 1000:
-            queue_size_ms = LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS
+            queue_size_ms = patched_queue_size_ms
         original_init(self, sample_rate, num_channels, queue_size_ms, loop)
 
     rtc.AudioSource.__init__ = patched_init  # type: ignore[method-assign]
     setattr(rtc.AudioSource, "_awaaz_interrupt_patch_applied", True)
+    setattr(rtc.AudioSource, "_awaaz_interrupt_queue_size_ms", patched_queue_size_ms)
     logger.info(
         "livekit_audio_source_queue_patch_applied queue_size_ms=%s",
-        LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS,
+        patched_queue_size_ms,
     )
 
 
@@ -775,13 +794,13 @@ def create_assistant(
     vad_activation = float_env("LIVEKIT_VAD_ACTIVATION_THRESHOLD", 0.45)
     interrupt_speech_duration = float_env(
         "LIVEKIT_INTERRUPT_SPEECH_SECONDS",
-        0.18,
+        0.12,
     )
-    interrupt_min_words = int_env("LIVEKIT_INTERRUPT_MIN_WORDS", 1)
+    interrupt_min_words = int_env("LIVEKIT_INTERRUPT_MIN_WORDS", 0)
     logger.info(
         "voice_interruption_config interrupt_speech_seconds=%s interrupt_min_words=%s "
         "vad_min_speech=%s vad_min_silence=%s vad_padding=%s vad_activation=%s "
-        "deepgram_endpointing_ms=%s",
+        "deepgram_endpointing_ms=%s vad_word_gate_enabled=%s",
         interrupt_speech_duration,
         interrupt_min_words,
         vad_min_speech,
@@ -789,6 +808,7 @@ def create_assistant(
         vad_padding,
         vad_activation,
         int_env("DEEPGRAM_ENDPOINTING_MS", 25),
+        interrupt_min_words > 0,
     )
     return VoiceAssistant(
         vad=silero.VAD.load(
@@ -1151,6 +1171,17 @@ class PipelineTiming:
             elapsed_ms(response.user_started_at, response.playback_stopped_at),
             interruption_to_silence_ms,
         )
+        if interrupted:
+            logger.warning(
+                "playback_stopped_after_interrupt turn=%s response=%s "
+                "interruption_to_silence_ms=%s queued_duration_before_flush_ms=%s "
+                "queued_duration_after_flush_ms=%s",
+                response.turn_id,
+                response.response_id,
+                interruption_to_silence_ms,
+                self.audio_queue_flushed_before_ms,
+                self.audio_queue_flushed_after_ms,
+            )
 
     def mark_barge_in_requested(self, reason: str) -> None:
         self.barge_in_requested_at = time.monotonic()
@@ -1541,15 +1572,21 @@ def register_barge_in_events(
 ) -> None:
     opts = getattr(assistant, "_opts", None)
     interrupt_seconds = float(getattr(opts, "int_speech_duration", 0.35) or 0.35)
-    min_words = int(getattr(opts, "int_min_words", 1) or 0)
+    vad_min_words = int(getattr(opts, "int_min_words", 0) or 0)
+    transcript_min_words = max(
+        0,
+        int_env("LIVEKIT_INTERRUPT_TRANSCRIPT_MIN_WORDS", max(1, vad_min_words)),
+    )
     last_interim_text = ""
     user_started_at: float | None = None
     last_threshold_log_at = 0.0
 
     logger.info(
-        "barge_in_monitor_attached interrupt_speech_seconds=%s interrupt_min_words=%s",
+        "barge_in_monitor_attached interrupt_speech_seconds=%s "
+        "vad_interrupt_min_words=%s transcript_interrupt_min_words=%s",
         interrupt_seconds,
-        min_words,
+        vad_min_words,
+        transcript_min_words,
     )
 
     def current_speech_duration() -> float:
@@ -1626,6 +1663,7 @@ def register_barge_in_events(
         reason: str,
         text: str,
         words: int,
+        required_words: int,
         speech_duration: float,
     ) -> None:
         nonlocal last_threshold_log_at
@@ -1638,7 +1676,7 @@ def register_barge_in_events(
             "speech_ms=%s required_speech_ms=%s text=%r",
             reason,
             words,
-            min_words,
+            required_words,
             round(speech_duration * 1000),
             round(interrupt_seconds * 1000),
             text[:100],
@@ -1657,11 +1695,25 @@ def register_barge_in_events(
 
         if speech_duration < interrupt_seconds:
             words = count_words(text)
-            log_threshold_not_met(reason, text, words, speech_duration)
+            required_words = 0 if bypass_word_gate else transcript_min_words
+            log_threshold_not_met(
+                reason,
+                text,
+                words,
+                required_words,
+                speech_duration,
+            )
             return
         words = count_words(text)
-        if not bypass_word_gate and min_words > 0 and words < min_words:
-            log_threshold_not_met(reason, text, words, speech_duration)
+        required_words = 0 if bypass_word_gate else transcript_min_words
+        if required_words > 0 and words < required_words:
+            log_threshold_not_met(
+                reason,
+                text,
+                words,
+                required_words,
+                speech_duration,
+            )
             return
 
         if text:
@@ -1712,7 +1764,15 @@ def register_barge_in_events(
         nonlocal user_started_at, last_interim_text
         user_started_at = time.monotonic()
         last_interim_text = ""
-        if playing_speech() is not None:
+        speech = playing_speech()
+        logger.info(
+            "vad_speech_started turn=%s during_agent_playback=%s "
+            "interrupt_speech_seconds=%s",
+            timing.turn_id,
+            speech is not None,
+            interrupt_seconds,
+        )
+        if speech is not None:
             logger.info(
                 "barge_in_user_speech_detected_during_agent_playback turn=%s",
                 timing.turn_id,
