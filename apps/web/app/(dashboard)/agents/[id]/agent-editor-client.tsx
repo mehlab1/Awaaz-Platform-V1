@@ -75,6 +75,19 @@ function preloadTestCallModal() {
 }
 
 const VERSION_HISTORY_PREVIEW_LIMIT = 3;
+const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
+
+const LLM_OPTIONS = [
+  { value: DEFAULT_LLM_MODEL, label: 'Groq - Llama 3.3 70B Versatile' },
+] as const;
+
+const TTS_OPTIONS = [
+  { value: 'rime', label: 'Rime TTS' },
+] as const;
+
+const STT_OPTIONS = [
+  { value: 'deepgram', label: 'Deepgram STT' },
+] as const;
 
 const BLUEPRINTS = [
   {
@@ -160,6 +173,11 @@ interface PhoneDto {
         deletedAt: string | null;
       }
     | null;
+}
+
+interface PipelineOption {
+  readonly value: string;
+  readonly label: string;
 }
 
 export function AgentEditorClient({ agentId }: { agentId: string }) {
@@ -723,7 +741,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const body: Record<string, unknown> = {
       systemPrompt: prompt,
       voiceId: selectedVoiceId,
-      model: source?.model ?? 'llama-3.3-70b-versatile',
+      model: source?.model ?? DEFAULT_LLM_MODEL,
       temperature: source?.temperature ?? 0.7,
       maxTokens: source?.maxTokens ?? 1024,
       endCallPhrases: source?.endCallPhrases ?? [],
@@ -812,6 +830,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setVoiceSaveBusy(true);
 
     if (!selectedVersion || !activeOrgId) {
+      if (!selectedVersion) {
+        setToast('Voice selected for the next saved version.');
+      }
       setVoiceSaveBusy(false);
       return;
     }
@@ -937,6 +958,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const selectedVoice = voices.find((v) => v.rimeVoiceId === selectedVoiceId);
+  const selectedModelValue =
+    selectedVersion?.model ?? liveVersion?.model ?? DEFAULT_LLM_MODEL;
+  const llmOptions = modelOptionsFor(selectedModelValue);
   const hasUsableLiveConfig =
     liveVersion != null &&
     liveVersion.systemPrompt.trim().length > 0 &&
@@ -1634,6 +1658,68 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
         {/* ─── RIGHT COLUMN: Version Control Center ─── */}
         <div className="space-y-5 lg:self-start lg:sticky lg:top-[60px]">
+          {/* Voice Pipeline */}
+          <div className="rounded-xl border border-border/50 bg-muted/[0.03] p-4 space-y-4">
+            <div>
+              <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <Settings2 className="size-3 text-muted-foreground" />
+                Voice Pipeline
+              </h3>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                Configure the voice and model stack after creating the agent.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-lg border border-border/40 bg-background/70 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Voice
+                    </p>
+                    <p className="mt-1 truncate text-sm font-medium text-foreground">
+                      {(selectedVoice?.name ?? selectedVoiceId) || 'Choose a voice'}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      {selectedVoice
+                        ? selectedVoice.rimeVoiceId
+                        : 'Required before saving or publishing a version.'}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 text-xs"
+                    disabled={saveBusy !== null || voiceSaveBusy}
+                    onClick={() => setVoiceModalOpen(true)}
+                  >
+                    {selectedVoiceId ? 'Change' : 'Choose'}
+                  </Button>
+                </div>
+              </div>
+
+              <PipelineSelect
+                label="TTS"
+                value={TTS_OPTIONS[0].value}
+                options={TTS_OPTIONS}
+                note="Only one TTS provider is available right now."
+              />
+              <PipelineSelect
+                label="STT"
+                value={STT_OPTIONS[0].value}
+                options={STT_OPTIONS}
+                note="Only one STT provider is available right now."
+              />
+              <PipelineSelect
+                label="LLM"
+                value={selectedModelValue}
+                options={llmOptions}
+                note="Only one model is available right now."
+              />
+            </div>
+          </div>
+
           {/* Version Actions Card */}
           <div className="rounded-xl border border-border/50 bg-muted/[0.03] p-4 space-y-3">
             <div className="flex items-center justify-between">
@@ -2419,6 +2505,48 @@ function AgentEditorSkeleton() {
       </div>
     </div>
   );
+}
+
+function PipelineSelect({
+  label,
+  value,
+  options,
+  note,
+}: {
+  label: string;
+  value: string;
+  options: readonly PipelineOption[];
+  note: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <select
+        className="mt-1 h-9 w-full cursor-not-allowed rounded-lg border border-border/50 bg-background/70 px-2.5 text-xs font-medium text-foreground shadow-sm outline-none disabled:opacity-100"
+        value={value}
+        disabled
+        aria-label={`${label} provider`}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <span className="mt-1 block text-[11px] leading-relaxed text-muted-foreground">
+        {note}
+      </span>
+    </label>
+  );
+}
+
+function modelOptionsFor(value: string): PipelineOption[] {
+  if (LLM_OPTIONS.some((option) => option.value === value)) {
+    return [...LLM_OPTIONS];
+  }
+  return [{ value, label: `Current model - ${value}` }];
 }
 
 function VersionMenuButton({

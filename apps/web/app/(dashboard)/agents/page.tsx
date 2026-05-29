@@ -33,7 +33,6 @@ import { cn } from '@/lib/utils';
 import {
   CreateAgentDialog,
   type CreateAgentInput,
-  type VoiceOption,
 } from './create-agent-dialog';
 
 interface AgentListRow {
@@ -59,8 +58,10 @@ interface CreatedAgent {
   id: string;
 }
 
-interface CreatedAgentVersion {
+interface VoiceOption {
   id: string;
+  rimeVoiceId: string;
+  name: string;
 }
 
 type ViewMode = 'grid' | 'table';
@@ -171,33 +172,6 @@ export default function AgentsPage() {
       }
       const agent = (await agentRes.json()) as CreatedAgent;
 
-      const versionRes = await apiCall(`/api/v1/agents/${agent.id}/versions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemPrompt: input.systemPrompt,
-          voiceId: input.voiceId,
-          model: 'llama-3.3-70b-versatile',
-          temperature: 0.7,
-          maxTokens: 1024,
-          firstMessage: `Hi, this is ${input.name}. How can I help you today?`,
-          endCallPhrases: ['goodbye', 'bye', 'thank you'],
-        }),
-      });
-      if (!versionRes.ok) {
-        throw new Error(await responseMessage(versionRes));
-      }
-      const version = (await versionRes.json()) as CreatedAgentVersion;
-
-      const publishRes = await apiCall(
-        `/api/v1/agents/${agent.id}/versions/${version.id}/publish`,
-        { method: 'POST' },
-      );
-      if (!publishRes.ok) {
-        throw new Error(await responseMessage(publishRes));
-      }
-
-      await loadData();
       router.push(`/agents/${agent.id}`);
     } finally {
       setCreating(false);
@@ -267,7 +241,6 @@ export default function AgentsPage() {
             isBusy={creating}
             canCreate={canCreateAgent}
             disabledReason={createAgentDisabledReason}
-            voices={voices}
             onSubmit={createAgent}
           />
         </div>
@@ -346,7 +319,6 @@ export default function AgentsPage() {
               isBusy={creating}
               canCreate={canCreateAgent}
               disabledReason={createAgentDisabledReason}
-              voices={voices}
               onSubmit={createAgent}
             />
           </div>
