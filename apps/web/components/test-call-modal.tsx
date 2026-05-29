@@ -410,7 +410,7 @@ function VoiceOrb({
           <>
             <span
               className={cn(
-                "absolute h-40 w-40 rounded-full border transition-all duration-300",
+                "absolute h-32 w-32 sm:h-40 sm:w-40 rounded-full border transition-all duration-300",
                 mode === 'speaking' ? 'border-emerald-500/25' : 'border-indigo-500/25'
               )}
               style={{
@@ -419,7 +419,7 @@ function VoiceOrb({
               }}
             />
             <span className={cn(
-              "absolute h-52 w-52 animate-pulse rounded-full border",
+              "absolute h-44 w-44 sm:h-52 sm:w-52 animate-pulse rounded-full border",
               mode === 'speaking' ? 'border-teal-500/10' : 'border-purple-500/10'
             )} />
           </>
@@ -431,7 +431,7 @@ function VoiceOrb({
           onClick={onToggleMute}
           disabled={isBusy}
           className={cn(
-            'relative grid h-32 w-32 place-items-center rounded-full border transition-all duration-150',
+            'relative grid h-24 w-24 sm:h-32 sm:w-32 place-items-center rounded-full border transition-all duration-150',
             'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring/30',
             meta.orbClassName,
             isBusy && 'cursor-not-allowed opacity-70',
@@ -439,11 +439,11 @@ function VoiceOrb({
           style={{ transform: `scale(${scale})` }}
         >
           {isBusy ? (
-            <Loader2 className="h-12 w-12 animate-spin" aria-hidden />
+            <Loader2 className="h-10 w-10 sm:h-12 sm:w-12 animate-spin" aria-hidden />
           ) : isMuted ? (
-            <MicOff className="h-12 w-12" aria-hidden />
+            <MicOff className="h-10 w-10 sm:h-12 sm:w-12" aria-hidden />
           ) : (
-            <Mic className="h-12 w-12" aria-hidden />
+            <Mic className="h-10 w-10 sm:h-12 sm:w-12" aria-hidden />
           )}
         </button>
       </div>
@@ -902,10 +902,10 @@ function BrowserTestRoomChrome({
       />
       <RoomAudioRenderer />
 
-      <div className="grid min-h-0 flex-1 gap-6 p-8 overflow-hidden">
-        <section className="flex min-h-[500px] flex-col rounded-2xl border border-border/70 bg-card shadow-md overflow-hidden justify-between">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 px-6 py-4 bg-muted/[0.02]">
-            <div className="flex items-center gap-2">
+      <div className="grid min-h-0 flex-1 gap-4 sm:gap-6 p-4 sm:p-8 overflow-y-auto overflow-x-hidden">
+        <section className="flex min-h-[400px] sm:min-h-[500px] flex-col rounded-2xl border border-border/70 bg-card shadow-md overflow-hidden justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 px-4 sm:px-6 py-4 bg-muted/[0.02]">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="text-[10px] px-2 py-0.5">
                 Browser Preview
               </Badge>
@@ -933,7 +933,7 @@ function BrowserTestRoomChrome({
             </div>
           </div>
 
-          <div className="flex flex-1 flex-col items-center justify-center gap-8 px-6 py-10 bg-gradient-to-b from-card via-card to-muted/[0.04]">
+          <div className="flex flex-1 flex-col items-center justify-center gap-6 sm:gap-8 px-4 sm:px-6 py-8 sm:py-10 bg-gradient-to-b from-card via-card to-muted/[0.04]">
             <div className="text-center">
               <p className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
                 Testing
@@ -971,7 +971,7 @@ function BrowserTestRoomChrome({
             ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3 border-t border-border/40 bg-muted/20 px-6 py-4">
+          <div className="flex flex-wrap items-center justify-center gap-3 border-t border-border/40 bg-muted/20 px-4 sm:px-6 py-4">
             <Button
               type="button"
               variant="outline"
@@ -1216,12 +1216,12 @@ export function TestCallModal(props: TestCallModalProps) {
       role="dialog"
       aria-modal
       aria-label="Browser agent test call"
-      className="animate-in fade-in fixed inset-0 z-[260] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 duration-200"
+      className="animate-in fade-in fixed inset-0 z-[260] flex items-center justify-center bg-black/60 backdrop-blur-md p-2 sm:p-4 duration-200"
     >
-      <div className="relative w-full max-w-5xl h-[85vh] min-h-[600px] max-h-[820px] rounded-3xl border border-border/80 bg-background shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-        <header className="flex items-center justify-between gap-4 border-b border-border/40 bg-card/45 px-6 py-4 shrink-0">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
+      <div className="relative w-full max-w-5xl h-[95vh] sm:h-[85vh] min-h-[450px] sm:min-h-[600px] max-h-[820px] rounded-2xl sm:rounded-3xl border border-border/80 bg-background shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+        <header className="flex items-start sm:items-center justify-between gap-3 sm:gap-4 border-b border-border/40 bg-card/45 px-4 sm:px-6 py-3 sm:py-4 shrink-0">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
               <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary text-[10px] px-2 py-0.5">
                 <Phone className="h-3 w-3 mr-1" aria-hidden />
                 Browser preview
@@ -1235,7 +1235,7 @@ export function TestCallModal(props: TestCallModalProps) {
             <h2 className="mt-2 truncate font-semibold text-lg tracking-tight">
               Test Agent: {agentName}
             </h2>
-            <p className="mt-0.5 max-w-2xl text-muted-foreground text-xs">
+            <p className="mt-0.5 max-w-2xl text-muted-foreground text-[11px] sm:text-xs leading-relaxed">
               {lifecycleNotice ??
                 (sessionPhase === 'ENDING'
                   ? 'Ending session...'
@@ -1244,13 +1244,13 @@ export function TestCallModal(props: TestCallModalProps) {
           </div>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon"
             aria-label="Close modal"
             onClick={closeModal}
-            className="shrink-0 rounded-full hover:bg-muted hover:text-foreground transition-colors"
+            className="shrink-0 -mr-2 sm:mr-0 h-8 w-8 sm:h-10 sm:w-10 rounded-full hover:bg-muted/50 hover:text-foreground transition-colors"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4 sm:h-5 sm:w-5" />
           </Button>
         </header>
 
@@ -1345,9 +1345,9 @@ export function TestCallModal(props: TestCallModalProps) {
             </div>
           </div>
         ) : (
-          <div className="grid flex-1 place-items-center px-6 bg-card/30">
-            <div className="rounded-2xl border border-border/85 bg-card p-8 text-center shadow-lg max-w-sm">
-              <Loader2 className="mx-auto h-11 w-11 animate-spin text-muted-foreground" />
+          <div className="grid flex-1 place-items-center px-4 sm:px-6 bg-card/30">
+            <div className="rounded-2xl border border-border/85 bg-card p-6 sm:p-8 text-center shadow-lg max-w-sm">
+              <Loader2 className="mx-auto h-10 w-10 sm:h-11 sm:w-11 animate-spin text-muted-foreground" />
               <p className="mt-4 text-muted-foreground text-sm">
                 Preparing your voice session...
               </p>
@@ -1356,7 +1356,7 @@ export function TestCallModal(props: TestCallModalProps) {
         )}
 
         {session !== null && sessionPhase === 'CONNECTING' && !fetchFailed ? (
-          <footer className="border-t border-border bg-muted/20 px-8 py-3.5 text-center text-muted-foreground text-xs shrink-0">
+          <footer className="border-t border-border bg-muted/20 px-4 sm:px-8 py-3.5 text-center text-muted-foreground text-xs shrink-0">
             Allow microphone access when the browser asks.
           </footer>
         ) : null}
