@@ -2553,7 +2553,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         ) : null}
       </Dialog>
 
-      {/* Voice Selector Modal */}
+      {/* ═══════════════ VOICE SELECTOR MODAL ═══════════════ */}
       <Dialog
         open={voiceModalOpen}
         onOpenChange={(next) => {
@@ -2563,33 +2563,31 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           }
         }}
       >
-        <DialogContent className="flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border border-border/80 bg-background p-0 shadow-2xl sm:h-[88vh] sm:max-h-[90vh] sm:w-[92vw] sm:max-w-none xl:w-[90vw]">
-          <div className="shrink-0 border-b border-border/50 bg-background px-4 py-4 sm:px-6">
-            <DialogHeader className="gap-1">
-              <DialogTitle className="text-xl font-semibold tracking-tight sm:text-2xl">Select Agent Voice</DialogTitle>
-              <DialogDescription className="text-xs text-muted-foreground">
-                Browse provider voices, preview samples, and choose the voice your assistant will use.
+        <DialogContent className="flex h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border border-border/60 bg-background p-0 shadow-2xl sm:h-[86vh] sm:max-h-[86vh] sm:w-[90vw] sm:max-w-[1400px]">
+
+          {/* ── Modal Header ── */}
+          <div className="shrink-0 border-b border-border/40 bg-background px-5 pb-5 pt-5 sm:px-8">
+            <DialogHeader className="gap-0.5">
+              <DialogTitle className="text-lg font-semibold tracking-tight sm:text-xl">Select Agent Voice</DialogTitle>
+              <DialogDescription className="text-[13px] text-muted-foreground">
+                Browse providers, preview samples, and choose the voice for your assistant.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="mt-5">
-              <div className="flex flex-wrap items-end justify-between gap-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Voice Provider
+            {/* Provider pills — horizontal scroll on mobile, flex-wrap on desktop */}
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+                  Provider
                 </p>
-                <p className="text-xs font-medium text-muted-foreground">
-                  Browsing {voiceProviderLabel(selectedVoiceProvider)}
+                <p className="text-[11px] font-medium text-muted-foreground">
+                  {voiceProviderLabel(selectedVoiceProvider)} · {voiceProviderCounts[selectedVoiceProvider] ?? 0} voices
                 </p>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6" role="tablist" aria-label="Voice provider">
+              <div className="mt-2.5 flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap sm:overflow-visible" role="tablist" aria-label="Voice provider">
                 {VOICE_PROVIDERS.map((provider) => {
                   const isActive = selectedVoiceProvider === provider.id;
                   const providerCount = voiceProviderCounts[provider.id];
-                  const statusLabel = isActive
-                    ? 'Active'
-                    : providerCount > 0
-                      ? 'Available'
-                      : 'Coming Soon';
                   return (
                     <button
                       key={provider.id}
@@ -2597,10 +2595,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                       role="tab"
                       aria-selected={isActive}
                       className={cn(
-                        'group min-h-[84px] rounded-xl border bg-background p-3 text-left shadow-sm outline-none transition-all duration-150 sm:min-h-[96px] focus-visible:ring-2 focus-visible:ring-ring',
+                        'group relative flex shrink-0 items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring sm:shrink',
                         isActive
-                          ? 'border-foreground/35 bg-muted/30 shadow-md ring-1 ring-foreground/10'
-                          : 'border-border/70 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md',
+                          ? 'border-foreground/20 bg-foreground/[0.05] shadow-sm'
+                          : 'border-border/50 bg-background hover:border-foreground/15 hover:bg-muted/30',
                       )}
                       onClick={() => {
                         setSelectedVoiceProvider(provider.id);
@@ -2609,25 +2607,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         setVoiceTypeFilter('all');
                       }}
                     >
-                      <span className="flex items-start justify-between gap-2">
-                        <VoiceProviderLogo providerId={provider.id} active={isActive} />
-                        <span
-                          className={cn(
-                            'rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
-                            isActive
-                              ? 'border-foreground/15 bg-foreground text-background'
-                              : 'border-border/60 bg-muted/40 text-muted-foreground',
-                          )}
-                        >
-                          {statusLabel}
+                      <VoiceProviderLogo providerId={provider.id} active={isActive} />
+                      <div className="min-w-0">
+                        <span className="block text-[13px] font-semibold text-foreground">{provider.label}</span>
+                        <span className="block text-[11px] text-muted-foreground">
+                          {providerCount > 0 ? `${providerCount} voices` : 'Coming soon'}
                         </span>
-                      </span>
-                      <span className="mt-3 block text-sm font-semibold text-foreground">
-                        {provider.label}
-                      </span>
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        {providerCount > 0 ? `${providerCount} Voices` : 'Coming Soon'}
-                      </span>
+                      </div>
+                      {isActive && (
+                        <span className="absolute -top-1 -right-1 flex size-4 items-center justify-center rounded-full bg-foreground text-background shadow-sm">
+                          <Check className="size-2.5" aria-hidden />
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -2635,32 +2626,48 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </div>
           </div>
 
-          <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] bg-muted/[0.05] lg:grid-cols-[minmax(0,1fr)_minmax(300px,32%)] lg:grid-rows-1">
-            <section className="order-last flex min-h-0 flex-col lg:order-none">
-              <div className="shrink-0 border-b border-border/50 bg-background/95 px-4 py-4 sm:px-6">
-                <div className="flex flex-wrap items-end justify-between gap-2">
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Voice Library
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {filteredVoices.length} of {providerVoices.length} {voiceProviderLabel(selectedVoiceProvider)} voices
-                    </p>
+          {/* ── Body: Voice List + Selected Panel ── */}
+          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+
+            {/* Left: Voice Library */}
+            <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {/* Search + Filters */}
+              <div className="shrink-0 border-b border-border/30 bg-background px-5 py-3.5 sm:px-8">
+                <div className="flex items-center gap-3">
+                  <label className="relative flex-1">
+                    <span className="sr-only">Search voices</span>
+                    <Search className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/60" />
+                    <input
+                      type="text"
+                      placeholder="Search voices…"
+                      className="h-10 w-full rounded-lg border border-input bg-muted/20 pl-10 pr-4 text-sm outline-none transition placeholder:text-muted-foreground/50 focus-visible:border-foreground/20 focus-visible:bg-background focus-visible:ring-2 focus-visible:ring-ring"
+                      value={voiceSearchQuery}
+                      onChange={(e) => setVoiceSearchQuery(e.target.value)}
+                    />
+                  </label>
+                  <div className="hidden items-center gap-2 sm:flex">
+                    <VoiceFilterSelect
+                      label="Gender"
+                      value={voiceGenderFilter}
+                      options={voiceGenderOptions}
+                      onChange={setVoiceGenderFilter}
+                    />
+                    <VoiceFilterSelect
+                      label="Accent"
+                      value={voiceAccentFilter}
+                      options={voiceAccentOptions}
+                      onChange={setVoiceAccentFilter}
+                    />
+                    <VoiceFilterSelect
+                      label="Type"
+                      value={voiceTypeFilter}
+                      options={voiceTypeOptions}
+                      onChange={setVoiceTypeFilter}
+                    />
                   </div>
                 </div>
-                <label className="relative mt-3 block min-w-0">
-                  <span className="sr-only">Search voices</span>
-                  <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search by voice name, ID, accent, or style"
-                    className="h-12 w-full rounded-xl border border-input bg-background pl-11 pr-4 text-sm shadow-sm outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
-                    value={voiceSearchQuery}
-                    onChange={(e) => setVoiceSearchQuery(e.target.value)}
-                  />
-                </label>
-
-                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {/* Mobile-only filter row */}
+                <div className="mt-2.5 grid grid-cols-3 gap-2 sm:hidden">
                   <VoiceFilterSelect
                     label="Gender"
                     value={voiceGenderFilter}
@@ -2680,10 +2687,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     onChange={setVoiceTypeFilter}
                   />
                 </div>
+                <p className="mt-2 text-[11px] text-muted-foreground/70">
+                  Showing {filteredVoices.length} of {providerVoices.length} voices
+                </p>
               </div>
 
-              <div ref={voiceListRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-                <div className="mx-auto flex max-w-5xl flex-col gap-3">
+              {/* Voice list */}
+              <div ref={voiceListRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 sm:px-8">
+                <div className="flex flex-col gap-2">
                   {filteredVoices.map((v) => {
                     const isTempSelected = tempSelectedVoiceId === v.rimeVoiceId;
                     const isPlaying = playingVoiceId === v.rimeVoiceId;
@@ -2702,10 +2713,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         role="button"
                         tabIndex={0}
                         className={cn(
-                          'group relative grid min-h-[156px] cursor-pointer grid-cols-1 gap-4 rounded-xl border bg-background/95 p-4 text-left shadow-sm outline-none transition-all duration-150 [contain-intrinsic-size:156px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-ring md:min-h-[132px] md:grid-cols-[minmax(220px,0.85fr)_minmax(240px,1fr)_auto]',
+                          'group relative flex cursor-pointer items-center gap-4 rounded-xl border p-3.5 outline-none transition-all duration-200 [contain-intrinsic-size:72px] [content-visibility:auto] focus-visible:ring-2 focus-visible:ring-ring',
                           isTempSelected
-                            ? 'border-foreground/35 bg-muted/35 shadow-md ring-1 ring-foreground/10'
-                            : 'border-border/70 hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md',
+                            ? 'border-foreground/25 bg-foreground/[0.03] shadow-sm ring-1 ring-foreground/[0.08]'
+                            : 'border-border/50 bg-background hover:border-foreground/15 hover:bg-muted/20 hover:shadow-sm',
                         )}
                         onClick={() => setTempSelectedVoiceId(v.rimeVoiceId)}
                         onKeyDown={(event) => {
@@ -2715,45 +2726,34 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                           }
                         }}
                       >
-                        {isTempSelected ? (
-                          <span className="absolute right-3 top-3 inline-flex size-6 items-center justify-center rounded-full bg-foreground text-background shadow-sm">
-                            <Check className="size-3.5" aria-hidden />
-                          </span>
-                        ) : null}
+                        {/* Avatar */}
+                        <VoiceAvatar voice={v} fallback={v.name} />
 
-                        <div className="flex min-w-0 items-start gap-3 pr-8 md:pr-0">
-                          <VoiceAvatar voice={v} fallback={v.name} />
-                          <div className="min-w-0">
-                            <p className="truncate text-base font-semibold text-foreground">
-                              {v.name}
-                            </p>
-                            <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground">
-                              {voiceTraitText(v)}
-                            </p>
-                            <p className="mt-1 truncate text-[11px] font-medium text-muted-foreground/80">
-                              {v.rimeVoiceId}
-                            </p>
+                        {/* Name + meta */}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-semibold text-foreground">{v.name}</p>
+                            {isTempSelected && (
+                              <span className="inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                                <Check className="size-3" aria-hidden />
+                              </span>
+                            )}
                           </div>
-                        </div>
-
-                        <div className="flex min-w-0 flex-col justify-center">
-                          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                            Metadata
-                          </p>
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            <VoiceMetaPill>{voiceProviderLabel(voiceProviderId(v))}</VoiceMetaPill>
+                          <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{voiceTraitText(v)}</p>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1">
                             <VoiceMetaPill>{voiceGenderLabel(v)}</VoiceMetaPill>
                             <VoiceMetaPill>{voiceAccentLabel(v)}</VoiceMetaPill>
                             <VoiceMetaPill>{voiceTypeLabel(v)}</VoiceMetaPill>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 md:justify-end">
+                        {/* Actions */}
+                        <div className="flex shrink-0 items-center gap-1.5">
                           <Button
                             type="button"
                             size="sm"
-                            variant={isPlaying ? 'default' : 'outline'}
-                            className="h-10 flex-1 gap-2 rounded-full px-3 text-xs md:flex-none"
+                            variant={isPlaying ? 'default' : 'ghost'}
+                            className="h-9 w-9 rounded-full p-0"
                             onClick={(e) => {
                               e.stopPropagation();
                               void playVoicePreview(v);
@@ -2768,20 +2768,22 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                             ) : (
                               <Play className="size-3.5 fill-current" />
                             )}
-                            <span>{isLoadingPreview ? 'Loading' : isPlaying ? 'Playing' : 'Preview'}</span>
                           </Button>
                           <Button
                             type="button"
                             size="sm"
                             variant={isTempSelected ? 'default' : 'outline'}
-                            className="h-10 flex-1 gap-2 rounded-full px-3 text-xs md:flex-none"
+                            className={cn(
+                              'hidden h-8 rounded-full px-3 text-[11px] font-medium sm:inline-flex',
+                              isTempSelected && 'gap-1.5',
+                            )}
                             onClick={(e) => {
                               e.stopPropagation();
                               setTempSelectedVoiceId(v.rimeVoiceId);
                             }}
                           >
-                            {isTempSelected ? <Check className="size-3.5" aria-hidden /> : null}
-                            <span>{isTempSelected ? 'Selected' : 'Select'}</span>
+                            {isTempSelected && <Check className="size-3" aria-hidden />}
+                            {isTempSelected ? 'Selected' : 'Select'}
                           </Button>
                         </div>
                       </div>
@@ -2789,113 +2791,124 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   })}
 
                   {filteredVoices.length === 0 && (
-                    <div className="grid min-h-[260px] place-items-center rounded-xl border border-dashed border-border/70 bg-background/70 px-4 text-center">
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">
-                          No {voiceProviderLabel(selectedVoiceProvider)} voices match this view.
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Try a different provider, search, or filter.
-                        </p>
+                    <div className="flex min-h-[240px] flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-muted/10 px-6 py-12 text-center">
+                      <div className="mx-auto flex size-12 items-center justify-center rounded-full border border-border/50 bg-background">
+                        <Search className="size-5 text-muted-foreground/60" aria-hidden />
                       </div>
+                      <p className="mt-3 text-sm font-semibold text-foreground">
+                        No voices found
+                      </p>
+                      <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+                        No {voiceProviderLabel(selectedVoiceProvider)} voices match your current filters. Try a different search term or adjust filters.
+                      </p>
                     </div>
                   )}
                 </div>
               </div>
             </section>
 
-            <aside className="order-first max-h-[40dvh] min-h-0 overflow-y-auto border-b border-border/50 bg-background/95 p-4 sm:p-6 lg:order-none lg:max-h-none lg:border-b-0 lg:border-l">
-              <div className="sticky top-0 rounded-2xl border border-border/70 bg-background p-5 shadow-xl shadow-foreground/5">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {/* Right: Selected voice detail */}
+            <aside className="hidden w-[320px] shrink-0 border-l border-border/30 bg-muted/[0.02] lg:flex lg:flex-col">
+              <div className="flex-1 overflow-y-auto overscroll-contain p-5">
+                <div className="rounded-2xl border border-border/50 bg-background p-5 shadow-lg shadow-foreground/[0.03]">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
                     Selected Voice
                   </p>
+
                   {selectedPanelVoice ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-foreground/15 bg-muted/50 px-2.5 py-1 text-[11px] font-semibold text-foreground">
-                      <Check className="size-3.5" aria-hidden />
-                      Selected
-                    </span>
-                  ) : null}
+                    <div className="mt-4">
+                      <div className="flex flex-col items-center text-center">
+                        <div className="relative">
+                          <VoiceAvatar voice={selectedPanelVoice} fallback={selectedPanelVoice.name} size="lg" />
+                          <span className="absolute -bottom-0.5 -right-0.5 flex size-5 items-center justify-center rounded-full border-2 border-background bg-foreground text-background">
+                            <Check className="size-2.5" aria-hidden />
+                          </span>
+                        </div>
+                        <p className="mt-3 max-w-full truncate text-lg font-semibold tracking-tight text-foreground">
+                          {selectedPanelVoice.name}
+                        </p>
+                        <p className="mt-0.5 text-[13px] text-muted-foreground">
+                          {selectedPanelProviderLabel}
+                        </p>
+                      </div>
+
+                      <div className="mt-4 space-y-1.5">
+                        <VoicePanelField label="Gender" value={voiceGenderLabel(selectedPanelVoice)} />
+                        <VoicePanelField label="Accent" value={voiceAccentLabel(selectedPanelVoice)} />
+                        <VoicePanelField label="Type" value={voiceTypeLabel(selectedPanelVoice)} />
+                      </div>
+
+                      <Button
+                        type="button"
+                        className="mt-4 h-10 w-full gap-2 rounded-full text-[13px] font-medium"
+                        variant={selectedPanelPlaying ? 'default' : 'outline'}
+                        onClick={() => void playVoicePreview(selectedPanelVoice)}
+                        disabled={selectedPanelPreviewLoading}
+                      >
+                        {selectedPanelPreviewLoading ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : selectedPanelPlaying ? (
+                          <VoiceWaveform />
+                        ) : (
+                          <Play className="size-4 fill-current" />
+                        )}
+                        <span>
+                          {selectedPanelPreviewLoading
+                            ? 'Loading…'
+                            : selectedPanelPlaying
+                              ? 'Playing…'
+                              : 'Preview Voice'}
+                        </span>
+                      </Button>
+
+                      <div className="mt-4 rounded-lg border border-border/40 bg-muted/15 px-3 py-2.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+                          Voice ID
+                        </p>
+                        <p className="mt-0.5 break-all text-[12px] font-mono text-foreground/80">
+                          {selectedPanelVoice.rimeVoiceId}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-6 flex flex-col items-center py-6 text-center">
+                      <div className="flex size-14 items-center justify-center rounded-full border border-dashed border-border/60 bg-muted/15">
+                        <Volume2 className="size-5 text-muted-foreground/50" aria-hidden />
+                      </div>
+                      <p className="mt-3 text-sm font-semibold text-foreground">No voice selected</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Click a voice from the library to preview details here.
+                      </p>
+                    </div>
+                  )}
                 </div>
-
-                {selectedPanelVoice ? (
-                  <div className="mt-5">
-                    <div className="flex flex-col items-center text-center">
-                      <VoiceAvatar voice={selectedPanelVoice} fallback={selectedPanelVoice.name} size="lg" />
-                      <p className="mt-4 max-w-full truncate text-xl font-semibold tracking-tight text-foreground">
-                        {selectedPanelVoice.name}
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-muted-foreground">
-                        {selectedPanelProviderLabel}
-                      </p>
-                    </div>
-
-                    <div className="mt-5 grid gap-2">
-                      <VoicePanelField label="Gender" value={voiceGenderLabel(selectedPanelVoice)} />
-                      <VoicePanelField label="Accent" value={voiceAccentLabel(selectedPanelVoice)} />
-                      <VoicePanelField label="Type" value={voiceTypeLabel(selectedPanelVoice)} />
-                    </div>
-
-                    <Button
-                      type="button"
-                      className="mt-5 h-11 w-full gap-2 rounded-full"
-                      variant={selectedPanelPlaying ? 'default' : 'outline'}
-                      onClick={() => void playVoicePreview(selectedPanelVoice)}
-                      disabled={selectedPanelPreviewLoading}
-                    >
-                      {selectedPanelPreviewLoading ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : selectedPanelPlaying ? (
-                        <VoiceWaveform />
-                      ) : (
-                        <Play className="size-4 fill-current" />
-                      )}
-                      <span>
-                        {selectedPanelPreviewLoading
-                          ? 'Loading Preview'
-                          : selectedPanelPlaying
-                            ? 'Playing Preview'
-                            : 'Preview Voice'}
-                      </span>
-                    </Button>
-
-                    <div className="mt-5 rounded-xl border border-border/60 bg-muted/25 p-3">
-                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Voice ID
-                      </p>
-                      <p className="mt-1 break-all text-xs font-medium text-foreground">
-                        {selectedPanelVoice.rimeVoiceId}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-5 rounded-xl border border-dashed border-border/70 bg-muted/20 p-5 text-center">
-                    <div className="mx-auto flex size-14 items-center justify-center rounded-full border border-border/70 bg-background">
-                      <Volume2 className="size-5 text-muted-foreground" aria-hidden />
-                    </div>
-                    <p className="mt-3 text-sm font-semibold text-foreground">
-                      No voice selected
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Choose a voice from the library.
-                    </p>
-                  </div>
-                )}
               </div>
             </aside>
           </div>
 
-          <DialogFooter className="mx-0 mb-0 shrink-0 rounded-none border-t border-border/50 bg-background px-4 py-3 sm:px-6">
-            <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <span className="text-xs text-muted-foreground">
-                {selectedPanelVoice ? `Selected: ${selectedPanelVoice.name}` : 'No voice selected'}
-              </span>
-              <div className="flex w-full items-center gap-2 sm:w-auto">
+          {/* ── Footer ── */}
+          <div className="shrink-0 border-t border-border/40 bg-background px-5 py-3 sm:px-8">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                {selectedPanelVoice ? (
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground/10">
+                      <Check className="size-3 text-foreground" aria-hidden />
+                    </span>
+                    <span className="truncate text-sm font-medium text-foreground">{selectedPanelVoice.name}</span>
+                    <span className="hidden text-[11px] text-muted-foreground sm:inline">·</span>
+                    <span className="hidden text-[11px] text-muted-foreground sm:inline">{selectedPanelProviderLabel}</span>
+                  </div>
+                ) : (
+                  <span className="text-sm text-muted-foreground">No voice selected</span>
+                )}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  className="h-9 flex-1 text-xs sm:flex-none"
+                  className="h-9 px-4 text-[13px] font-medium"
                   onClick={() => {
                     setVoiceModalOpen(false);
                     setVoiceSearchQuery('');
@@ -2907,17 +2920,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   type="button"
                   variant="default"
                   size="sm"
-                  className="h-9 flex-1 px-4 text-xs sm:flex-none"
+                  className="h-9 rounded-lg px-5 text-[13px] font-semibold shadow-sm"
                   disabled={!tempSelectedVoiceId || voiceSaveBusy}
                   onClick={() => {
                     void onVoiceSelect(tempSelectedVoiceId);
                   }}
                 >
-                  {voiceSaveBusy ? 'Saving...' : 'Select Voice'}
+                  {voiceSaveBusy ? 'Saving…' : 'Confirm Voice'}
                 </Button>
               </div>
             </div>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -3430,15 +3443,13 @@ function VoiceFilterSelect({
 }) {
   return (
     <label className="block min-w-0">
-      <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
+      <span className="sr-only">{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="h-10 w-full rounded-full border border-input bg-background px-3 text-xs font-medium shadow-sm outline-none transition hover:border-foreground/20 focus-visible:ring-2 focus-visible:ring-ring"
+        className="h-9 w-full min-w-[90px] rounded-lg border border-input bg-background px-2.5 text-xs font-medium outline-none transition hover:border-foreground/20 focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <option value="all">All</option>
+        <option value="all">{label}: All</option>
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
@@ -3510,11 +3521,11 @@ function VoicePanelField({
   value: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-muted/20 px-3 py-2.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-muted/15 px-3 py-2">
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
         {label}
       </span>
-      <span className="min-w-0 truncate text-sm font-semibold text-foreground">
+      <span className="min-w-0 truncate text-[13px] font-semibold text-foreground">
         {value}
       </span>
     </div>
@@ -3546,7 +3557,7 @@ function VoiceWaveform() {
 
 function VoiceMetaPill({ children }: { children: string }) {
   return (
-    <span className="inline-flex min-h-6 items-center rounded-full border border-border/60 bg-muted/30 px-2 text-[11px] font-medium text-muted-foreground">
+    <span className="inline-flex items-center rounded-full border border-border/40 bg-muted/20 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
       {children}
     </span>
   );
