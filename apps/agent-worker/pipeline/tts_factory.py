@@ -5,12 +5,17 @@ from dataclasses import dataclass
 
 from livekit.agents import tts
 
+from pipeline.cartesia_tts import CartesiaTTS
 from pipeline.tts import RimeTTS
 
 
 logger = logging.getLogger(__name__)
 
-RUNTIME_TTS_PROVIDER = "rime"
+RUNTIME_TTS_PROVIDER_RIME = "rime"
+RUNTIME_TTS_PROVIDER_CARTESIA = "cartesia"
+RUNTIME_TTS_PROVIDERS = frozenset(
+    {RUNTIME_TTS_PROVIDER_RIME, RUNTIME_TTS_PROVIDER_CARTESIA},
+)
 DEFAULT_RIME_VOICE_ID = "mist-default"
 DEFAULT_RIME_MODEL_ID = "mistv2"
 DEFAULT_RIME_LANGUAGE = "eng"
@@ -34,9 +39,22 @@ def build_tts(
     resolved = selection or parse_tts_runtime_selection(config)
     log_tts_selection(resolved)
 
-    if resolved.provider_id != RUNTIME_TTS_PROVIDER:
+    if resolved.provider_id not in RUNTIME_TTS_PROVIDERS:
         raise ValueError(
             f"TTS provider {resolved.provider_id} is not enabled in worker runtime yet."
+        )
+
+    if resolved.provider_id == RUNTIME_TTS_PROVIDER_CARTESIA:
+        api_key = resolved.api_key
+        if not api_key:
+            raise ValueError(
+                "Cartesia TTS requires credentials.tts.apiKey from internal agent config",
+            )
+        return CartesiaTTS(
+            voice_id=resolved.voice_id,
+            model_id=resolved.model_id,
+            language=resolved.language,
+            api_key=api_key,
         )
 
     api_key = resolved.api_key or os.getenv("RIME_API_KEY")
@@ -67,7 +85,7 @@ def parse_tts_runtime_selection(config: Mapping[str, object]) -> TtsRuntimeSelec
     provider_id = _normalize_provider_id(
         _string_value(pipeline_tts, "providerId")
         or _string_value(metadata, "ttsProviderId")
-        or RUNTIME_TTS_PROVIDER,
+        or RUNTIME_TTS_PROVIDER_RIME,
     )
     voice_id = (
         _string_value(pipeline_tts, "voiceId")
@@ -158,4 +176,4 @@ def _legacy_string(
 
 
 def _normalize_provider_id(provider_id: str) -> str:
-    return provider_id.strip().lower() or RUNTIME_TTS_PROVIDER
+    return provider_id.strip().lower() or RUNTIME_TTS_PROVIDER_RIME

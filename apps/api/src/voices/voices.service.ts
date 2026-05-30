@@ -65,6 +65,8 @@ type VoiceSyncProviderResult = {
 };
 
 const RIME_PROVIDER_ID = 'rime';
+const CARTESIA_PROVIDER_ID = 'cartesia';
+const WORKER_RUNTIME_TTS_PROVIDER_IDS = [RIME_PROVIDER_ID, CARTESIA_PROVIDER_ID] as const;
 const EXTERNAL_TTS_PROVIDER_IDS = ['cartesia', 'elevenlabs', 'inworld'] as const;
 const VOICE_PREVIEW_EXPIRES_IN_SECONDS = 3_600;
 const VOICE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable';
@@ -209,7 +211,7 @@ export class VoicesService {
 
   /**
    * Resolve voice + validate worker runtime support.
-   * Rime is supported today; other TTS providers return a clear error until Phase 5.3+.
+   * Rime and Cartesia are supported in the worker; other providers return a clear error.
    */
   async resolveTtsForRuntime(
     storedVoiceId: string,
@@ -219,10 +221,14 @@ export class VoicesService {
       storedVoiceId,
       organizationId,
     );
-    if (resolved.providerId !== RIME_PROVIDER_ID) {
+    if (
+      !WORKER_RUNTIME_TTS_PROVIDER_IDS.includes(
+        resolved.providerId as (typeof WORKER_RUNTIME_TTS_PROVIDER_IDS)[number],
+      )
+    ) {
       throw new ServiceUnavailableException(
         `TTS provider "${resolved.providerId}" is not supported by the worker runtime yet. ` +
-          'Use a Rime voice for live calls and Test Agent.',
+          'Use a Rime or Cartesia voice for live calls and Test Agent.',
       );
     }
     this.logger.log(
@@ -241,7 +247,15 @@ export class VoicesService {
     storedVoiceId: string,
     organizationId?: string,
   ): Promise<ResolvedRimeVoice> {
-    const resolved = await this.resolveTtsForRuntime(storedVoiceId, organizationId);
+    const resolved = await this.resolveVoiceForAgentVersion(
+      storedVoiceId,
+      organizationId,
+    );
+    if (resolved.providerId !== RIME_PROVIDER_ID) {
+      throw new ServiceUnavailableException(
+        'Only Rime voices are supported by the current preview runtime',
+      );
+    }
     return {
       rimeVoiceId: resolved.providerVoiceId,
       modelId: resolved.modelId,
