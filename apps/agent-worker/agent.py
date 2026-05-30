@@ -9,13 +9,13 @@ from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass
 
 from livekit import rtc
-from livekit.agents import AutoSubscribe, JobContext, llm
+from livekit.agents import AutoSubscribe, JobContext, llm, tts
 from livekit.agents.llm import ChatContext, LLMStream
 from livekit.agents.voice_assistant import VoiceAssistant
 from livekit.plugins import deepgram, openai, silero
 
 from api_client import AwaazAPIClient
-from pipeline.tts import RimeTTS
+from pipeline.tts_factory import build_tts, close_tts, parse_tts_runtime_selection
 from tools.end_call import end_call
 from tools.transfer_to_human import transfer_to_human
 
@@ -691,30 +691,25 @@ class AwaazAgent:
             await start_call_payload(ctx, config, room_metadata),
         )
         call_id = string_value(call, "id")
-        voice_id = required_string(config, "voiceId", "mist-default")
-        voice_model_id = required_string(config, "voiceModelId", "mistv2")
-        voice_lang = required_string(config, "voiceLang", "eng")
+        tts_selection = parse_tts_runtime_selection(config)
         logger.info(
             "voice_config_loaded agent_id=%s call_id=%s agent_version_id=%s "
-            "stored_voice_id=%s rime_speaker=%s model=%s lang=%s",
+            "stored_voice_id=%s rime_speaker=%s model=%s lang=%s tts_provider=%s",
             agent_id,
             call_id,
             string_value(config, "agentVersionId"),
             string_value(config, "voiceId"),
-            voice_id,
-            voice_model_id,
-            voice_lang,
+            tts_selection.voice_id,
+            tts_selection.model_id,
+            tts_selection.language,
+            tts_selection.provider_id,
         )
 
-        rime = RimeTTS(
-            voice_id=voice_id,
-            model_id=voice_model_id,
-            language=voice_lang,
-        )
+        tts_engine = build_tts(config, tts_selection)
         timing = PipelineTiming()
         lifecycle = CallLifecycle(ctx, call_id)
         timing.set_lifecycle(lifecycle)
-        assistant = create_assistant(config, rime, AwaazTools(lifecycle), timing)
+        assistant = create_assistant(config, tts_engine, AwaazTools(lifecycle), timing)
         lifecycle.set_assistant(assistant)
         register_call_control_events(ctx.room, lifecycle, call_id)
         register_lifecycle_room_events(ctx.room, lifecycle)
@@ -750,7 +745,7 @@ class AwaazAgent:
                     call_id,
                     lifecycle.end_call_payload("technical_disconnect").get("reason"),
                 )
-            await rime.aclose()
+            await close_tts(tts_engine)
             await api.aclose()
 
         ctx.add_shutdown_callback(shutdown)
@@ -772,7 +767,7 @@ class AwaazAgent:
 
 def create_assistant(
     config: Mapping[str, object],
-    rime: RimeTTS,
+    tts_engine: tts.TTS,
     tools: AwaazTools,
     timing: "PipelineTiming",
 ) -> VoiceAssistant:
@@ -827,7 +822,7 @@ def create_assistant(
         llm=openai.LLM.with_groq(
             model=required_string(config, "model", "llama-3.1-8b-instant"),
         ),
-        tts=rime,
+        tts=tts_engine,
         chat_ctx=chat_ctx,
         fnc_ctx=tools,
         allow_interruptions=True,
