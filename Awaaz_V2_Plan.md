@@ -62,7 +62,7 @@ Primary decision: plugin selection is per `AgentVersion`; credentials are per `O
 - Replace hard-coded pipeline selects in the agent editor with real catalog-backed controls.
 - Supported V2 options:
   - TTS: Rime, Cartesia, ElevenLabs, Inworld
-  - LLM: Groq Llama, OpenAI GPT-4o, Anthropic Claude
+  - LLM: Groq Llama and Groq-hosted GPT-OSS, Anthropic Claude
   - STT: Deepgram, AssemblyAI, Groq Whisper
 - Disable providers that have no valid BYOK key and no Finova-managed key.
 - Add settings page `Settings -> AI Providers` for credentials and mode selection.

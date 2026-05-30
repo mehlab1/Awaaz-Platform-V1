@@ -2,7 +2,7 @@ export type PluginKind = 'tts' | 'llm' | 'stt';
 
 export type ProviderValidationStyle =
   | 'rime-voices'
-  | 'openai-models'
+  | 'groq-models'
   | 'anthropic-models'
   | 'deepgram-projects'
   | 'cartesia-voices'
@@ -10,11 +10,18 @@ export type ProviderValidationStyle =
   | 'assemblyai-transcripts'
   | 'local-only';
 
+export interface ProviderModelDefinition {
+  id: string;
+  label: string;
+  default?: boolean;
+}
+
 export interface ProviderDefinition {
   id: string;
   kind: PluginKind;
   label: string;
   defaultModel?: string;
+  models?: readonly ProviderModelDefinition[];
   finovaEnvVars: string[];
   validationStyle: ProviderValidationStyle;
 }
@@ -55,18 +62,25 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
   {
     id: 'groq',
     kind: 'llm',
-    label: 'Groq Llama',
+    label: 'Groq',
     defaultModel: 'llama-3.3-70b-versatile',
+    models: [
+      {
+        id: 'llama-3.3-70b-versatile',
+        label: 'Llama 3.3 70B Versatile',
+        default: true,
+      },
+      {
+        id: 'openai/gpt-oss-120b',
+        label: 'GPT-OSS 120B',
+      },
+      {
+        id: 'openai/gpt-oss-20b',
+        label: 'GPT-OSS 20B',
+      },
+    ],
     finovaEnvVars: ['FINOVA_GROQ_API_KEY', 'GROQ_API_KEY'],
-    validationStyle: 'openai-models',
-  },
-  {
-    id: 'openai',
-    kind: 'llm',
-    label: 'OpenAI GPT-4o',
-    defaultModel: 'gpt-4o',
-    finovaEnvVars: ['FINOVA_OPENAI_API_KEY', 'OPENAI_API_KEY'],
-    validationStyle: 'openai-models',
+    validationStyle: 'groq-models',
   },
   {
     id: 'anthropic',
@@ -95,7 +109,7 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
     kind: 'stt',
     label: 'Groq Whisper',
     finovaEnvVars: ['FINOVA_GROQ_API_KEY', 'GROQ_API_KEY'],
-    validationStyle: 'openai-models',
+    validationStyle: 'groq-models',
   },
 ] as const;
 

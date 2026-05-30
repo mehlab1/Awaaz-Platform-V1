@@ -91,9 +91,8 @@ const TTS_OPTIONS = [
 const VOICE_PROVIDERS = [
   { id: 'rime', label: 'Rime' },
   { id: 'elevenlabs', label: 'ElevenLabs' },
-  { id: 'openai', label: 'OpenAI' },
   { id: 'cartesia', label: 'Cartesia' },
-  { id: 'fish-audio', label: 'Fish Audio' },
+  { id: 'inworld', label: 'Inworld' },
   { id: 'future', label: 'Future providers' },
 ] as const;
 
@@ -299,9 +298,25 @@ interface PhoneDto {
     | null;
 }
 
+interface CatalogProviderDto {
+  id: string;
+  kind: 'tts' | 'llm' | 'stt';
+  label: string;
+  defaultModel?: string;
+  models?: Array<{
+    id: string;
+    label: string;
+    default?: boolean;
+  }>;
+  available: boolean;
+  availableVia?: string | null;
+}
+
 interface PipelineOption {
   readonly value: string;
   readonly label: string;
+  readonly disabled?: boolean;
+  readonly description?: string;
 }
 
 export function AgentEditorClient({ agentId }: { agentId: string }) {
@@ -329,6 +344,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [versionHistoryBusy, setVersionHistoryBusy] = useState(false);
   const [voices, setVoices] = useState<VoiceDto[]>([]);
   const [phones, setPhones] = useState<PhoneDto[]>([]);
+  const [catalogProviders, setCatalogProviders] = useState<CatalogProviderDto[] | null>(null);
 
   const [prompt, setPrompt] = useState('');
   const [selectedVoiceId, setSelectedVoiceId] = useState('');
@@ -625,7 +641,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     try {
       const shouldFetchVoices = !voicesLoadedRef.current;
       const shouldFetchPhones = phonesLoadedOrgRef.current !== activeOrgId;
-      const [agentRes, versionsRes, voicesRes, phonesRes] = await Promise.all([
+      const [agentRes, versionsRes, voicesRes, phonesRes, catalogRes] = await Promise.all([
         apiCall(`/api/v1/agents/${agentId}`, { method: 'GET' }),
         apiCall(
           loadAllVersions
@@ -639,6 +655,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         shouldFetchPhones
           ? apiCall('/api/v1/phone-numbers', { method: 'GET' })
           : Promise.resolve(null),
+        apiCall('/api/v1/plugins/catalog', { method: 'GET' }).catch(() => null),
       ]);
 
       if (!agentRes.ok) {
@@ -677,6 +694,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       if (phonesRes) {
         setPhones((await phonesRes.json()) as PhoneDto[]);
         phonesLoadedOrgRef.current = activeOrgId;
+      }
+      if (catalogRes && catalogRes.ok) {
+        const catalogBody = await catalogRes.json();
+        setCatalogProviders(catalogBody.providers);
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -1183,7 +1204,52 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     selectedPanelVoice !== null && playingVoiceId === selectedPanelVoice.rimeVoiceId;
   const selectedModelValue =
     selectedVersion?.model ?? liveVersion?.model ?? DEFAULT_LLM_MODEL;
-  const llmOptions = modelOptionsFor(selectedModelValue);
+
+  const buildProviderOptions = (kind: 'tts' | 'stt', fallback: readonly PipelineOption[]) => {
+    if (!catalogProviders) return fallback;
+    const matching = catalogProviders.filter((p) => p.kind === kind);
+    if (matching.length === 0) return fallback;
+    return matching.map((p) => ({
+      value: p.id,
+      label: p.label,
+      disabled: !p.available,
+      description: !p.available && p.availableVia ? `Available via ${p.availableVia}` : undefined,
+    }));
+  };
+
+  const buildLlmOptions = (fallback: readonly PipelineOption[]) => {
+    if (!catalogProviders) return fallback;
+    const matching = catalogProviders.filter((p) => p.kind === 'llm');
+    if (matching.length === 0) return fallback;
+
+    const options = matching.flatMap((provider) => {
+      const models = provider.models?.length
+        ? provider.models
+        : provider.defaultModel
+          ? [{ id: provider.defaultModel, label: provider.defaultModel }]
+          : [];
+
+      return models.map((model) => ({
+        value: model.id,
+        label: `${provider.label} - ${model.label}`,
+        disabled: !provider.available,
+        description: !provider.available && provider.availableVia
+          ? `Available via ${provider.availableVia}`
+          : undefined,
+      }));
+    });
+
+    return options.length > 0 ? options : fallback;
+  };
+
+  const ttsOptions = buildProviderOptions('tts', TTS_OPTIONS);
+  const sttOptions = buildProviderOptions('stt', STT_OPTIONS);
+  let llmOptions = buildLlmOptions(LLM_OPTIONS);
+
+  if (!llmOptions.some((o) => o.value === selectedModelValue)) {
+    llmOptions = [...llmOptions, { value: selectedModelValue, label: `Current model - ${selectedModelValue}` }];
+  }
+
   const hasUsableLiveConfig =
     liveVersion != null &&
     liveVersion.systemPrompt.trim().length > 0 &&
@@ -2092,12 +2158,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <PipelineSelect
                 label="TTS"
                 value={TTS_OPTIONS[0].value}
-                options={TTS_OPTIONS}
+                options={ttsOptions}
               />
               <PipelineSelect
                 label="STT"
                 value={STT_OPTIONS[0].value}
-                options={STT_OPTIONS}
+                options={sttOptions}
               />
               <PipelineSelect
                 label="LLM"
@@ -3190,17 +3256,12 @@ function PipelineSelect({
         options={options.map((option) => ({
           value: option.value,
           label: option.label,
+          disabled: option.disabled,
+          description: option.description,
         }))}
       />
     </label>
   );
-}
-
-function modelOptionsFor(value: string): PipelineOption[] {
-  if (LLM_OPTIONS.some((option) => option.value === value)) {
-    return [...LLM_OPTIONS];
-  }
-  return [{ value, label: `Current model - ${value}` }];
 }
 
 function VersionMenuButton({
@@ -3584,12 +3645,10 @@ function voiceProviderInitials(providerId: VoiceProviderId): string {
   switch (providerId) {
     case 'elevenlabs':
       return 'EL';
-    case 'openai':
-      return 'AI';
     case 'cartesia':
       return 'CA';
-    case 'fish-audio':
-      return 'FA';
+    case 'inworld':
+      return 'IW';
     case 'future':
       return '+';
     case 'rime':

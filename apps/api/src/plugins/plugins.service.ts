@@ -58,6 +58,7 @@ type ProviderAvailability = {
   kind: string;
   label: string;
   defaultModel?: string;
+  models?: ProviderDefinition['models'];
   supportsByok: true;
   supportsFinovaManaged: true;
   finovaManagedAvailable: boolean;
@@ -109,7 +110,10 @@ export class PluginsService {
 
   async listCredentials(organizationId: string): Promise<SanitizedCredential[]> {
     const rows = await this.prisma.organizationProviderCredential.findMany({
-      where: { organizationId },
+      where: {
+        organizationId,
+        providerId: { in: PROVIDER_CATALOG.map((provider) => provider.id) },
+      },
       orderBy: [{ providerId: 'asc' }],
     });
     return rows.map((row) => this.sanitize(row));
@@ -311,6 +315,7 @@ export class PluginsService {
       kind: provider.kind,
       label: provider.label,
       defaultModel: provider.defaultModel,
+      models: provider.models,
       supportsByok: true,
       supportsFinovaManaged: true,
       finovaManagedAvailable,
@@ -493,12 +498,9 @@ export class PluginsService {
           url: 'https://users.rime.ai/data/voices/voice_details.json',
           headers: { Authorization: `Bearer ${apiKey}` },
         };
-      case 'openai-models':
+      case 'groq-models':
         return {
-          url:
-            provider.id === 'groq' || provider.id === 'groq-whisper'
-              ? 'https://api.groq.com/openai/v1/models'
-              : 'https://api.openai.com/v1/models',
+          url: 'https://api.groq.com/openai/v1/models',
           headers: { Authorization: `Bearer ${apiKey}` },
         };
       case 'anthropic-models':

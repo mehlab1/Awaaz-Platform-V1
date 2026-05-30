@@ -7,7 +7,6 @@ export const V2_TTS_PROVIDER_IDS = [
 
 export const V2_LLM_PROVIDER_IDS = [
   'groq',
-  'openai',
   'anthropic',
 ] as const;
 
@@ -43,6 +42,14 @@ export interface V2ProviderCatalogItem {
   credentialEnvVar: string;
   supportsByok: boolean;
   supportsFinovaManaged: boolean;
+  defaultModel?: string;
+  models?: readonly V2ProviderCatalogModel[];
+}
+
+export interface V2ProviderCatalogModel {
+  id: string;
+  label: string;
+  default?: boolean;
 }
 
 export const V2_PROVIDER_CATALOG = [
@@ -81,18 +88,26 @@ export const V2_PROVIDER_CATALOG = [
   {
     id: 'groq',
     kind: 'llm',
-    label: 'Groq Llama',
+    label: 'Groq',
     credentialEnvVar: 'GROQ_API_KEY',
     supportsByok: true,
     supportsFinovaManaged: true,
-  },
-  {
-    id: 'openai',
-    kind: 'llm',
-    label: 'OpenAI GPT-4o',
-    credentialEnvVar: 'OPENAI_API_KEY',
-    supportsByok: true,
-    supportsFinovaManaged: true,
+    defaultModel: 'llama-3.3-70b-versatile',
+    models: [
+      {
+        id: 'llama-3.3-70b-versatile',
+        label: 'Llama 3.3 70B Versatile',
+        default: true,
+      },
+      {
+        id: 'openai/gpt-oss-120b',
+        label: 'GPT-OSS 120B',
+      },
+      {
+        id: 'openai/gpt-oss-20b',
+        label: 'GPT-OSS 20B',
+      },
+    ],
   },
   {
     id: 'anthropic',
