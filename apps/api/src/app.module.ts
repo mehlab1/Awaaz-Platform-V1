@@ -15,6 +15,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { ApiKeysController } from './api-keys/api-keys.controller';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { AppController } from './app.controller';
+import { BillingModule } from './billing/billing.module';
 import { CallsController } from './calls/calls.controller';
 import { CallsModule } from './calls/calls.module';
 import { ClerkAuthMiddleware } from './auth/clerk-auth.middleware';
@@ -53,6 +54,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     AgentsModule,
     AnalyticsModule,
     ApiKeysModule,
+    BillingModule,
     CallsModule,
     PhoneNumbersModule,
     VoicesModule,
