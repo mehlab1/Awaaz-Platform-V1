@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CallDirection, EventType, Prisma } from '@prisma/client';
 
+import { BillingAttributionService } from '../billing/billing-attribution.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface TranscriptJobData {
@@ -45,7 +46,10 @@ const TELEPHONY_PER_MINUTE_USD = 0.0085;
 
 @Injectable()
 export class TranscriptAssemblyService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly billingAttribution: BillingAttributionService,
+  ) {}
 
   async assemble(data: TranscriptJobData): Promise<TranscriptAssemblyResult> {
     const call = await this.findCall(data);
@@ -124,6 +128,18 @@ export class TranscriptAssemblyService {
         },
       }),
     ]);
+
+    try {
+      const attribution = await this.billingAttribution.emitForCall(call.id);
+      if (attribution.created) {
+        console.warn(
+          `billing attribution emitted callId=${call.id} lineItems=${attribution.lineItems} skipped=${attribution.skippedSources.join('|') || '(none)'}`,
+        );
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`billing attribution failed callId=${call.id} reason=${message}`);
+    }
 
     return {
       callId: call.id,
