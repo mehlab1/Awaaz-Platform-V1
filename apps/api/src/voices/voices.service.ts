@@ -113,25 +113,79 @@ export class VoicesService {
     if (voiceRow && !voiceRow.isActive) {
       throw new NotFoundException('Voice not found');
     }
-    if (voiceRow && voiceRow.providerId !== RIME_PROVIDER_ID) {
+    const resolved = await this.resolveVoiceForAgentVersion(trimmed, organizationId);
+
+    if (resolved.providerId === INWORLD_PROVIDER_ID) {
+      this.logger.log(
+        `Voice preview request Inworld voiceId=${trimmed} inworldSpeaker=${resolved.providerVoiceId} modelId=${resolved.modelId}`,
+      );
+      const secret = await this.providerSecret('inworld', organizationId);
+      if (!secret.ok) {
+        throw new ServiceUnavailableException(secret.error);
+      }
+
+      const url = new URL('https://api.inworld.ai/tts/v1/voice:preview');
+      url.searchParams.set('voice_id', resolved.providerVoiceId);
+      url.searchParams.set('model_id', resolved.modelId);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Basic ${secret.key}`,
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const detail = await response.text();
+          throw new ServiceUnavailableException(`Inworld preview failed with ${response.status}: ${detail.slice(0, 500)}`);
+        }
+        const json = await response.json() as { audioContent?: string };
+        const base64Audio = json.audioContent;
+        if (!base64Audio) {
+           throw new ServiceUnavailableException('Inworld returned empty audio for preview');
+        }
+        const audio = Uint8Array.from(Buffer.from(base64Audio, 'base64'));
+
+        const dummyRimeVoice = {
+          rimeVoiceId: voiceRow?.rimeVoiceId ?? resolved.storedVoiceId,
+          name: voiceRow?.name ?? resolved.storedVoiceId,
+          language: voiceRow?.language ?? resolved.language,
+          lang: voiceRow?.lang ?? resolved.lang,
+          modelId: resolved.modelId,
+        };
+        await this.storePreviewIfNeeded(dummyRimeVoice, audio, voiceRow?.previewAudioUrl);
+        return audio;
+      } catch (error: unknown) {
+        if (error instanceof ServiceUnavailableException) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        throw new ServiceUnavailableException(`Inworld preview request failed: ${message}`);
+      } finally {
+        clearTimeout(timeout);
+      }
+    } else if (resolved.providerId === RIME_PROVIDER_ID) {
+      this.logger.log(
+        `Voice preview request voiceId=${trimmed} rimeSpeaker=${resolved.providerVoiceId} modelId=${resolved.modelId} lang=${resolved.lang}`,
+      );
+      const rimeVoice = {
+        rimeVoiceId: resolved.providerVoiceId,
+        name: voiceRow?.name ?? resolved.providerVoiceId,
+        language: resolved.language,
+        lang: resolved.lang,
+        modelId: resolved.modelId,
+      };
+      const audio = await this.rime.synthesizePreview(rimeVoice);
+      await this.storePreviewIfNeeded(rimeVoice, audio, voiceRow?.previewAudioUrl);
+      return audio;
+    } else {
       throw new BadRequestException(
-        'Voice preview is currently available for Rime voices only',
+        'Voice preview is currently available for Rime and Inworld voices only',
       );
     }
-    const resolved = await this.resolveForTts(trimmed, organizationId);
-    this.logger.log(
-      `Voice preview request voiceId=${trimmed} rimeSpeaker=${resolved.rimeVoiceId} modelId=${resolved.modelId} lang=${resolved.lang}`,
-    );
-    const rimeVoice = {
-      rimeVoiceId: resolved.rimeVoiceId,
-      name: voiceRow?.name ?? resolved.rimeVoiceId,
-      language: resolved.lang,
-      lang: resolved.lang,
-      modelId: resolved.modelId,
-    };
-    const audio = await this.rime.synthesizePreview(rimeVoice);
-    await this.storePreviewIfNeeded(rimeVoice, audio, voiceRow?.previewAudioUrl);
-    return audio;
   }
 
   /**

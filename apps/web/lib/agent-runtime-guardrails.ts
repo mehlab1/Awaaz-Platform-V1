@@ -110,7 +110,7 @@ export function isGroqRuntimeModel(model: string): boolean {
 
 export function canPreviewVoice(voice: VoiceRef): boolean {
   const providerId = voiceProviderIdFromStoredId(voice.rimeVoiceId, [voice]);
-  if (providerId === RUNTIME_TTS_PROVIDER) {
+  if (providerId === RUNTIME_TTS_PROVIDER || providerId === 'inworld') {
     return true;
   }
   return Boolean(voice.previewPlaybackUrl?.trim());

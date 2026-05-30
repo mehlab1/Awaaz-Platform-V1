@@ -51,6 +51,7 @@ export class ProviderVoiceCatalogService {
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const url = new URL(CARTESIA_VOICES_URL);
       url.searchParams.set('limit', '100');
+      url.searchParams.append('expand[]', 'preview_file_url');
       if (cursor) {
         url.searchParams.set('starting_after', cursor);
       }
