@@ -104,6 +104,8 @@ model Organization {
   calls             Call[]
   apiKeys           ApiKey[]
   providerCredentials OrganizationProviderCredential[]
+  usageLedgerEntries UsageLedgerEntry[]
+  callBillingSnapshots CallBillingSnapshot[]
   auditLogs         AuditLog[]
   voices            Voice[]
 
@@ -283,6 +285,8 @@ model Call {
   phoneNumber  PhoneNumber?   @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
   events       CallEvent[]
   transcript   Transcript?
+  usageLedgerEntries UsageLedgerEntry[]
+  billingSnapshot CallBillingSnapshot?
 
   @@index([organizationId, createdAt])
   @@index([agentId, createdAt])
@@ -394,6 +398,55 @@ model OrganizationProviderCredential {
   @@map("organization_provider_credentials")
 }
 
+model UsageLedgerEntry {
+  id                String                  @id @default(cuid())
+  organizationId    String
+  callId            String
+  providerId        String
+  providerModelId   String
+  credentialMode    ProviderCredentialMode
+  pricingVersionId  String
+  usageMeter        PricingMeter
+  usageQuantity     Decimal                 @db.Decimal(20, 6)
+  baseCostUsdMicros BigInt
+  markupBps         Int                     @default(0)
+  markupUsdMicros   BigInt
+  totalCostUsdMicros BigInt
+  metadata          Json?
+  createdAt         DateTime                @default(now())
+
+  organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  call            Call                  @relation(fields: [callId], references: [id], onDelete: Cascade)
+  pricingVersion  ProviderPricingVersion @relation(fields: [pricingVersionId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@index([callId, createdAt])
+  @@index([providerId, providerModelId])
+  @@index([pricingVersionId])
+  @@map("usage_ledger_entries")
+}
+
+model CallBillingSnapshot {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  callId             String   @unique
+  lineItemCount      Int      @default(0)
+  totalBaseCostUsdMicros BigInt
+  totalMarkupUsdMicros   BigInt
+  totalCostUsdMicros     BigInt
+  lineItems          Json
+  metadata           Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  call         Call         @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([callId, createdAt])
+  @@map("call_billing_snapshots")
+}
+
 model ProviderPricingVersion {
   id            String   @id @default(cuid())
   providerId    String
@@ -408,6 +461,7 @@ model ProviderPricingVersion {
   updatedAt     DateTime @updatedAt
 
   rates ProviderPricingRate[]
+  usageLedgerEntries UsageLedgerEntry[]
 
   @@unique([providerId, version])
   @@index([providerId, isActive])
