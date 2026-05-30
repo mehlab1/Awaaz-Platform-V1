@@ -107,7 +107,6 @@ const VOICE_PROVIDERS = [
   { id: 'elevenlabs', label: 'ElevenLabs' },
   { id: 'cartesia', label: 'Cartesia' },
   { id: 'inworld', label: 'Inworld' },
-  { id: 'future', label: 'Future providers' },
 ] as const;
 
 type VoiceProviderId = (typeof VOICE_PROVIDERS)[number]['id'];
@@ -1494,6 +1493,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         return;
       }
 
+      if (voice.provider === 'cartesia') {
+        return;
+      }
+
       const storedUrl = storedVoicePreviewUrl(voice);
       if (!storedUrl) {
         return;
@@ -1526,7 +1529,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         const voiceProvider = voiceProviderIdFromStoredId(voice.rimeVoiceId, voices);
         const storedUrl = storedVoicePreviewUrl(voice);
 
-        if (voiceProvider !== RUNTIME_TTS_PROVIDER) {
+        if (voiceProvider !== RUNTIME_TTS_PROVIDER && voiceProvider !== 'cartesia') {
           if (!storedUrl) {
             throw new Error(VOICE_PREVIEW_UNAVAILABLE_MESSAGE);
           }
@@ -1535,7 +1538,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           return objectUrl;
         }
 
-        if (storedUrl) {
+        if (storedUrl && voiceProvider !== 'cartesia') {
           try {
             const objectUrl = await fetchStoredVoicePreviewObjectUrl(storedUrl);
             previewCacheRef.current.set(cacheKey, objectUrl);
@@ -2861,7 +2864,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   {voiceProviderLabel(selectedVoiceProvider)} · {voiceProviderCounts[selectedVoiceProvider] ?? 0} voices
                 </p>
               </div>
-              <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1 scrollbar-none sm:flex-wrap sm:overflow-visible" role="tablist" aria-label="Voice provider">
+              <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1 scrollbar-none" role="tablist" aria-label="Voice provider">
                 {VOICE_PROVIDERS.map((provider) => {
                   const isActive = selectedVoiceProvider === provider.id;
                   const providerCount = voiceProviderCounts[provider.id];
@@ -2872,7 +2875,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                       role="tab"
                       aria-selected={isActive}
                       className={cn(
-                        'group relative flex shrink-0 items-center gap-2.5 rounded-xl border px-3.5 py-2 text-left outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring sm:shrink',
+                        'group relative flex shrink-0 items-center gap-2 rounded-xl border px-3 py-1.5 text-left outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring',
                         isActive
                           ? 'border-foreground/20 bg-foreground/[0.05] shadow-sm'
                           : 'border-border/50 bg-background hover:border-foreground/15 hover:bg-muted/30',
@@ -2886,14 +2889,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     >
                       <VoiceProviderLogo providerId={provider.id} active={isActive} />
                       <div className="min-w-0">
-                        <span className="block text-[13px] font-semibold text-foreground">{provider.label}</span>
-                        <span className="block text-[11px] text-muted-foreground">
+                        <span className="block text-[12px] font-semibold leading-tight text-foreground">{provider.label}</span>
+                        <span className="block text-[10px] leading-tight mt-0.5 text-muted-foreground">
                           {providerCount > 0 ? `${providerCount} voices` : 'Coming soon'}
-                          {isRuntimeTtsProvider(provider.id)
-                            ? ' · Runtime enabled'
-                            : provider.id === 'future'
-                              ? ' · Catalog only'
-                              : ''}
+                          {isRuntimeTtsProvider(provider.id) && (
+                            <span className="ml-1 text-emerald-600/80 font-medium">· Runtime</span>
+                          )}
                         </span>
                       </div>
                       {isActive && (
@@ -2905,12 +2906,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   );
                 })}
               </div>
-              {selectedVoiceProvider === 'future' ? (
-                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                  Future providers appear in the catalog for planning. Runtime
-                  support is not available yet.
-                </p>
-              ) : isCatalogOnlyVoiceProvider(selectedVoiceProvider) ? (
+              {isCatalogOnlyVoiceProvider(selectedVoiceProvider) ? (
                 <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
                   {CATALOG_ONLY_VOICE_MESSAGE}
                 </p>

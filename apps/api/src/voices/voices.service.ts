@@ -88,7 +88,7 @@ export class VoicesService {
     private readonly providerVoices: ProviderVoiceCatalogService,
     private readonly plugins: PluginsService,
     private readonly storage: StorageService,
-  ) {}
+  ) { }
 
   async list(options: ListVoicesOptions = {}): Promise<VoiceListItem[]> {
     const providerId = this.normalizeVoiceProviderId(options.providerId);
@@ -145,7 +145,7 @@ export class VoicesService {
         const json = await response.json() as { audioContent?: string };
         const base64Audio = json.audioContent;
         if (!base64Audio) {
-           throw new ServiceUnavailableException('Inworld returned empty audio for preview');
+          throw new ServiceUnavailableException('Inworld returned empty audio for preview');
         }
         const audio = Uint8Array.from(Buffer.from(base64Audio, 'base64'));
 
@@ -181,9 +181,46 @@ export class VoicesService {
       const audio = await this.rime.synthesizePreview(rimeVoice);
       await this.storePreviewIfNeeded(rimeVoice, audio, voiceRow?.previewAudioUrl);
       return audio;
+    } else if (resolved.providerId === CARTESIA_PROVIDER_ID) {
+      this.logger.log(
+        `Voice preview request Cartesia voiceId=${trimmed} cartesiaSpeaker=${resolved.providerVoiceId}`,
+      );
+      if (!voiceRow?.previewAudioUrl) {
+        throw new ServiceUnavailableException('Preview is unavailable for this voice.');
+      }
+      const secret = await this.providerSecret('cartesia', organizationId);
+      if (!secret.ok) {
+        throw new ServiceUnavailableException(secret.error);
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      try {
+        const response = await fetch(voiceRow.previewAudioUrl, {
+          method: 'GET',
+          headers: {
+            'X-Api-Key': secret.key,
+            'Cartesia-Version': '2026-03-01',
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new ServiceUnavailableException('Preview is unavailable for this voice.');
+        }
+        const audioBuffer = await response.arrayBuffer();
+        return new Uint8Array(audioBuffer);
+      } catch (error: unknown) {
+        if (error instanceof ServiceUnavailableException) {
+          throw error;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        throw new ServiceUnavailableException(`Cartesia preview request failed: ${message}`);
+      } finally {
+        clearTimeout(timeout);
+      }
     } else {
       throw new BadRequestException(
-        'Voice preview is currently available for Rime and Inworld voices only',
+        'Voice preview is currently available for Rime, Cartesia, and Inworld voices only',
       );
     }
   }
@@ -289,13 +326,13 @@ export class VoicesService {
     ) {
       throw new ServiceUnavailableException(
         `TTS provider "${resolved.providerId}" is not supported by the worker runtime yet. ` +
-          'Use a Rime, Cartesia, ElevenLabs, or Inworld voice for live calls and Test Agent.',
+        'Use a Rime, Cartesia, ElevenLabs, or Inworld voice for live calls and Test Agent.',
       );
     }
     this.logger.log(
       `Resolved voice for runtime stored=${storedVoiceId.trim()} ` +
-        `provider=${resolved.providerId} voiceId=${resolved.providerVoiceId} ` +
-        `modelId=${resolved.modelId} lang=${resolved.lang}`,
+      `provider=${resolved.providerId} voiceId=${resolved.providerVoiceId} ` +
+      `modelId=${resolved.modelId} lang=${resolved.lang}`,
     );
     return resolved;
   }
@@ -580,15 +617,11 @@ export class VoicesService {
     }
 
     const values = voices.map((voice) =>
-      Prisma.sql`(${randomUUID()}, null, ${RIME_PROVIDER_ID}, ${
-        voice.rimeVoiceId
-      }, ${voice.rimeVoiceId}, ${voice.name}, ${voice.description ?? null}, ${
-        voice.language
-      }, ${voice.lang ?? null}, ${voice.modelId ?? null}, ${
-        voice.gender ?? null
-      }, ${JSON.stringify(this.rimeVoiceMetadata(voice))}::jsonb, true, ${
-        syncedAt
-      }, ${syncedAt}, ${syncedAt})`,
+      Prisma.sql`(${randomUUID()}, null, ${RIME_PROVIDER_ID}, ${voice.rimeVoiceId
+        }, ${voice.rimeVoiceId}, ${voice.name}, ${voice.description ?? null}, ${voice.language
+        }, ${voice.lang ?? null}, ${voice.modelId ?? null}, ${voice.gender ?? null
+        }, ${JSON.stringify(this.rimeVoiceMetadata(voice))}::jsonb, true, ${syncedAt
+        }, ${syncedAt}, ${syncedAt})`,
     );
 
     await this.prisma.$executeRaw`
