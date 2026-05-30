@@ -6,16 +6,17 @@ import { Roles } from '../common/roles.decorator';
 import { AnalyticsService } from './analytics.service';
 
 function organizationIdFromRequest(req: Request): string {
-  const organizationId = req.organizationId;
+  const organizationId = (req as any).organizationId;
   if (!organizationId) {
     throw new ForbiddenException('Missing organization context');
   }
   return organizationId;
 }
 
+
 @Controller('api/v1/analytics')
 export class AnalyticsController {
-  constructor(private readonly analytics: AnalyticsService) {}
+  constructor(private readonly analytics: AnalyticsService) { }
 
   @Get('overview')
   @Roles(Role.VIEWER)

@@ -17,7 +17,7 @@ import { RegisterPhoneNumberDto } from './dto/register-phone-number.dto';
 import { PhoneNumbersService } from './phone-numbers.service';
 
 function organizationIdFromRequest(req: Request): string {
-  const organizationId = req.organizationId;
+  const organizationId = (req as any).organizationId;
   if (!organizationId) {
     throw new ForbiddenException('Missing organization context');
   }
@@ -49,7 +49,7 @@ export class PhoneNumbersController {
   ) {
     return this.phoneNumbers.update(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       id,
       dto,
     );

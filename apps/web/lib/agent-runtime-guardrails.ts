@@ -110,7 +110,7 @@ export function isGroqRuntimeModel(model: string): boolean {
 
 export function canPreviewVoice(voice: VoiceRef): boolean {
   const providerId = voiceProviderIdFromStoredId(voice.rimeVoiceId, [voice]);
-  if (providerId === RUNTIME_TTS_PROVIDER || providerId === 'inworld') {
+  if (providerId === RUNTIME_TTS_PROVIDER || providerId === 'inworld' || providerId === 'cartesia') {
     return true;
   }
   return Boolean(voice.previewPlaybackUrl?.trim());
@@ -125,9 +125,6 @@ export function voiceRuntimeStatusLabels(
 
   if (isRuntimeTtsProvider(providerId)) {
     labels.push('Runtime Enabled');
-    if (providerId !== RUNTIME_TTS_PROVIDER) {
-      labels.push('Verification Pending');
-    }
   }
 
   labels.push(
@@ -167,10 +164,7 @@ export function assessRuntimeConfig(params: {
   const runtimeStatusLabels = selectedVoice
     ? voiceRuntimeStatusLabels(selectedVoice, params.voices)
     : isRuntimeTtsVoice
-      ? ([
-          'Runtime Enabled',
-          ...(isRimeVoice ? [] : (['Verification Pending'] as const)),
-        ] as VoiceRuntimeStatusLabel[])
+      ? (['Runtime Enabled'] as VoiceRuntimeStatusLabel[])
       : [];
 
   return {

@@ -124,6 +124,7 @@ export class VoicesService {
         throw new ServiceUnavailableException(secret.error);
       }
 
+      const text = `Hi, this is ${voiceRow?.name ?? resolved.storedVoiceId}. I am Awaaz’s voice agent.`;
       const url = new URL('https://api.inworld.ai/tts/v1/voice:preview');
       url.searchParams.set('voice_id', resolved.providerVoiceId);
       url.searchParams.set('model_id', resolved.modelId);
@@ -135,7 +136,11 @@ export class VoicesService {
           method: 'POST',
           headers: {
             Authorization: `Basic ${secret.key}`,
+            'Content-Type': 'application/json',
           },
+          body: JSON.stringify({
+            text,
+          }),
           signal: controller.signal,
         });
         if (!response.ok) {
@@ -147,7 +152,33 @@ export class VoicesService {
         if (!base64Audio) {
           throw new ServiceUnavailableException('Inworld returned empty audio for preview');
         }
-        const audio = Uint8Array.from(Buffer.from(base64Audio, 'base64'));
+
+        const pcmData = Uint8Array.from(Buffer.from(base64Audio, 'base64'));
+
+        // Wrap raw PCM in a WAV header so the browser can play it
+        const sampleRate = 16000;
+        const numChannels = 1;
+        const bitsPerSample = 16;
+        const wavHeader = new Uint8Array(44);
+        const view = new DataView(wavHeader.buffer);
+
+        view.setUint8(0, 82); view.setUint8(1, 73); view.setUint8(2, 70); view.setUint8(3, 70); // "RIFF"
+        view.setUint32(4, 36 + pcmData.length, true);
+        view.setUint8(8, 87); view.setUint8(9, 65); view.setUint8(10, 86); view.setUint8(11, 69); // "WAVE"
+        view.setUint8(12, 102); view.setUint8(13, 109); view.setUint8(14, 116); view.setUint8(15, 32); // "fmt "
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); // PCM
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * numChannels * (bitsPerSample / 8), true);
+        view.setUint16(32, numChannels * (bitsPerSample / 8), true);
+        view.setUint16(34, bitsPerSample, true);
+        view.setUint8(36, 100); view.setUint8(37, 97); view.setUint8(38, 116); view.setUint8(39, 97); // "data"
+        view.setUint32(40, pcmData.length, true);
+
+        const audio = new Uint8Array(wavHeader.length + pcmData.length);
+        audio.set(wavHeader, 0);
+        audio.set(pcmData, wavHeader.length);
 
         const dummyRimeVoice = {
           rimeVoiceId: voiceRow?.rimeVoiceId ?? resolved.storedVoiceId,
@@ -185,9 +216,6 @@ export class VoicesService {
       this.logger.log(
         `Voice preview request Cartesia voiceId=${trimmed} cartesiaSpeaker=${resolved.providerVoiceId}`,
       );
-      if (!voiceRow?.previewAudioUrl) {
-        throw new ServiceUnavailableException('Preview is unavailable for this voice.');
-      }
       const secret = await this.providerSecret('cartesia', organizationId);
       if (!secret.ok) {
         throw new ServiceUnavailableException(secret.error);
@@ -196,19 +224,63 @@ export class VoicesService {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 20000);
       try {
-        const response = await fetch(voiceRow.previewAudioUrl, {
-          method: 'GET',
-          headers: {
-            'X-Api-Key': secret.key,
-            'Cartesia-Version': '2026-03-01',
-          },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new ServiceUnavailableException('Preview is unavailable for this voice.');
+        let audio: Uint8Array | null = null;
+        if (voiceRow?.previewAudioUrl) {
+          const proxyResponse = await fetch(voiceRow.previewAudioUrl, {
+            method: 'GET',
+            headers: {
+              'X-Api-Key': secret.key,
+              'Cartesia-Version': '2026-03-01',
+            },
+            signal: controller.signal,
+          });
+          if (proxyResponse.ok) {
+            audio = new Uint8Array(await proxyResponse.arrayBuffer());
+          } else {
+            this.logger.warn(`Cartesia proxy fetch failed for ${voiceRow.previewAudioUrl}, falling back to synthesis...`);
+          }
         }
-        const audioBuffer = await response.arrayBuffer();
-        return new Uint8Array(audioBuffer);
+
+        if (!audio) {
+          const text = `Hi, this is ${voiceRow?.name ?? resolved.providerVoiceId}. I am Awaaz’s voice agent.`;
+          const synthesisResponse = await fetch('https://api.cartesia.ai/tts/bytes', {
+            method: 'POST',
+            headers: {
+              'X-Api-Key': secret.key,
+              'Cartesia-Version': '2026-03-01',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model_id: resolved.modelId || 'sonic-english',
+              transcript: text,
+              voice: {
+                mode: 'id',
+                id: resolved.providerVoiceId,
+              },
+              output_format: {
+                container: 'wav',
+                encoding: 'pcm_f32le',
+                sample_rate: 44100,
+              },
+            }),
+            signal: controller.signal,
+          });
+          if (!synthesisResponse.ok) {
+            const detail = await synthesisResponse.text();
+            throw new ServiceUnavailableException(`Cartesia synthesis failed: ${synthesisResponse.status} ${detail.slice(0, 500)}`);
+          }
+          audio = new Uint8Array(await synthesisResponse.arrayBuffer());
+        }
+
+        const dummyRimeVoice = {
+          rimeVoiceId: voiceRow?.rimeVoiceId ?? resolved.storedVoiceId,
+          name: voiceRow?.name ?? resolved.storedVoiceId,
+          language: voiceRow?.language ?? resolved.language,
+          lang: voiceRow?.lang ?? resolved.lang,
+          modelId: resolved.modelId,
+        };
+        await this.storePreviewIfNeeded(dummyRimeVoice, audio, voiceRow?.previewAudioUrl);
+        return audio;
       } catch (error: unknown) {
         if (error instanceof ServiceUnavailableException) {
           throw error;

@@ -21,12 +21,13 @@ import { CreateAgentDto } from './dto/create-agent.dto';
 import { PatchAgentDto } from './dto/patch-agent.dto';
 
 function organizationIdFromRequest(req: Request): string {
-  const organizationId = req.organizationId;
+  const organizationId = (req as any).organizationId;
   if (!organizationId) {
     throw new ForbiddenException('Missing organization context');
   }
   return organizationId;
 }
+
 
 function parsePositiveLimit(value: string | undefined): number | undefined {
   if (value === undefined) {
@@ -54,7 +55,7 @@ export class AgentsController {
   create(@Req() req: Request, @Body() dto: CreateAgentDto) {
     return this.agents.create(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       dto,
     );
   }
@@ -97,7 +98,7 @@ export class AgentsController {
   ) {
     return this.agents.update(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       id,
       dto,
     );
@@ -132,7 +133,7 @@ export class AgentsController {
   ) {
     return this.agents.createVersion(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       id,
       dto,
     );
@@ -148,7 +149,7 @@ export class AgentsController {
   ) {
     return this.agents.updateVersion(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       id,
       versionId,
       dto,
@@ -164,7 +165,7 @@ export class AgentsController {
   ) {
     return this.agents.publishVersion(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       id,
       versionId,
     );

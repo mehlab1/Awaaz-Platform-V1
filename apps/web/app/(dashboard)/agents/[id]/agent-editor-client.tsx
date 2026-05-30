@@ -2855,6 +2855,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </DialogHeader>
 
             {/* Provider pills — horizontal scroll on mobile, flex-wrap on desktop */}
+            <div className="mt-2 rounded-md bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground flex items-start gap-2 border border-border/50">
+              <Info className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground/70" />
+              <p>New provider runtimes should be verified in production before high-volume use.</p>
+            </div>
             <div className="mt-3">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">

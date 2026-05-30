@@ -17,7 +17,7 @@ import { UpsertProviderCredentialDto } from './dto/upsert-provider-credential.dt
 import { PluginsService } from './plugins.service';
 
 function organizationIdFromRequest(req: Request): string {
-  const organizationId = req.organizationId;
+  const organizationId = (req as any).organizationId;
   if (!organizationId) {
     throw new ForbiddenException('Missing organization context');
   }
@@ -54,7 +54,7 @@ export class PluginCredentialsController {
   ) {
     return this.plugins.upsertCredential(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       providerId,
       dto,
     );
@@ -65,7 +65,7 @@ export class PluginCredentialsController {
   validate(@Req() req: Request, @Param('providerId') providerId: string) {
     return this.plugins.validateCredential(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       providerId,
     );
   }
@@ -75,7 +75,7 @@ export class PluginCredentialsController {
   delete(@Req() req: Request, @Param('providerId') providerId: string) {
     return this.plugins.deleteCredential(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       providerId,
     );
   }

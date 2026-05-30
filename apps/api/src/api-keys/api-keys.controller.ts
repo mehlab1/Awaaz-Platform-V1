@@ -16,7 +16,7 @@ import { ApiKeysService } from './api-keys.service';
 import { CreateApiKeyDto } from './dto/create-api-key.dto';
 
 function organizationIdFromRequest(req: Request): string {
-  const organizationId = req.organizationId;
+  const organizationId = (req as any).organizationId;
   if (!organizationId) {
     throw new ForbiddenException('Missing organization context');
   }
@@ -38,7 +38,7 @@ export class ApiKeysController {
   create(@Req() req: Request, @Body() dto: CreateApiKeyDto) {
     return this.apiKeys.create(
       organizationIdFromRequest(req),
-      req.user!.id,
+      (req as any).user!.id,
       dto,
     );
   }
@@ -46,6 +46,6 @@ export class ApiKeysController {
   @Delete(':id')
   @Roles(Role.ADMIN)
   revoke(@Req() req: Request, @Param('id') id: string) {
-    return this.apiKeys.revoke(organizationIdFromRequest(req), req.user!.id, id);
+    return this.apiKeys.revoke(organizationIdFromRequest(req), (req as any).user!.id, id);
   }
 }
