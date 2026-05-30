@@ -42,7 +42,10 @@ export class InternalService {
     }
 
     const version = agent.currentVersion;
-    const voice = await this.voices.resolveForTts(version.voiceId);
+    const voice = await this.voices.resolveForTts(
+      version.voiceId,
+      agent.organizationId,
+    );
     this.logger.log(
       `Loaded agent config agent=${agent.id} version=${version.id} v${version.versionNumber} ` +
         `storedVoiceId=${version.voiceId} rimeSpeaker=${voice.rimeVoiceId} ` +

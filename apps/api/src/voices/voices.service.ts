@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,6 +9,7 @@ import { Prisma, type Voice } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { providerById } from '../plugins/provider-catalog';
 import { StorageService } from '../storage/storage.service';
 import { RimeService, type RimeVoice } from './rime.service';
 
@@ -18,10 +20,17 @@ export interface ResolvedRimeVoice {
 }
 
 export type VoiceListItem = Voice & {
+  provider: string;
   previewPlaybackUrl: string | null;
   previewPlaybackExpiresInSeconds: number | null;
 };
 
+interface ListVoicesOptions {
+  organizationId?: string;
+  providerId?: string;
+}
+
+const RIME_PROVIDER_ID = 'rime';
 const VOICE_PREVIEW_EXPIRES_IN_SECONDS = 3_600;
 const VOICE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
@@ -35,22 +44,35 @@ export class VoicesService {
     private readonly storage: StorageService,
   ) {}
 
-  async list(): Promise<VoiceListItem[]> {
+  async list(options: ListVoicesOptions = {}): Promise<VoiceListItem[]> {
+    const providerId = this.normalizeVoiceProviderId(options.providerId);
     const voices = await this.prisma.voice.findMany({
-      where: { isActive: true },
-      orderBy: { name: 'asc' },
+      where: {
+        isActive: true,
+        ...(providerId ? { providerId } : {}),
+        ...this.visibleVoiceScope(options.organizationId),
+      },
+      orderBy: [{ providerId: 'asc' }, { name: 'asc' }],
     });
 
     return Promise.all(voices.map((voice) => this.withPreviewPlayback(voice)));
   }
 
-  async preview(voiceId: string): Promise<Uint8Array> {
+  async preview(
+    voiceId: string,
+    organizationId?: string,
+  ): Promise<Uint8Array> {
     const trimmed = voiceId.trim();
-    const voiceRow = await this.findVoiceRow(trimmed);
+    const voiceRow = await this.findVoiceRow(trimmed, organizationId);
     if (voiceRow && !voiceRow.isActive) {
       throw new NotFoundException('Voice not found');
     }
-    const resolved = await this.resolveForTts(trimmed);
+    if (voiceRow && voiceRow.providerId !== RIME_PROVIDER_ID) {
+      throw new BadRequestException(
+        'Voice preview is currently available for Rime voices only',
+      );
+    }
+    const resolved = await this.resolveForTts(trimmed, organizationId);
     this.logger.log(
       `Voice preview request voiceId=${trimmed} rimeSpeaker=${resolved.rimeVoiceId} modelId=${resolved.modelId} lang=${resolved.lang}`,
     );
@@ -70,17 +92,25 @@ export class VoicesService {
    * Resolve a stored AgentVersion.voiceId (rime id or legacy DB id) to the exact
    * Rime speaker + model + lang tuple used by preview and the Python worker.
    */
-  async resolveForTts(storedVoiceId: string): Promise<ResolvedRimeVoice> {
+  async resolveForTts(
+    storedVoiceId: string,
+    organizationId?: string,
+  ): Promise<ResolvedRimeVoice> {
     const trimmed = storedVoiceId.trim();
     if (!trimmed) {
       throw new NotFoundException('Voice not found');
     }
 
-    const voiceRow = await this.findVoiceRow(trimmed);
+    const voiceRow = await this.findVoiceRow(trimmed, organizationId);
+    if (voiceRow && voiceRow.providerId !== RIME_PROVIDER_ID) {
+      throw new ServiceUnavailableException(
+        'Only Rime voices are supported by the current worker runtime',
+      );
+    }
 
     const rimeVoice: RimeVoice = voiceRow
       ? {
-          rimeVoiceId: voiceRow.rimeVoiceId,
+          rimeVoiceId: voiceRow.providerVoiceId || voiceRow.rimeVoiceId,
           name: voiceRow.name,
           description: voiceRow.description ?? undefined,
           language: voiceRow.language,
@@ -149,6 +179,8 @@ export class VoicesService {
         return this.prisma.voice.upsert({
           where: { rimeVoiceId: voice.rimeVoiceId },
           create: {
+            providerId: RIME_PROVIDER_ID,
+            providerVoiceId: voice.rimeVoiceId,
             rimeVoiceId: voice.rimeVoiceId,
             name: voice.name,
             description: voice.description,
@@ -156,16 +188,20 @@ export class VoicesService {
             lang: voice.lang,
             modelId: voice.modelId,
             gender: voice.gender,
+            metadata: this.rimeVoiceMetadata(voice),
             previewAudioUrl,
             syncedAt,
           },
           update: {
+            providerId: RIME_PROVIDER_ID,
+            providerVoiceId: voice.rimeVoiceId,
             name: voice.name,
             description: voice.description,
             language: voice.language,
             lang: voice.lang,
             modelId: voice.modelId,
             gender: voice.gender,
+            metadata: this.rimeVoiceMetadata(voice),
             previewAudioUrl,
             isActive: true,
             syncedAt,
@@ -190,16 +226,23 @@ export class VoicesService {
     }
 
     const values = voices.map((voice) =>
-      Prisma.sql`(${randomUUID()}, ${voice.rimeVoiceId}, ${voice.name}, ${
-        voice.description ?? null
-      }, ${voice.language}, ${voice.lang ?? null}, ${voice.modelId ?? null}, ${
+      Prisma.sql`(${randomUUID()}, null, ${RIME_PROVIDER_ID}, ${
+        voice.rimeVoiceId
+      }, ${voice.rimeVoiceId}, ${voice.name}, ${voice.description ?? null}, ${
+        voice.language
+      }, ${voice.lang ?? null}, ${voice.modelId ?? null}, ${
         voice.gender ?? null
-      }, true, ${syncedAt}, ${syncedAt}, ${syncedAt})`,
+      }, ${JSON.stringify(this.rimeVoiceMetadata(voice))}::jsonb, true, ${
+        syncedAt
+      }, ${syncedAt}, ${syncedAt})`,
     );
 
     await this.prisma.$executeRaw`
       INSERT INTO "voices" (
         "id",
+        "organizationId",
+        "providerId",
+        "providerVoiceId",
         "rimeVoiceId",
         "name",
         "description",
@@ -207,6 +250,7 @@ export class VoicesService {
         "lang",
         "modelId",
         "gender",
+        "metadata",
         "isActive",
         "syncedAt",
         "createdAt",
@@ -214,12 +258,16 @@ export class VoicesService {
       )
       VALUES ${Prisma.join(values)}
       ON CONFLICT ("rimeVoiceId") DO UPDATE SET
+        "organizationId" = EXCLUDED."organizationId",
+        "providerId" = EXCLUDED."providerId",
+        "providerVoiceId" = EXCLUDED."providerVoiceId",
         "name" = EXCLUDED."name",
         "description" = EXCLUDED."description",
         "language" = EXCLUDED."language",
         "lang" = EXCLUDED."lang",
         "modelId" = EXCLUDED."modelId",
         "gender" = EXCLUDED."gender",
+        "metadata" = EXCLUDED."metadata",
         "isActive" = true,
         "syncedAt" = EXCLUDED."syncedAt",
         "updatedAt" = EXCLUDED."updatedAt"
@@ -240,6 +288,7 @@ export class VoicesService {
       );
       return {
         ...voice,
+        provider: voice.providerId,
         previewPlaybackUrl: playback?.url ?? null,
         previewPlaybackExpiresInSeconds: playback?.expiresInSeconds ?? null,
       };
@@ -250,6 +299,7 @@ export class VoicesService {
       );
       return {
         ...voice,
+        provider: voice.providerId,
         previewPlaybackUrl: null,
         previewPlaybackExpiresInSeconds: null,
       };
@@ -306,19 +356,36 @@ export class VoicesService {
     );
   }
 
-  private async findVoiceRow(storedVoiceId: string): Promise<Voice | null> {
+  private async findVoiceRow(
+    storedVoiceId: string,
+    organizationId?: string,
+  ): Promise<Voice | null> {
     const trimmed = storedVoiceId.trim();
     if (!trimmed) {
       return null;
     }
-    return (
-      (await this.prisma.voice.findUnique({
-        where: { rimeVoiceId: trimmed },
-      })) ??
-      (await this.prisma.voice.findUnique({
-        where: { id: trimmed },
-      }))
-    );
+    const identifierWhere: Prisma.VoiceWhereInput[] = [
+      { id: trimmed },
+      { rimeVoiceId: trimmed },
+      { providerVoiceId: trimmed },
+    ];
+    if (organizationId) {
+      const organizationVoice = await this.prisma.voice.findFirst({
+        where: {
+          organizationId,
+          OR: identifierWhere,
+        },
+      });
+      if (organizationVoice) {
+        return organizationVoice;
+      }
+    }
+    return this.prisma.voice.findFirst({
+      where: {
+        organizationId: null,
+        OR: identifierWhere,
+      },
+    });
   }
 
   private async storePreviewIfNeeded(
@@ -417,12 +484,46 @@ export class VoicesService {
     await this.prisma.voice.update({
       where: { rimeVoiceId: voice.rimeVoiceId },
       data: {
+        providerId: RIME_PROVIDER_ID,
+        providerVoiceId: fresh.rimeVoiceId,
         language: fresh.language,
         lang: fresh.lang,
         modelId: fresh.modelId,
+        metadata: this.rimeVoiceMetadata(fresh),
       },
     });
 
     return fresh;
+  }
+
+  private normalizeVoiceProviderId(providerId: string | undefined): string | undefined {
+    const normalized = providerId?.trim().toLowerCase();
+    if (!normalized) {
+      return undefined;
+    }
+    const provider = providerById(normalized);
+    if (!provider || provider.kind !== 'tts') {
+      throw new BadRequestException(`Unsupported voice provider: ${providerId}`);
+    }
+    return provider.id;
+  }
+
+  private visibleVoiceScope(organizationId: string | undefined): Prisma.VoiceWhereInput {
+    if (!organizationId) {
+      return { organizationId: null };
+    }
+    return {
+      OR: [{ organizationId: null }, { organizationId }],
+    };
+  }
+
+  private rimeVoiceMetadata(voice: RimeVoice): Prisma.InputJsonObject {
+    return {
+      source: 'rime_voice_sync',
+      providerId: RIME_PROVIDER_ID,
+      providerVoiceId: voice.rimeVoiceId,
+      modelId: voice.modelId ?? null,
+      lang: voice.lang ?? null,
+    };
   }
 }

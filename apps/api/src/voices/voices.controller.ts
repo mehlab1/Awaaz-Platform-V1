@@ -4,6 +4,7 @@ import {
   Get,
   HttpCode,
   Post,
+  Query,
   Req,
   Res,
   StreamableFile,
@@ -12,6 +13,7 @@ import { Role } from '@prisma/client';
 import type { Request, Response } from 'express';
 
 import { Roles } from '../common/roles.decorator';
+import { ListVoicesQueryDto } from './dto/list-voices-query.dto';
 import { VoicePreviewDto } from './dto/voice-preview.dto';
 import { VoicesService } from './voices.service';
 
@@ -21,9 +23,11 @@ export class VoicesController {
 
   @Get()
   @Roles(Role.VIEWER)
-  list(@Req() req: Request) {
-    void req.organizationId;
-    return this.voices.list();
+  list(@Req() req: Request, @Query() query: ListVoicesQueryDto) {
+    return this.voices.list({
+      organizationId: req.organizationId,
+      providerId: query.providerId,
+    });
   }
 
   @Post('sync')
@@ -41,8 +45,7 @@ export class VoicesController {
     @Body() dto: VoicePreviewDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    void req.organizationId;
-    const audio = await this.voices.preview(dto.voiceId);
+    const audio = await this.voices.preview(dto.voiceId, req.organizationId);
     res.set({
       'Cache-Control': 'no-store',
       'Content-Length': audio.byteLength.toString(),

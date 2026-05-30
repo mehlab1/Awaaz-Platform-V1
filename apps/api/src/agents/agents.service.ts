@@ -205,7 +205,10 @@ export class AgentsService {
     agentId: string,
     dto: CreateAgentVersionDto,
   ) {
-    const resolvedVoice = await this.voices.resolveForTts(dto.voiceId);
+    const resolvedVoice = await this.voices.resolveForTts(
+      dto.voiceId,
+      organizationId,
+    );
     return this.prisma.$transaction(
       async (tx) => {
         await this.ensureAgentInTransaction(tx, organizationId, agentId);
@@ -269,7 +272,10 @@ export class AgentsService {
     versionId: string,
     dto: CreateAgentVersionDto,
   ) {
-    const resolvedVoice = await this.voices.resolveForTts(dto.voiceId);
+    const resolvedVoice = await this.voices.resolveForTts(
+      dto.voiceId,
+      organizationId,
+    );
     return this.prisma.$transaction(async (tx) => {
       await this.ensureAgentInTransaction(tx, organizationId, agentId);
       const existing = await tx.agentVersion.findFirst({
