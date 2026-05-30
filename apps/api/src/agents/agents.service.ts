@@ -11,13 +11,12 @@ import { AuditAction, Prisma, CallStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { VoicesService, type ResolvedRimeVoice } from '../voices/voices.service';
+import { VoicesService, type ResolvedTtsVoice } from '../voices/voices.service';
 import type { CreateAgentVersionDto } from './dto/create-agent-version.dto';
 import type { CreateAgentDto } from './dto/create-agent.dto';
 import type { PatchAgentDto } from './dto/patch-agent.dto';
 
 const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
-const DEFAULT_TTS_PROVIDER_ID = 'rime';
 const DEFAULT_LLM_PROVIDER_ID = 'groq';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
@@ -205,7 +204,7 @@ export class AgentsService {
     agentId: string,
     dto: CreateAgentVersionDto,
   ) {
-    const resolvedVoice = await this.voices.resolveForTts(
+    const resolvedVoice = await this.voices.resolveVoiceForAgentVersion(
       dto.voiceId,
       organizationId,
     );
@@ -249,6 +248,7 @@ export class AgentsService {
               sttModel: version.sttModel,
               voiceModelId: resolvedVoice.modelId,
               voiceLang: resolvedVoice.lang,
+              voiceProviderId: resolvedVoice.providerId,
               model: version.model,
               temperature: version.temperature,
               maxTokens: version.maxTokens,
@@ -272,7 +272,7 @@ export class AgentsService {
     versionId: string,
     dto: CreateAgentVersionDto,
   ) {
-    const resolvedVoice = await this.voices.resolveForTts(
+    const resolvedVoice = await this.voices.resolveVoiceForAgentVersion(
       dto.voiceId,
       organizationId,
     );
@@ -702,15 +702,15 @@ export class AgentsService {
 
   private v1CompatiblePipelineData(
     dto: CreateAgentVersionDto,
-    resolvedVoice: ResolvedRimeVoice,
+    resolvedVoice: ResolvedTtsVoice,
   ) {
     const llmModel = dto.model ?? DEFAULT_LLM_MODEL;
     return {
-      voiceId: resolvedVoice.rimeVoiceId,
+      voiceId: resolvedVoice.storedVoiceId,
       model: llmModel,
-      ttsProviderId: DEFAULT_TTS_PROVIDER_ID,
+      ttsProviderId: resolvedVoice.providerId,
       ttsModel: resolvedVoice.modelId,
-      ttsVoiceId: resolvedVoice.rimeVoiceId,
+      ttsVoiceId: resolvedVoice.providerVoiceId,
       llmProviderId: DEFAULT_LLM_PROVIDER_ID,
       llmModel,
       sttProviderId: DEFAULT_STT_PROVIDER_ID,

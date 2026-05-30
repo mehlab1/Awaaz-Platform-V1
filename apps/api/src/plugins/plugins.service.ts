@@ -687,8 +687,12 @@ export class PluginsService {
     return apiKey.slice(0, KEY_PREFIX_LENGTH);
   }
 
-  private fingerprint(apiKey: string): string {
+  keyFingerprint(apiKey: string): string {
     return createHash('sha256').update(apiKey).digest('hex');
+  }
+
+  private fingerprint(apiKey: string): string {
+    return this.keyFingerprint(apiKey);
   }
 
   private metadataJson(

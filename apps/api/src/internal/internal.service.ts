@@ -1,5 +1,10 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import {
   CallStatus,
   EventType,
@@ -8,6 +13,7 @@ import {
 import type { Queue } from 'bullmq';
 
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
+import { PluginsService } from '../plugins/plugins.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
 import {
@@ -18,6 +24,11 @@ import { VoicesService } from '../voices/voices.service';
 import type { CallEventDto } from './dto/call-event.dto';
 import type { EndCallDto } from './dto/end-call.dto';
 import type { StartCallDto } from './dto/start-call.dto';
+import type { WorkerAgentConfigResponse } from './worker-agent-config.types';
+
+const DEFAULT_LLM_PROVIDER_ID = 'groq';
+const DEFAULT_STT_PROVIDER_ID = 'deepgram';
+const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
 
 @Injectable()
 export class InternalService {
@@ -29,10 +40,11 @@ export class InternalService {
     private readonly transcriptQueue: Queue<TranscriptJobData>,
     private readonly transcriptAssembly: TranscriptAssemblyService,
     private readonly voices: VoicesService,
+    private readonly plugins: PluginsService,
     private readonly liveKitBrowserTest: LiveKitBrowserTestService,
   ) {}
 
-  async getAgentConfig(agentId: string) {
+  async getAgentConfig(agentId: string): Promise<WorkerAgentConfigResponse> {
     const agent = await this.prisma.agent.findFirst({
       where: { id: agentId, deletedAt: null, isActive: true },
       include: { currentVersion: true },
@@ -42,21 +54,40 @@ export class InternalService {
     }
 
     const version = agent.currentVersion;
-    const voice = await this.voices.resolveForTts(
+    const voice = await this.voices.resolveTtsForRuntime(
       version.voiceId,
       agent.organizationId,
     );
+    const ttsSecret = await this.plugins.resolveOrganizationProviderSecret(
+      agent.organizationId,
+      voice.providerId,
+    );
+    if (!ttsSecret.ok) {
+      throw new ServiceUnavailableException(
+        `TTS credential for provider "${voice.providerId}" is not available: ${ttsSecret.error}`,
+      );
+    }
+    await this.plugins.markProviderCredentialUsed(ttsSecret.credentialId);
+
+    const sttProviderId = version.sttProviderId ?? DEFAULT_STT_PROVIDER_ID;
+    const sttModel = version.sttModel ?? DEFAULT_STT_MODEL;
+    const llmProviderId = version.llmProviderId ?? DEFAULT_LLM_PROVIDER_ID;
+    const llmModel = version.llmModel ?? version.model;
+    const keyFingerprint = this.plugins.keyFingerprint(ttsSecret.key);
+
     this.logger.log(
       `Loaded agent config agent=${agent.id} version=${version.id} v${version.versionNumber} ` +
-        `storedVoiceId=${version.voiceId} rimeSpeaker=${voice.rimeVoiceId} ` +
-        `modelId=${voice.modelId} lang=${voice.lang}`,
+        `storedVoiceId=${version.voiceId} ttsProvider=${voice.providerId} ` +
+        `ttsVoiceId=${voice.providerVoiceId} ttsModel=${voice.modelId} lang=${voice.lang} ` +
+        `credentialMode=${ttsSecret.credentialMode} keyFingerprint=${keyFingerprint}`,
     );
+
     return {
       agentId: agent.id,
       agentVersionId: version.id,
       organizationId: agent.organizationId,
       systemPrompt: version.systemPrompt,
-      voiceId: voice.rimeVoiceId,
+      voiceId: voice.providerVoiceId,
       voiceModelId: voice.modelId,
       voiceLang: voice.lang,
       model: version.model,
@@ -64,6 +95,42 @@ export class InternalService {
       maxTokens: version.maxTokens,
       firstMessage: version.firstMessage,
       endCallPhrases: version.endCallPhrases,
+      pipeline: {
+        stt: {
+          providerId: sttProviderId,
+          model: sttModel,
+        },
+        llm: {
+          providerId: llmProviderId,
+          model: llmModel,
+        },
+        tts: {
+          providerId: voice.providerId,
+          voiceId: voice.providerVoiceId,
+          modelId: voice.modelId,
+          language: voice.lang,
+        },
+      },
+      credentials: {
+        tts: {
+          providerId: voice.providerId,
+          mode: ttsSecret.credentialMode,
+          apiKey: ttsSecret.key,
+          keyFingerprint,
+        },
+      },
+      metadata: {
+        ttsProviderId: voice.providerId,
+        ttsModel: voice.modelId,
+        ttsVoiceId: voice.providerVoiceId,
+        ttsCredentialMode: ttsSecret.credentialMode,
+        ttsKeyFingerprint: keyFingerprint,
+        sttProviderId,
+        sttModel,
+        llmProviderId,
+        llmModel,
+        agentVersionNumber: version.versionNumber,
+      },
     };
   }
 

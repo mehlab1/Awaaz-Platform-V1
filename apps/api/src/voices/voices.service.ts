@@ -25,6 +25,17 @@ export interface ResolvedRimeVoice {
   lang: string;
 }
 
+/** Provider-aware voice resolution for agent versions and worker runtime. */
+export interface ResolvedTtsVoice {
+  providerId: string;
+  providerVoiceId: string;
+  modelId: string;
+  language: string;
+  lang: string;
+  /** Value persisted on AgentVersion.voiceId */
+  storedVoiceId: string;
+}
+
 export type VoiceListItem = Voice & {
   provider: string;
   previewPlaybackUrl: string | null;
@@ -115,27 +126,26 @@ export class VoicesService {
   }
 
   /**
-   * Resolve a stored AgentVersion.voiceId (rime id or legacy DB id) to the exact
-   * Rime speaker + model + lang tuple used by preview and the Python worker.
+   * Resolve a stored AgentVersion.voiceId for version persistence.
+   * Works for any synced catalog voice; does not require worker runtime support.
    */
-  async resolveForTts(
+  async resolveVoiceForAgentVersion(
     storedVoiceId: string,
     organizationId?: string,
-  ): Promise<ResolvedRimeVoice> {
+  ): Promise<ResolvedTtsVoice> {
     const trimmed = storedVoiceId.trim();
     if (!trimmed) {
       throw new NotFoundException('Voice not found');
     }
 
     const voiceRow = await this.findVoiceRow(trimmed, organizationId);
-    if (voiceRow && voiceRow.providerId !== RIME_PROVIDER_ID) {
-      throw new ServiceUnavailableException(
-        'Only Rime voices are supported by the current worker runtime',
-      );
+    if (voiceRow && !voiceRow.isActive) {
+      throw new NotFoundException('Voice not found');
     }
 
-    const rimeVoice: RimeVoice = voiceRow
-      ? {
+    if (voiceRow) {
+      if (voiceRow.providerId === RIME_PROVIDER_ID) {
+        const rime = await this.resolveRimeVoice({
           rimeVoiceId: voiceRow.providerVoiceId || voiceRow.rimeVoiceId,
           name: voiceRow.name,
           description: voiceRow.description ?? undefined,
@@ -143,29 +153,100 @@ export class VoicesService {
           lang: voiceRow.lang ?? undefined,
           modelId: voiceRow.modelId ?? undefined,
           gender: voiceRow.gender ?? undefined,
+        });
+        if (!rime.lang || !rime.modelId) {
+          throw new ServiceUnavailableException(
+            'Rime voice metadata is missing; run voice sync before using this voice',
+          );
         }
-      : {
-          rimeVoiceId: trimmed,
-          name: trimmed,
-          language: 'en',
+        return {
+          providerId: RIME_PROVIDER_ID,
+          providerVoiceId: rime.rimeVoiceId,
+          modelId: rime.modelId,
+          language: rime.language,
+          lang: rime.lang,
+          storedVoiceId: rime.rimeVoiceId,
         };
+      }
 
-    const resolved = await this.resolveRimeVoice(rimeVoice);
-    if (!resolved.lang || !resolved.modelId) {
+      const modelId =
+        voiceRow.modelId?.trim() ||
+        providerById(voiceRow.providerId)?.defaultModel ||
+        voiceRow.providerId;
+      return {
+        providerId: voiceRow.providerId,
+        providerVoiceId: voiceRow.providerVoiceId || voiceRow.rimeVoiceId,
+        modelId,
+        language: voiceRow.language,
+        lang: voiceRow.lang ?? voiceRow.language,
+        storedVoiceId: voiceRow.rimeVoiceId,
+      };
+    }
+
+    if (this.isExternalScopedVoiceId(trimmed)) {
+      throw new NotFoundException('Voice not found');
+    }
+
+    const rime = await this.resolveRimeVoice({
+      rimeVoiceId: trimmed,
+      name: trimmed,
+      language: 'en',
+    });
+    if (!rime.lang || !rime.modelId) {
       throw new ServiceUnavailableException(
         'Rime voice metadata is missing; run voice sync before using this voice',
       );
     }
+    return {
+      providerId: RIME_PROVIDER_ID,
+      providerVoiceId: rime.rimeVoiceId,
+      modelId: rime.modelId,
+      language: rime.language,
+      lang: rime.lang,
+      storedVoiceId: rime.rimeVoiceId,
+    };
+  }
 
-    const result: ResolvedRimeVoice = {
-      rimeVoiceId: resolved.rimeVoiceId,
+  /**
+   * Resolve voice + validate worker runtime support.
+   * Rime is supported today; other TTS providers return a clear error until Phase 5.3+.
+   */
+  async resolveTtsForRuntime(
+    storedVoiceId: string,
+    organizationId?: string,
+  ): Promise<ResolvedTtsVoice> {
+    const resolved = await this.resolveVoiceForAgentVersion(
+      storedVoiceId,
+      organizationId,
+    );
+    if (resolved.providerId !== RIME_PROVIDER_ID) {
+      throw new ServiceUnavailableException(
+        `TTS provider "${resolved.providerId}" is not supported by the worker runtime yet. ` +
+          'Use a Rime voice for live calls and Test Agent.',
+      );
+    }
+    this.logger.log(
+      `Resolved voice for runtime stored=${storedVoiceId.trim()} ` +
+        `provider=${resolved.providerId} voiceId=${resolved.providerVoiceId} ` +
+        `modelId=${resolved.modelId} lang=${resolved.lang}`,
+    );
+    return resolved;
+  }
+
+  /**
+   * Resolve a stored AgentVersion.voiceId (rime id or legacy DB id) to the exact
+   * Rime speaker + model + lang tuple used by preview and the Python worker.
+   */
+  async resolveForTts(
+    storedVoiceId: string,
+    organizationId?: string,
+  ): Promise<ResolvedRimeVoice> {
+    const resolved = await this.resolveTtsForRuntime(storedVoiceId, organizationId);
+    return {
+      rimeVoiceId: resolved.providerVoiceId,
       modelId: resolved.modelId,
       lang: resolved.lang,
     };
-    this.logger.log(
-      `Resolved voice for TTS stored=${trimmed} rimeVoiceId=${result.rimeVoiceId} modelId=${result.modelId} lang=${result.lang}`,
-    );
-    return result;
   }
 
   async sync(options: SyncVoicesOptions = {}) {
@@ -769,5 +850,10 @@ export class VoicesService {
     providerId: string,
   ): providerId is ExternalTtsVoiceProviderId {
     return EXTERNAL_TTS_PROVIDER_IDS.some((candidate) => candidate === providerId);
+  }
+
+  private isExternalScopedVoiceId(storedVoiceId: string): boolean {
+    const prefix = storedVoiceId.split(':')[0]?.toLowerCase();
+    return EXTERNAL_TTS_PROVIDER_IDS.some((providerId) => providerId === prefix);
   }
 }
