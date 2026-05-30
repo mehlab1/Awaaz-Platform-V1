@@ -48,6 +48,17 @@ import {
 } from '@/components/ui/dialog';
 import { useOrgContext } from '@/components/org-context';
 import { VersionPromptDiff } from '@/components/version-prompt-diff';
+import {
+  assessRuntimeConfig,
+  canPreviewVoice,
+  CATALOG_ONLY_VOICE_MESSAGE,
+  isCatalogOnlyVoiceProvider,
+  RUNTIME_PIPELINE_FOOTNOTE,
+  RUNTIME_STT_PROVIDER,
+  RUNTIME_TTS_PROVIDER,
+  VOICE_PREVIEW_UNAVAILABLE_MESSAGE,
+  voiceProviderIdFromStoredId,
+} from '@/lib/agent-runtime-guardrails';
 import { cn } from '@/lib/utils';
 
 const TestCallModal = dynamic(
@@ -348,6 +359,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const [prompt, setPrompt] = useState('');
   const [selectedVoiceId, setSelectedVoiceId] = useState('');
+  const [selectedModelId, setSelectedModelId] = useState(DEFAULT_LLM_MODEL);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [promptHydrated, setPromptHydrated] = useState(false);
 
@@ -493,8 +505,42 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const hasUnsavedChanges =
     promptHydrated &&
     (selectedVersion
-      ? prompt !== selectedVersion.systemPrompt
+      ? prompt !== selectedVersion.systemPrompt ||
+        selectedVoiceId !== selectedVersion.voiceId ||
+        selectedModelId !== (selectedVersion.model ?? DEFAULT_LLM_MODEL)
       : prompt.trim().length > 0);
+
+  const editorRuntimeAssessment = useMemo(
+    () =>
+      assessRuntimeConfig({
+        voiceId: selectedVoiceId,
+        model: selectedModelId,
+        voices,
+      }),
+    [selectedModelId, selectedVoiceId, voices],
+  );
+
+  const liveRuntimeAssessment = useMemo(
+    () =>
+      assessRuntimeConfig({
+        voiceId: liveVersion?.voiceId ?? '',
+        model: liveVersion?.model ?? DEFAULT_LLM_MODEL,
+        voices,
+      }),
+    [liveVersion?.model, liveVersion?.voiceId, voices],
+  );
+
+  const publishTargetRuntimeAssessment = useMemo(() => {
+    if (!publishTarget) {
+      return null;
+    }
+    return assessRuntimeConfig({
+      voiceId: publishTarget.voiceId,
+      model: publishTarget.model ?? DEFAULT_LLM_MODEL,
+      voices,
+    });
+  }, [publishTarget, voices]);
+
   const promptIsValid = prompt.trim().length > 0 && selectedVoiceId.trim().length > 0;
   const versionPanelBusy = versionMutating !== null;
   const canUpdateCurrentVersion =
@@ -528,7 +574,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     !hasUnsavedChanges &&
     !isSelectedLive &&
     saveBusy === null &&
-    !versionPanelBusy;
+    !versionPanelBusy &&
+    editorRuntimeAssessment.canPublishLive;
+  const publishLiveBlockedReason = !editorRuntimeAssessment.canPublishLive
+    ? editorRuntimeAssessment.issues[0]
+    : null;
   const isViewingHistoricalVersion =
     selectedVersion != null &&
     !isSelectedLive &&
@@ -561,6 +611,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const useDraft = draftPrompt.trim().length > 0;
     setPrompt(useDraft ? draftPrompt : baseline);
     setSelectedVoiceId(baselineVersion?.voiceId ?? '');
+    setSelectedModelId(baselineVersion?.model ?? DEFAULT_LLM_MODEL);
     setSelectedVersionId(baselineVersion?.id ?? null);
     setPromptHydrated(true);
   }, [agent, draftPrompt, promptHydrated, versions]);
@@ -827,14 +878,22 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(version.id);
       setPrompt(version.systemPrompt);
       setSelectedVoiceId(version.voiceId);
+      setSelectedModelId(version.model ?? DEFAULT_LLM_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setPreviewingVersion(null);
+      const versionRuntime = assessRuntimeConfig({
+        voiceId: version.voiceId,
+        model: version.model ?? DEFAULT_LLM_MODEL,
+        voices,
+      });
       setToast(
-        `Viewing V${version.versionNumber}. Update this version or save V${nextVersionNumber} as a new version.`,
+        versionRuntime.canPublishLive
+          ? `Viewing V${version.versionNumber}. Update this version or save V${nextVersionNumber} as a new version.`
+          : `Viewing V${version.versionNumber} (catalog-only draft — not publishable until you switch to a Rime voice and Groq model).`,
       );
     },
-    [hasUnsavedChanges, nextVersionNumber, selectedVersionId, setDraftPrompt],
+    [hasUnsavedChanges, nextVersionNumber, selectedVersionId, setDraftPrompt, voices],
   );
 
   const executeRestoreConfirmed = async () => {
@@ -861,6 +920,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(restored.id);
       setPrompt(restored.systemPrompt);
       setSelectedVoiceId(restored.voiceId);
+      setSelectedModelId(restored.model ?? DEFAULT_LLM_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setRestoreTarget(null);
@@ -876,6 +936,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const executePublishConfirmed = async () => {
     if (!activeOrgId || !publishTarget) {
+      return;
+    }
+    const publishRuntime = assessRuntimeConfig({
+      voiceId: publishTarget.voiceId,
+      model: publishTarget.model ?? DEFAULT_LLM_MODEL,
+      voices,
+    });
+    if (!publishRuntime.canPublishLive) {
+      setToast(
+        publishRuntime.issues[0] ??
+          'Cannot publish live: current runtime supports Rime, Deepgram, and Groq only.',
+      );
       return;
     }
     const publishedNumber = publishTarget.versionNumber;
@@ -906,7 +978,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const body: Record<string, unknown> = {
       systemPrompt: prompt,
       voiceId: selectedVoiceId,
-      model: source?.model ?? DEFAULT_LLM_MODEL,
+      model: selectedModelId,
       temperature: source?.temperature ?? 0.7,
       maxTokens: source?.maxTokens ?? 1024,
       endCallPhrases: source?.endCallPhrases ?? [],
@@ -916,7 +988,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       body.firstMessage = fm;
     }
     return body;
-  }, [agent?.currentVersion, prompt, selectedVersion, selectedVoiceId]);
+  }, [prompt, selectedModelId, selectedVoiceId]);
 
   const updateCurrentVersionFlow = async () => {
     if (saveInFlightRef.current || saveBusy !== null || versionPanelBusy) {
@@ -971,6 +1043,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(updated.id);
       setPrompt(updated.systemPrompt);
       setSelectedVoiceId(updated.voiceId);
+      setSelectedModelId(updated.model ?? DEFAULT_LLM_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setToast(
@@ -996,7 +1069,16 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
     if (!selectedVersion || !activeOrgId) {
       if (!selectedVersion) {
-        setToast('Voice selected for the next saved version.');
+        const pendingRuntime = assessRuntimeConfig({
+          voiceId,
+          model: selectedModelId,
+          voices,
+        });
+        setToast(
+          pendingRuntime.isRimeVoice
+            ? 'Voice selected for the next saved version.'
+            : 'Catalog-only voice selected. Save a draft, then switch to Rime before publishing.',
+        );
       }
       setVoiceSaveBusy(false);
       return;
@@ -1011,7 +1093,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           body: JSON.stringify({
             systemPrompt: selectedVersion.systemPrompt,
             voiceId: voiceId,
-            model: selectedVersion.model,
+            model: selectedModelId,
             temperature: selectedVersion.temperature,
             maxTokens: selectedVersion.maxTokens,
             firstMessage: selectedVersion.firstMessage,
@@ -1034,7 +1116,16 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           currentVersion: updated,
         });
       }
-      setToast('Voice setting saved.');
+      const savedRuntime = assessRuntimeConfig({
+        voiceId,
+        model: selectedModelId,
+        voices,
+      });
+      setToast(
+        savedRuntime.isRimeVoice
+          ? 'Voice setting saved.'
+          : 'Voice saved as catalog-only draft. Publish and Test Agent require a Rime voice and Groq model.',
+      );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setToast(`Failed to update voice: ${message}`);
@@ -1061,7 +1152,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       return;
     }
     if (!hasUnsavedChanges) {
-      setToast('No prompt changes to save.');
+      setToast('No changes to save.');
       return;
     }
     const tinyChangeWarning =
@@ -1104,6 +1195,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(created.id);
       setPrompt(created.systemPrompt);
       setSelectedVoiceId(created.voiceId);
+      setSelectedModelId(created.model ?? DEFAULT_LLM_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       console.debug('[AgentEditor] Saved version voice', {
@@ -1202,10 +1294,22 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     selectedPanelPreviewKey !== null && loadingPreviewKey === selectedPanelPreviewKey;
   const selectedPanelPlaying =
     selectedPanelVoice !== null && playingVoiceId === selectedPanelVoice.rimeVoiceId;
-  const selectedModelValue =
-    selectedVersion?.model ?? liveVersion?.model ?? DEFAULT_LLM_MODEL;
 
-  const buildProviderOptions = (kind: 'tts' | 'stt', fallback: readonly PipelineOption[]) => {
+  const tempSelectedRuntimeAssessment = useMemo(() => {
+    if (!tempSelectedVoiceId) {
+      return null;
+    }
+    return assessRuntimeConfig({
+      voiceId: tempSelectedVoiceId,
+      model: selectedModelId,
+      voices,
+    });
+  }, [selectedModelId, tempSelectedVoiceId, voices]);
+
+  const buildCatalogProviderOptions = (
+    kind: 'tts' | 'stt',
+    fallback: readonly PipelineOption[],
+  ) => {
     if (!catalogProviders) return fallback;
     const matching = catalogProviders.filter((p) => p.kind === kind);
     if (matching.length === 0) return fallback;
@@ -1223,6 +1327,21 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     if (matching.length === 0) return fallback;
 
     const options = matching.flatMap((provider) => {
+      if (provider.id === 'anthropic') {
+        return [
+          {
+            value: 'anthropic-runtime-locked',
+            label: `${provider.label} (coming soon)`,
+            disabled: true,
+            description: 'Runtime support coming in a future release',
+          },
+        ];
+      }
+
+      if (provider.id !== 'groq') {
+        return [];
+      }
+
       const models = provider.models?.length
         ? provider.models
         : provider.defaultModel
@@ -1242,12 +1361,20 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return options.length > 0 ? options : fallback;
   };
 
-  const ttsOptions = buildProviderOptions('tts', TTS_OPTIONS);
-  const sttOptions = buildProviderOptions('stt', STT_OPTIONS);
+  const ttsOptions = buildCatalogProviderOptions('tts', TTS_OPTIONS);
+  const sttOptions = buildCatalogProviderOptions('stt', STT_OPTIONS);
   let llmOptions = buildLlmOptions(LLM_OPTIONS);
 
-  if (!llmOptions.some((o) => o.value === selectedModelValue)) {
-    llmOptions = [...llmOptions, { value: selectedModelValue, label: `Current model - ${selectedModelValue}` }];
+  if (!llmOptions.some((o) => o.value === selectedModelId)) {
+    llmOptions = [
+      ...llmOptions,
+      {
+        value: selectedModelId,
+        label: `Current model - ${selectedModelId}`,
+        disabled: true,
+        description: 'Not supported for live runtime yet',
+      },
+    ];
   }
 
   const hasUsableLiveConfig =
@@ -1310,7 +1437,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   ? 'Publish a version before testing.'
                   : !hasUsableLiveConfig
                     ? 'Live version is missing a system prompt or voice.'
-                    : null;
+                    : !liveRuntimeAssessment.canTestLive
+                      ? (liveRuntimeAssessment.issues[0] ??
+                        'Live version uses providers not supported by the current runtime.')
+                      : null;
 
   const canTest = testCallBlockedReason === null;
 
@@ -1388,14 +1518,25 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       }
 
       const request = (async () => {
+        const voiceProvider = voiceProviderIdFromStoredId(voice.rimeVoiceId, voices);
         const storedUrl = storedVoicePreviewUrl(voice);
+
+        if (voiceProvider !== RUNTIME_TTS_PROVIDER) {
+          if (!storedUrl) {
+            throw new Error(VOICE_PREVIEW_UNAVAILABLE_MESSAGE);
+          }
+          const objectUrl = await fetchStoredVoicePreviewObjectUrl(storedUrl);
+          previewCacheRef.current.set(cacheKey, objectUrl);
+          return objectUrl;
+        }
+
         if (storedUrl) {
           try {
             const objectUrl = await fetchStoredVoicePreviewObjectUrl(storedUrl);
             previewCacheRef.current.set(cacheKey, objectUrl);
             return objectUrl;
           } catch (e) {
-            console.warn('[AgentEditor] Stored voice preview failed; using live fallback', {
+            console.warn('[AgentEditor] Stored voice preview failed; using Rime fallback', {
               voiceId: voice.rimeVoiceId,
               error: e instanceof Error ? e.message : String(e),
             });
@@ -1424,7 +1565,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         previewInFlightRef.current.delete(cacheKey);
       }
     },
-    [apiCall],
+    [apiCall, voices],
   );
 
   useEffect(() => {
@@ -1480,6 +1621,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const targetVoice = voiceToPreview ?? selectedVoice;
     if (!targetVoice) {
       setToast('Pick a voice to preview.');
+      return;
+    }
+    if (!canPreviewVoice(targetVoice)) {
+      setToast(VOICE_PREVIEW_UNAVAILABLE_MESSAGE);
       return;
     }
 
@@ -1848,8 +1993,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <button
                 type="button"
                 className="flex items-center justify-center h-5 w-5 rounded-full hover:bg-muted/60 transition-colors"
-                title={selectedVoice ? `Play ${selectedVoice.name}` : 'Select a voice first'}
-                disabled={!selectedVoiceId || selectedVoicePreviewLoading}
+                disabled={
+                  !selectedVoiceId ||
+                  selectedVoicePreviewLoading ||
+                  (selectedVoice ? !canPreviewVoice(selectedVoice) : false)
+                }
+                title={
+                  selectedVoice && !canPreviewVoice(selectedVoice)
+                    ? VOICE_PREVIEW_UNAVAILABLE_MESSAGE
+                    : selectedVoice
+                      ? `Play ${selectedVoice.name}`
+                      : 'Select a voice first'
+                }
                 onClick={() => void playVoicePreview()}
               >
                 {selectedVoicePreviewLoading ? (
@@ -2153,22 +2308,36 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     {selectedVoiceId ? 'Change' : 'Choose'}
                   </Button>
                 </div>
+                {!editorRuntimeAssessment.isRimeVoice && selectedVoiceId ? (
+                  <RuntimeGuardrailBanner
+                    className="mt-3"
+                    issues={editorRuntimeAssessment.issues}
+                  />
+                ) : null}
               </div>
 
-              <PipelineSelect
+              <PipelineRuntimeField
                 label="TTS"
-                value={TTS_OPTIONS[0].value}
-                options={ttsOptions}
+                valueLabel={
+                  ttsOptions.find((option) => option.value === RUNTIME_TTS_PROVIDER)
+                    ?.label ?? 'Rime'
+                }
               />
-              <PipelineSelect
+              <PipelineRuntimeField
                 label="STT"
-                value={STT_OPTIONS[0].value}
-                options={sttOptions}
+                valueLabel={
+                  sttOptions.find((option) => option.value === RUNTIME_STT_PROVIDER)
+                    ?.label ?? 'Deepgram'
+                }
               />
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                {RUNTIME_PIPELINE_FOOTNOTE}
+              </p>
               <PipelineSelect
                 label="LLM"
-                value={selectedModelValue}
+                value={selectedModelId}
                 options={llmOptions}
+                onValueChange={setSelectedModelId}
               />
             </div>
           </div>
@@ -2229,8 +2398,29 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     : 'No versions yet — write a prompt to begin'}
             </p>
 
+            {!editorRuntimeAssessment.canPublishLive && selectedVoiceId ? (
+              <RuntimeGuardrailBanner issues={editorRuntimeAssessment.issues} />
+            ) : null}
+
             {/* Action buttons */}
             <div className="flex flex-col gap-2">
+              {!canPublishLive &&
+              selectedVersion &&
+              !hasUnsavedChanges &&
+              !isSelectedLive &&
+              publishLiveBlockedReason ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full h-9 text-xs font-medium rounded-lg"
+                  disabled
+                  title={publishLiveBlockedReason}
+                >
+                  <Rocket className="size-3.5 mr-1.5 opacity-50" aria-hidden />
+                  Publish Live (unavailable)
+                </Button>
+              ) : null}
               {canPublishLive && (
                 <Button
                   type="button"
@@ -2530,6 +2720,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 snapshots remain stored in history.
               </DialogDescription>
             </DialogHeader>
+            {publishTargetRuntimeAssessment &&
+            !publishTargetRuntimeAssessment.canPublishLive ? (
+              <RuntimeGuardrailBanner
+                issues={publishTargetRuntimeAssessment.issues}
+              />
+            ) : null}
             <DialogFooter>
               <Button
                 type="button"
@@ -2542,7 +2738,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <Button
                 type="button"
                 variant="default"
-                disabled={versionPanelBusy}
+                disabled={
+                  versionPanelBusy ||
+                  publishTargetRuntimeAssessment?.canPublishLive === false
+                }
                 onClick={() => void executePublishConfirmed()}
               >
                 {versionMutating?.kind === 'publish' &&
@@ -2686,6 +2885,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   );
                 })}
               </div>
+              {isCatalogOnlyVoiceProvider(selectedVoiceProvider) ? (
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  {CATALOG_ONLY_VOICE_MESSAGE}
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -2760,6 +2964,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     const isPlaying = playingVoiceId === v.rimeVoiceId;
                     const previewKey = voicePreviewCacheKey(v);
                     const isLoadingPreview = loadingPreviewKey === previewKey;
+                    const previewAvailable = canPreviewVoice(v);
                     return (
                       <div
                         key={v.id}
@@ -2825,8 +3030,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                               e.stopPropagation();
                               void playVoicePreview(v);
                             }}
-                            disabled={isLoadingPreview}
-                            title={`Preview ${v.name}`}
+                            disabled={isLoadingPreview || !previewAvailable}
+                            title={
+                              previewAvailable
+                                ? `Preview ${v.name}`
+                                : VOICE_PREVIEW_UNAVAILABLE_MESSAGE
+                            }
                           >
                             {isLoadingPreview ? (
                               <Loader2 className="size-3 animate-spin" />
@@ -2909,7 +3118,15 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         className="mt-4 h-10 w-full gap-2 rounded-full text-[13px] font-medium"
                         variant={selectedPanelPlaying ? 'default' : 'outline'}
                         onClick={() => void playVoicePreview(selectedPanelVoice)}
-                        disabled={selectedPanelPreviewLoading}
+                        disabled={
+                          selectedPanelPreviewLoading ||
+                          !canPreviewVoice(selectedPanelVoice)
+                        }
+                        title={
+                          canPreviewVoice(selectedPanelVoice)
+                            ? 'Preview voice'
+                            : VOICE_PREVIEW_UNAVAILABLE_MESSAGE
+                        }
                       >
                         {selectedPanelPreviewLoading ? (
                           <Loader2 className="size-4 animate-spin" />
@@ -2954,6 +3171,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
           {/* ── Footer ── */}
           <div className="shrink-0 border-t border-border/40 bg-background px-5 py-3 sm:px-8">
+            {tempSelectedRuntimeAssessment &&
+            !tempSelectedRuntimeAssessment.isRimeVoice ? (
+              <RuntimeGuardrailBanner
+                className="mb-3"
+                issues={tempSelectedRuntimeAssessment.issues}
+              />
+            ) : null}
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 {selectedPanelVoice ? (
@@ -3234,14 +3458,68 @@ function AgentEditorSkeleton() {
   );
 }
 
+function RuntimeGuardrailBanner({
+  issues,
+  className,
+}: {
+  issues: readonly string[];
+  className?: string;
+}) {
+  if (issues.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className={cn(
+        'flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-950 dark:text-amber-100',
+        className,
+      )}
+      role="status"
+    >
+      <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <div className="space-y-1 leading-relaxed">
+        {issues.map((issue) => (
+          <p key={issue}>{issue}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PipelineRuntimeField({
+  label,
+  valueLabel,
+}: {
+  label: string;
+  valueLabel: string;
+}) {
+  return (
+    <div className="block">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <div
+        className="mt-1 flex h-9 items-center justify-between rounded-md border border-border/70 bg-muted/30 px-2.5 text-xs font-medium text-foreground"
+        aria-label={`${label} runtime`}
+      >
+        <span>{valueLabel}</span>
+        <span className="text-[10px] font-normal text-muted-foreground">Runtime</span>
+      </div>
+    </div>
+  );
+}
+
 function PipelineSelect({
   label,
   value,
   options,
+  onValueChange,
 }: {
   label: string;
   value: string;
   options: readonly PipelineOption[];
+  onValueChange?: (value: string) => void;
 }) {
   return (
     <label className="block">
@@ -3253,6 +3531,8 @@ function PipelineSelect({
         buttonClassName="h-9 rounded-md border-border/70 bg-background/70 px-2.5 text-xs font-medium"
         value={value}
         ariaLabel={`${label} provider`}
+        disabled={!onValueChange}
+        onValueChange={onValueChange}
         options={options.map((option) => ({
           value: option.value,
           label: option.label,
