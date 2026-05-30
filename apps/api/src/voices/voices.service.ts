@@ -66,7 +66,14 @@ type VoiceSyncProviderResult = {
 
 const RIME_PROVIDER_ID = 'rime';
 const CARTESIA_PROVIDER_ID = 'cartesia';
-const WORKER_RUNTIME_TTS_PROVIDER_IDS = [RIME_PROVIDER_ID, CARTESIA_PROVIDER_ID] as const;
+const ELEVENLABS_PROVIDER_ID = 'elevenlabs';
+const INWORLD_PROVIDER_ID = 'inworld';
+const WORKER_RUNTIME_TTS_PROVIDER_IDS = [
+  RIME_PROVIDER_ID,
+  CARTESIA_PROVIDER_ID,
+  ELEVENLABS_PROVIDER_ID,
+  INWORLD_PROVIDER_ID,
+] as const;
 const EXTERNAL_TTS_PROVIDER_IDS = ['cartesia', 'elevenlabs', 'inworld'] as const;
 const VOICE_PREVIEW_EXPIRES_IN_SECONDS = 3_600;
 const VOICE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable';
@@ -211,7 +218,7 @@ export class VoicesService {
 
   /**
    * Resolve voice + validate worker runtime support.
-   * Rime and Cartesia are supported in the worker; other providers return a clear error.
+   * Rime, Cartesia, ElevenLabs, and Inworld are supported in the worker; other providers return a clear error.
    */
   async resolveTtsForRuntime(
     storedVoiceId: string,
@@ -228,7 +235,7 @@ export class VoicesService {
     ) {
       throw new ServiceUnavailableException(
         `TTS provider "${resolved.providerId}" is not supported by the worker runtime yet. ` +
-          'Use a Rime or Cartesia voice for live calls and Test Agent.',
+          'Use a Rime, Cartesia, ElevenLabs, or Inworld voice for live calls and Test Agent.',
       );
     }
     this.logger.log(

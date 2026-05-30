@@ -1,4 +1,4 @@
-"""Phase 5.3 factory smoke (no network). Run from apps/agent-worker:
+"""Phase 5.3–5.5 factory smoke (no network). Run from apps/agent-worker:
 python scripts/test_tts_factory.py
 """
 
@@ -10,6 +10,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pipeline.cartesia_tts import CartesiaTTS
+from pipeline.elevenlabs_tts import ElevenLabsTTS
+from pipeline.inworld_tts import InworldTTS
 from pipeline.tts import RimeTTS
 from pipeline.tts_factory import build_tts, parse_tts_runtime_selection
 
@@ -53,25 +55,52 @@ def main() -> None:
     cartesia_engine = build_tts(cartesia_cfg)
     assert isinstance(cartesia_engine, CartesiaTTS)
 
-    for provider in ("elevenlabs", "inworld"):
-        try:
-            build_tts(
-                {
-                    "pipeline": {
-                        "tts": {
-                            "providerId": provider,
-                            "voiceId": "x",
-                            "modelId": "y",
-                            "language": "en",
-                        },
+    elevenlabs_cfg = {
+        "pipeline": {
+            "tts": {
+                "providerId": "elevenlabs",
+                "voiceId": "21m00Tcm4TlvDq8ikWAM",
+                "modelId": "eleven_flash_v2_5",
+                "language": "en",
+            },
+        },
+        "credentials": {"tts": {"apiKey": "elevenlabs-test-key"}},
+    }
+    elevenlabs_engine = build_tts(elevenlabs_cfg)
+    assert isinstance(elevenlabs_engine, ElevenLabsTTS)
+
+    inworld_cfg = {
+        "pipeline": {
+            "tts": {
+                "providerId": "inworld",
+                "voiceId": "Dennis",
+                "modelId": "inworld-tts-2",
+                "language": "en",
+            },
+        },
+        "credentials": {"tts": {"apiKey": "inworld-test-key"}},
+    }
+    inworld_engine = build_tts(inworld_cfg)
+    assert isinstance(inworld_engine, InworldTTS)
+
+    try:
+        build_tts(
+            {
+                "pipeline": {
+                    "tts": {
+                        "providerId": "unknown-tts",
+                        "voiceId": "x",
+                        "modelId": "y",
+                        "language": "en",
                     },
-                    "credentials": {"tts": {"apiKey": "k"}},
                 },
-            )
-        except ValueError as error:
-            assert "not enabled" in str(error)
-        else:
-            raise AssertionError(f"expected {provider} to be rejected")
+                "credentials": {"tts": {"apiKey": "k"}},
+            },
+        )
+    except ValueError as error:
+        assert "not enabled" in str(error)
+    else:
+        raise AssertionError("expected unknown provider to be rejected")
 
     legacy = parse_tts_runtime_selection(
         {"voiceId": "legacy", "voiceModelId": "mistv2", "voiceLang": "eng"},

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from livekit.agents import tts
 
 from pipeline.cartesia_tts import CartesiaTTS
+from pipeline.elevenlabs_tts import ElevenLabsTTS
+from pipeline.inworld_tts import InworldTTS
 from pipeline.tts import RimeTTS
 
 
@@ -13,8 +15,15 @@ logger = logging.getLogger(__name__)
 
 RUNTIME_TTS_PROVIDER_RIME = "rime"
 RUNTIME_TTS_PROVIDER_CARTESIA = "cartesia"
+RUNTIME_TTS_PROVIDER_ELEVENLABS = "elevenlabs"
+RUNTIME_TTS_PROVIDER_INWORLD = "inworld"
 RUNTIME_TTS_PROVIDERS = frozenset(
-    {RUNTIME_TTS_PROVIDER_RIME, RUNTIME_TTS_PROVIDER_CARTESIA},
+    {
+        RUNTIME_TTS_PROVIDER_RIME,
+        RUNTIME_TTS_PROVIDER_CARTESIA,
+        RUNTIME_TTS_PROVIDER_ELEVENLABS,
+        RUNTIME_TTS_PROVIDER_INWORLD,
+    },
 )
 DEFAULT_RIME_VOICE_ID = "mist-default"
 DEFAULT_RIME_MODEL_ID = "mistv2"
@@ -51,6 +60,32 @@ def build_tts(
                 "Cartesia TTS requires credentials.tts.apiKey from internal agent config",
             )
         return CartesiaTTS(
+            voice_id=resolved.voice_id,
+            model_id=resolved.model_id,
+            language=resolved.language,
+            api_key=api_key,
+        )
+
+    if resolved.provider_id == RUNTIME_TTS_PROVIDER_ELEVENLABS:
+        api_key = resolved.api_key
+        if not api_key:
+            raise ValueError(
+                "ElevenLabs TTS requires credentials.tts.apiKey from internal agent config",
+            )
+        return ElevenLabsTTS(
+            voice_id=resolved.voice_id,
+            model_id=resolved.model_id,
+            language=resolved.language,
+            api_key=api_key,
+        )
+
+    if resolved.provider_id == RUNTIME_TTS_PROVIDER_INWORLD:
+        api_key = resolved.api_key
+        if not api_key:
+            raise ValueError(
+                "Inworld TTS requires credentials.tts.apiKey from internal agent config",
+            )
+        return InworldTTS(
             voice_id=resolved.voice_id,
             model_id=resolved.model_id,
             language=resolved.language,

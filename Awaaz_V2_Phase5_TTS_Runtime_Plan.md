@@ -246,6 +246,19 @@ Proposed **backward-compatible** expansion of `GET /internal/agents/:id/config` 
 
 ## 9. Step-by-step implementation phases
 
+### Implementation status (as of 2026-05-30)
+
+| Phase | Code status | Live E2E | UI guardrails |
+|-------|-------------|----------|----------------|
+| **5.1** | Implemented | Verified (internal config on prod) | Unchanged (Rime-only) |
+| **5.2** | Implemented | Rime regression assumed; not re-run in 5.3 | Unchanged |
+| **5.3 — Cartesia** | **Implemented** | **Not live-verified** — see [Cartesia verification](./Awaaz_V2_Phase5_Cartesia_Runtime_Verification.md) | **Locked** (Rime-only publish/test) |
+| **5.4 — ElevenLabs** | **Implemented** | Not live-verified — see [ElevenLabs verification](./Awaaz_V2_Phase5_ElevenLabs_Runtime_Verification.md) | **Locked** (same as 5.3) |
+| **5.5 — Inworld** | **Implemented** | Not live-verified — see [Inworld verification](./Awaaz_V2_Phase5_Inworld_Runtime_Verification.md) | Publish/test enabled with verification banner |
+| **5.6 — UI unlock** | **Implemented** | Blocked on consolidated E2E — see [Phase 5 verification](./Awaaz_V2_Phase5_Runtime_Verification.md) | Rime + Cartesia + ElevenLabs + Inworld |
+
+**Not production-ready:** All four TTS providers are selectable for Publish Live and Test Agent (with Groq LLM). Amber UI warns: *awaiting production verification* until [consolidated E2E](./Awaaz_V2_Phase5_Runtime_Verification.md) passes.
+
 | Phase | Deliverable | Exit criteria |
 |-------|-------------|---------------|
 | **5.0 — Spikes (2–3 days)** | Cartesia WS + ElevenLabs stream + Inworld synthesize prototypes; document formats, latency, cancel behavior | Written notes + 30s demo scripts per provider |
@@ -334,5 +347,9 @@ When you want to start implementation, the suggested first PR is **5.1 API contr
 ## Related documents
 
 - [Awaaz_V2_Plan.md](./Awaaz_V2_Plan.md) — overall V2 phases
+- [Awaaz_V2_Phase5_Cartesia_Runtime_Verification.md](./Awaaz_V2_Phase5_Cartesia_Runtime_Verification.md) — 5.3 E2E checklist (implemented, not live-verified)
+- [Awaaz_V2_Phase5_ElevenLabs_Runtime_Verification.md](./Awaaz_V2_Phase5_ElevenLabs_Runtime_Verification.md) — 5.4 E2E checklist
+- [Awaaz_V2_Phase5_Inworld_Runtime_Verification.md](./Awaaz_V2_Phase5_Inworld_Runtime_Verification.md) — 5.5 E2E checklist
+- [Awaaz_V2_Phase5_Runtime_Verification.md](./Awaaz_V2_Phase5_Runtime_Verification.md) — **consolidated** E2E (all providers + Rime regression)
 - [apps/agent-worker/README.md](./apps/agent-worker/README.md) — current worker pipeline
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — platform architecture

@@ -53,11 +53,14 @@ import {
   canPreviewVoice,
   CATALOG_ONLY_VOICE_MESSAGE,
   isCatalogOnlyVoiceProvider,
+  isRuntimeTtsProvider,
   RUNTIME_PIPELINE_FOOTNOTE,
   RUNTIME_STT_PROVIDER,
   RUNTIME_TTS_PROVIDER,
+  type VoiceRuntimeStatusLabel,
   VOICE_PREVIEW_UNAVAILABLE_MESSAGE,
   voiceProviderIdFromStoredId,
+  voiceRuntimeStatusLabels,
 } from '@/lib/agent-runtime-guardrails';
 import { cn } from '@/lib/utils';
 
@@ -1075,9 +1078,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           voices,
         });
         setToast(
-          pendingRuntime.isRimeVoice
+          pendingRuntime.isRuntimeTtsVoice
             ? 'Voice selected for the next saved version.'
-            : 'Catalog-only voice selected. Save a draft, then switch to Rime before publishing.',
+            : 'Catalog-only voice selected. Pick a runtime TTS provider before publishing.',
         );
       }
       setVoiceSaveBusy(false);
@@ -1122,9 +1125,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         voices,
       });
       setToast(
-        savedRuntime.isRimeVoice
-          ? 'Voice setting saved.'
-          : 'Voice saved as catalog-only draft. Publish and Test Agent require a Rime voice and Groq model.',
+        savedRuntime.isRuntimeTtsVoice
+          ? savedRuntime.warnings.length > 0
+            ? 'Voice saved. Runtime is enabled; production verification is still pending.'
+            : 'Voice setting saved.'
+          : 'Voice saved. Publish and Test Agent require a runtime TTS voice and Groq model.',
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -2308,10 +2313,16 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     {selectedVoiceId ? 'Change' : 'Choose'}
                   </Button>
                 </div>
-                {!editorRuntimeAssessment.isRimeVoice && selectedVoiceId ? (
+                {selectedVoiceId && editorRuntimeAssessment.issues.length > 0 ? (
                   <RuntimeGuardrailBanner
                     className="mt-3"
                     issues={editorRuntimeAssessment.issues}
+                  />
+                ) : null}
+                {selectedVoice && selectedVoiceId ? (
+                  <VoiceRuntimeStatusPills
+                    className="mt-2"
+                    labels={voiceRuntimeStatusLabels(selectedVoice, voices)}
                   />
                 ) : null}
               </div>
@@ -2319,8 +2330,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               <PipelineRuntimeField
                 label="TTS"
                 valueLabel={
-                  ttsOptions.find((option) => option.value === RUNTIME_TTS_PROVIDER)
-                    ?.label ?? 'Rime'
+                  selectedVoiceId && editorRuntimeAssessment.isRuntimeTtsVoice
+                    ? voiceProviderLabel(
+                        editorRuntimeAssessment.voiceProviderId as VoiceProviderId,
+                      )
+                    : ttsOptions.find((option) => option.value === RUNTIME_TTS_PROVIDER)
+                        ?.label ?? 'Rime'
                 }
               />
               <PipelineRuntimeField
@@ -2398,7 +2413,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     : 'No versions yet — write a prompt to begin'}
             </p>
 
-            {!editorRuntimeAssessment.canPublishLive && selectedVoiceId ? (
+            {selectedVoiceId && editorRuntimeAssessment.issues.length > 0 ? (
               <RuntimeGuardrailBanner issues={editorRuntimeAssessment.issues} />
             ) : null}
 
@@ -2721,7 +2736,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               </DialogDescription>
             </DialogHeader>
             {publishTargetRuntimeAssessment &&
-            !publishTargetRuntimeAssessment.canPublishLive ? (
+            publishTargetRuntimeAssessment.issues.length > 0 ? (
               <RuntimeGuardrailBanner
                 issues={publishTargetRuntimeAssessment.issues}
               />
@@ -2874,6 +2889,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         <span className="block text-[13px] font-semibold text-foreground">{provider.label}</span>
                         <span className="block text-[11px] text-muted-foreground">
                           {providerCount > 0 ? `${providerCount} voices` : 'Coming soon'}
+                          {isRuntimeTtsProvider(provider.id)
+                            ? ' · Runtime enabled'
+                            : provider.id === 'future'
+                              ? ' · Catalog only'
+                              : ''}
                         </span>
                       </div>
                       {isActive && (
@@ -2885,9 +2905,21 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   );
                 })}
               </div>
-              {isCatalogOnlyVoiceProvider(selectedVoiceProvider) ? (
+              {selectedVoiceProvider === 'future' ? (
+                <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  Future providers appear in the catalog for planning. Runtime
+                  support is not available yet.
+                </p>
+              ) : isCatalogOnlyVoiceProvider(selectedVoiceProvider) ? (
                 <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
                   {CATALOG_ONLY_VOICE_MESSAGE}
+                </p>
+              ) : isRuntimeTtsProvider(selectedVoiceProvider) &&
+                selectedVoiceProvider !== 'rime' ? (
+                <p className="mt-2 text-[11px] leading-relaxed text-amber-900/90 dark:text-amber-100/90">
+                  Runtime enabled for {voiceProviderLabel(selectedVoiceProvider)}.
+                  Production verification is still pending before calling this
+                  stack production-ready.
                 </p>
               ) : null}
             </div>
@@ -3012,10 +3044,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                           </p>
 
                           {/* Pills */}
-                          <div className="hidden sm:flex items-center gap-1.5 min-w-0">
+                          <div className="hidden sm:flex items-center gap-1.5 min-w-0 flex-wrap justify-end">
                             <VoiceMetaPill>{voiceGenderLabel(v)}</VoiceMetaPill>
                             <VoiceMetaPill>{voiceAccentLabel(v)}</VoiceMetaPill>
                             <VoiceMetaPill>{voiceTypeLabel(v)}</VoiceMetaPill>
+                            {voiceRuntimeStatusLabels(v, voices)
+                              .filter(
+                                (label) =>
+                                  label === 'Verification Pending' ||
+                                  label === 'Preview Unavailable',
+                              )
+                              .map((label) => (
+                                <VoiceRuntimeStatusPill key={label} label={label} />
+                              ))}
                           </div>
                         </div>
 
@@ -3105,6 +3146,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         <p className="mt-0.5 text-[13px] text-muted-foreground">
                           {selectedPanelProviderLabel}
                         </p>
+                        <VoiceRuntimeStatusPills
+                          className="mt-3 justify-center"
+                          labels={voiceRuntimeStatusLabels(
+                            selectedPanelVoice,
+                            voices,
+                          )}
+                        />
                       </div>
 
                       <div className="mt-4 space-y-1.5">
@@ -3172,7 +3220,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           {/* ── Footer ── */}
           <div className="shrink-0 border-t border-border/40 bg-background px-5 py-3 sm:px-8">
             {tempSelectedRuntimeAssessment &&
-            !tempSelectedRuntimeAssessment.isRimeVoice ? (
+            tempSelectedRuntimeAssessment.issues.length > 0 ? (
               <RuntimeGuardrailBanner
                 className="mb-3"
                 issues={tempSelectedRuntimeAssessment.issues}
@@ -3484,6 +3532,50 @@ function RuntimeGuardrailBanner({
         ))}
       </div>
     </div>
+  );
+}
+
+function VoiceRuntimeStatusPills({
+  labels,
+  className,
+}: {
+  labels: readonly VoiceRuntimeStatusLabel[];
+  className?: string;
+}) {
+  if (labels.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className={cn('flex flex-wrap gap-1.5', className)}>
+      {labels.map((label) => (
+        <VoiceRuntimeStatusPill key={label} label={label} />
+      ))}
+    </div>
+  );
+}
+
+function VoiceRuntimeStatusPill({
+  label,
+}: {
+  label: VoiceRuntimeStatusLabel;
+}) {
+  const tone =
+    label === 'Verification Pending' || label === 'Preview Unavailable'
+      ? 'border-amber-500/35 bg-amber-500/10 text-amber-950 dark:text-amber-100'
+      : label === 'Runtime Enabled' || label === 'Preview Available'
+        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-950 dark:text-emerald-100'
+        : 'border-border/40 bg-muted/20 text-muted-foreground';
+
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium',
+        tone,
+      )}
+    >
+      {label}
+    </span>
   );
 }
 
