@@ -5,12 +5,18 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { Prisma, type Voice } from '@prisma/client';
+import { Prisma, ProviderCredentialMode, type Voice } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { PluginsService, type ResolvedProviderSecret } from '../plugins/plugins.service';
 import { providerById } from '../plugins/provider-catalog';
 import { StorageService } from '../storage/storage.service';
+import {
+  ProviderVoiceCatalogService,
+  type ExternalTtsVoiceProviderId,
+  type ProviderVoiceCatalogItem,
+} from './provider-voice-catalog.service';
 import { RimeService, type RimeVoice } from './rime.service';
 
 export interface ResolvedRimeVoice {
@@ -30,7 +36,25 @@ interface ListVoicesOptions {
   providerId?: string;
 }
 
+interface SyncVoicesOptions {
+  organizationId?: string;
+  providerId?: string;
+}
+
+type VoiceSyncScope = 'global' | 'organization';
+
+type VoiceSyncProviderResult = {
+  providerId: string;
+  synced: number;
+  previewsUploaded: number;
+  credentialMode: ProviderCredentialMode | null;
+  scope: VoiceSyncScope;
+  skipped?: boolean;
+  error?: string;
+};
+
 const RIME_PROVIDER_ID = 'rime';
+const EXTERNAL_TTS_PROVIDER_IDS = ['cartesia', 'elevenlabs', 'inworld'] as const;
 const VOICE_PREVIEW_EXPIRES_IN_SECONDS = 3_600;
 const VOICE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
@@ -41,6 +65,8 @@ export class VoicesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly rime: RimeService,
+    private readonly providerVoices: ProviderVoiceCatalogService,
+    private readonly plugins: PluginsService,
     private readonly storage: StorageService,
   ) {}
 
@@ -142,7 +168,72 @@ export class VoicesService {
     return result;
   }
 
-  async sync() {
+  async sync(options: SyncVoicesOptions = {}) {
+    const providerId = this.normalizeVoiceProviderId(options.providerId);
+    if (providerId) {
+      const result = await this.syncProvider(providerId, options.organizationId);
+      return {
+        synced: result.voices.length,
+        previewsUploaded: result.provider.previewsUploaded,
+        providers: [result.provider],
+        voices: result.voices,
+      };
+    }
+
+    const providers = [
+      RIME_PROVIDER_ID,
+      ...EXTERNAL_TTS_PROVIDER_IDS,
+    ];
+    const providerResults: VoiceSyncProviderResult[] = [];
+    const allVoices: Voice[] = [];
+
+    for (const provider of providers) {
+      try {
+        const result = await this.syncProvider(provider, options.organizationId);
+        providerResults.push(result.provider);
+        allVoices.push(...result.voices);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Voice sync failed for provider=${provider}: ${message}`);
+        providerResults.push({
+          providerId: provider,
+          synced: 0,
+          previewsUploaded: 0,
+          credentialMode: null,
+          scope: 'global',
+          error: message,
+        });
+      }
+    }
+
+    return {
+      synced: allVoices.length,
+      previewsUploaded: providerResults.reduce(
+        (sum, result) => sum + result.previewsUploaded,
+        0,
+      ),
+      providers: providerResults,
+      voices: allVoices,
+    };
+  }
+
+  private async syncProvider(
+    providerId: string,
+    organizationId?: string,
+  ): Promise<{ provider: VoiceSyncProviderResult; voices: Voice[] }> {
+    if (providerId === RIME_PROVIDER_ID) {
+      return this.syncRimeVoices();
+    }
+    if (!this.isExternalTtsProviderId(providerId)) {
+      throw new BadRequestException(`Unsupported voice provider: ${providerId}`);
+    }
+    return this.syncExternalProviderVoices(providerId, organizationId);
+  }
+
+  private async syncRimeVoices(): Promise<{
+    provider: VoiceSyncProviderResult;
+    voices: Voice[];
+  }> {
     const voices = await this.rime.listVoices();
     const syncedAt = new Date();
     let previewCount = 0;
@@ -154,8 +245,13 @@ export class VoicesService {
     if (!shouldUploadPreviews) {
       const synced = await this.syncWithoutPreviews(voices, syncedAt);
       return {
-        synced: synced.length,
-        previewsUploaded: previewCount,
+        provider: {
+          providerId: RIME_PROVIDER_ID,
+          synced: synced.length,
+          previewsUploaded: previewCount,
+          credentialMode: ProviderCredentialMode.FINOVA_MANAGED,
+          scope: 'global',
+        },
         voices: synced,
       };
     }
@@ -211,10 +307,112 @@ export class VoicesService {
     );
 
     return {
-      synced: synced.length,
-      previewsUploaded: previewCount,
+      provider: {
+        providerId: RIME_PROVIDER_ID,
+        synced: synced.length,
+        previewsUploaded: previewCount,
+        credentialMode: ProviderCredentialMode.FINOVA_MANAGED,
+        scope: 'global',
+      },
       voices: synced,
     };
+  }
+
+  private async syncExternalProviderVoices(
+    providerId: ExternalTtsVoiceProviderId,
+    organizationId?: string,
+  ): Promise<{ provider: VoiceSyncProviderResult; voices: Voice[] }> {
+    const secret = await this.providerSecret(providerId, organizationId);
+    if (!secret.ok) {
+      throw new ServiceUnavailableException(secret.error);
+    }
+
+    const scopeOrganizationId =
+      secret.credentialMode === ProviderCredentialMode.BYOK
+        ? organizationId
+        : undefined;
+    if (secret.credentialMode === ProviderCredentialMode.BYOK && !scopeOrganizationId) {
+      throw new ServiceUnavailableException(
+        `BYOK voice sync for ${providerId} requires an organization scope`,
+      );
+    }
+
+    const providerVoices = await this.providerVoices.listVoices(
+      providerId,
+      secret.key,
+    );
+    const syncedAt = new Date();
+    const synced = await this.mapWithConcurrency(
+      providerVoices,
+      8,
+      (voice) =>
+        this.upsertExternalProviderVoice(
+          voice,
+          syncedAt,
+          secret,
+          scopeOrganizationId,
+        ),
+    );
+    await this.plugins.markProviderCredentialUsed(secret.credentialId);
+
+    return {
+      provider: {
+        providerId,
+        synced: synced.length,
+        previewsUploaded: 0,
+        credentialMode: secret.credentialMode,
+        scope: scopeOrganizationId ? 'organization' : 'global',
+      },
+      voices: synced,
+    };
+  }
+
+  private async upsertExternalProviderVoice(
+    voice: ProviderVoiceCatalogItem,
+    syncedAt: Date,
+    secret: ResolvedProviderSecret & { ok: true },
+    organizationId?: string,
+  ): Promise<Voice> {
+    const legacyVoiceId = this.providerScopedVoiceId(
+      voice.providerId,
+      voice.providerVoiceId,
+      organizationId,
+    );
+    const metadata = this.providerVoiceMetadata(voice, secret, organizationId);
+
+    return this.prisma.voice.upsert({
+      where: { rimeVoiceId: legacyVoiceId },
+      create: {
+        organizationId: organizationId ?? null,
+        providerId: voice.providerId,
+        providerVoiceId: voice.providerVoiceId,
+        rimeVoiceId: legacyVoiceId,
+        name: voice.name,
+        description: voice.description ?? null,
+        language: voice.language,
+        lang: voice.lang ?? null,
+        modelId: voice.modelId ?? null,
+        gender: voice.gender ?? null,
+        previewAudioUrl: voice.previewAudioUrl ?? null,
+        metadata,
+        syncedAt,
+      },
+      update: {
+        organizationId: organizationId ?? null,
+        providerId: voice.providerId,
+        providerVoiceId: voice.providerVoiceId,
+        name: voice.name,
+        description: voice.description ?? null,
+        language: voice.language,
+        lang: voice.lang ?? null,
+        modelId: voice.modelId ?? null,
+        gender: voice.gender ?? null,
+        previewAudioUrl: voice.previewAudioUrl ?? null,
+        metadata,
+        isActive: true,
+        syncedAt,
+      },
+    });
   }
 
   private async syncWithoutPreviews(
@@ -525,5 +723,51 @@ export class VoicesService {
       modelId: voice.modelId ?? null,
       lang: voice.lang ?? null,
     };
+  }
+
+  private async providerSecret(
+    providerId: ExternalTtsVoiceProviderId,
+    organizationId?: string,
+  ): Promise<ResolvedProviderSecret> {
+    if (organizationId) {
+      return this.plugins.resolveOrganizationProviderSecret(
+        organizationId,
+        providerId,
+      );
+    }
+    return this.plugins.resolveFinovaManagedProviderSecret(providerId);
+  }
+
+  private providerScopedVoiceId(
+    providerId: ExternalTtsVoiceProviderId,
+    providerVoiceId: string,
+    organizationId?: string,
+  ): string {
+    const prefix = organizationId
+      ? `org:${organizationId}:${providerId}`
+      : providerId;
+    return `${prefix}:${providerVoiceId}`;
+  }
+
+  private providerVoiceMetadata(
+    voice: ProviderVoiceCatalogItem,
+    secret: ResolvedProviderSecret & { ok: true },
+    organizationId?: string,
+  ): Prisma.InputJsonObject {
+    return {
+      ...voice.metadata,
+      source: `${voice.providerId}_voice_sync`,
+      providerId: voice.providerId,
+      providerVoiceId: voice.providerVoiceId,
+      credentialMode: secret.credentialMode,
+      credentialScope: organizationId ? 'organization' : 'global',
+      organizationId: organizationId ?? null,
+    };
+  }
+
+  private isExternalTtsProviderId(
+    providerId: string,
+  ): providerId is ExternalTtsVoiceProviderId {
+    return EXTERNAL_TTS_PROVIDER_IDS.some((candidate) => candidate === providerId);
   }
 }

@@ -32,9 +32,11 @@ export class VoicesController {
 
   @Post('sync')
   @Roles(Role.ADMIN)
-  sync(@Req() req: Request) {
-    void req.organizationId;
-    return this.voices.sync();
+  sync(@Req() req: Request, @Query() query: ListVoicesQueryDto) {
+    return this.voices.sync({
+      organizationId: req.organizationId,
+      providerId: query.providerId,
+    });
   }
 
   @Post('preview')

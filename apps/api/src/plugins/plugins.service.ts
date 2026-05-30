@@ -79,6 +79,11 @@ type ResolvedSecret =
       error: string;
     };
 
+export type ResolvedProviderSecret = ResolvedSecret & {
+  providerId: string;
+  credentialId: string | null;
+};
+
 type ProviderCredentialMutationData = {
   credentialMode: ProviderCredentialMode;
   status: ProviderCredentialStatus;
@@ -275,6 +280,59 @@ export class PluginsService {
       );
     });
     return { ok: true };
+  }
+
+  async resolveOrganizationProviderSecret(
+    organizationId: string,
+    providerId: string,
+  ): Promise<ResolvedProviderSecret> {
+    const provider = this.mustProvider(providerId);
+    const credential =
+      await this.prisma.organizationProviderCredential.findUnique({
+        where: {
+          organizationId_providerId: {
+            organizationId,
+            providerId: provider.id,
+          },
+        },
+      });
+    const secret = this.resolveSecret(provider, credential);
+    return {
+      ...secret,
+      providerId: provider.id,
+      credentialId: credential?.id ?? null,
+    };
+  }
+
+  resolveFinovaManagedProviderSecret(providerId: string): ResolvedProviderSecret {
+    const provider = this.mustProvider(providerId);
+    const finovaKey = this.finovaManagedKey(provider);
+    if (!finovaKey) {
+      return {
+        ok: false,
+        providerId: provider.id,
+        credentialId: null,
+        credentialMode: ProviderCredentialMode.FINOVA_MANAGED,
+        error: 'No Finova-managed key is configured for this provider',
+      };
+    }
+    return {
+      ok: true,
+      providerId: provider.id,
+      credentialId: null,
+      credentialMode: ProviderCredentialMode.FINOVA_MANAGED,
+      key: finovaKey.value,
+    };
+  }
+
+  async markProviderCredentialUsed(credentialId: string | null): Promise<void> {
+    if (!credentialId) {
+      return;
+    }
+    await this.prisma.organizationProviderCredential.update({
+      where: { id: credentialId },
+      data: { lastUsedAt: new Date() },
+    });
   }
 
   private async credentialsByProvider(organizationId: string) {
