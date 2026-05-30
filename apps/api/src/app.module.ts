@@ -16,6 +16,7 @@ import { ApiKeysController } from './api-keys/api-keys.controller';
 import { ApiKeysModule } from './api-keys/api-keys.module';
 import { AppController } from './app.controller';
 import { BillingModule } from './billing/billing.module';
+import { BillingController } from './billing/billing.controller';
 import { CallsController } from './calls/calls.controller';
 import { CallsModule } from './calls/calls.module';
 import { ClerkAuthMiddleware } from './auth/clerk-auth.middleware';
@@ -83,6 +84,7 @@ export class AppModule implements NestModule {
       AgentsController,
       AnalyticsController,
       ApiKeysController,
+      BillingController,
       CallsController,
       PhoneNumbersController,
       VoicesController,
@@ -102,6 +104,7 @@ export class AppModule implements NestModule {
       AgentsController,
       AnalyticsController,
       ApiKeysController,
+      BillingController,
       CallsController,
       PhoneNumbersController,
       VoicesController,
