@@ -65,6 +65,26 @@ type ProviderAvailability = {
   organizationCredential: SanitizedCredential | null;
   available: boolean;
   availableVia: ProviderCredentialMode | null;
+  pricing?: ProviderPricingSummary;
+};
+
+type ProviderPricingRateSummary = {
+  providerModelId: string;
+  meter: string;
+  unitQuantity: string;
+  priceUsdMicros: string;
+  minChargeUsdMicros: string | null;
+  roundingMode: string;
+};
+
+type ProviderPricingSummary = {
+  version: number;
+  label: string;
+  currency: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  notes: string | null;
+  rates: ProviderPricingRateSummary[];
 };
 
 type ResolvedSecret =
@@ -107,8 +127,13 @@ export class PluginsService {
 
   async catalog(organizationId: string) {
     const credentials = await this.credentialsByProvider(organizationId);
+    const pricingByProvider = await this.activePricingByProvider();
     const providers = PROVIDER_CATALOG.map((provider) =>
-      this.availability(provider, credentials.get(provider.id) ?? null),
+      this.availability(
+        provider,
+        credentials.get(provider.id) ?? null,
+        pricingByProvider.get(provider.id) ?? null,
+      ),
     );
     return { providers };
   }
@@ -198,11 +223,11 @@ export class PluginsService {
 
     if (!credential) {
       if (!secret.ok) {
-        return this.availability(provider, null);
+        return this.availability(provider, null, null);
       }
       const validation = await this.validateProviderKey(provider, secret.key);
       return {
-        ...this.availability(provider, null),
+        ...this.availability(provider, null, null),
         organizationCredential: null,
         available: validation.status !== ProviderCredentialStatus.INVALID,
         availableVia: ProviderCredentialMode.FINOVA_MANAGED,
@@ -345,6 +370,7 @@ export class PluginsService {
   private availability(
     provider: ProviderDefinition,
     credential: OrganizationProviderCredential | null,
+    pricing: ProviderPricingSummary | null,
   ): ProviderAvailability {
     const finovaManagedAvailable = this.finovaManagedKey(provider) !== null;
     const organizationCredential = credential ? this.sanitize(credential) : null;
@@ -380,7 +406,48 @@ export class PluginsService {
       organizationCredential,
       available: availableVia !== null,
       availableVia,
+      ...(pricing ? { pricing } : {}),
     };
+  }
+
+  private async activePricingByProvider(): Promise<
+    Map<string, ProviderPricingSummary>
+  > {
+    const versions = await this.prisma.providerPricingVersion.findMany({
+      where: { isActive: true },
+      orderBy: [{ providerId: 'asc' }, { version: 'desc' }, { effectiveFrom: 'desc' }],
+      include: {
+        rates: {
+          orderBy: [{ providerModelId: 'asc' }, { meter: 'asc' }],
+        },
+      },
+    });
+
+    const pricingByProvider = new Map<string, ProviderPricingSummary>();
+    for (const version of versions) {
+      if (pricingByProvider.has(version.providerId)) {
+        continue;
+      }
+
+      pricingByProvider.set(version.providerId, {
+        version: version.version,
+        label: version.label,
+        currency: version.currency,
+        effectiveFrom: version.effectiveFrom.toISOString(),
+        effectiveTo: version.effectiveTo?.toISOString() ?? null,
+        notes: version.notes ?? null,
+        rates: version.rates.map((rate) => ({
+          providerModelId: rate.providerModelId,
+          meter: rate.meter,
+          unitQuantity: rate.unitQuantity.toString(),
+          priceUsdMicros: rate.priceUsdMicros.toString(),
+          minChargeUsdMicros: rate.minChargeUsdMicros?.toString() ?? null,
+          roundingMode: rate.roundingMode,
+        })),
+      });
+    }
+
+    return pricingByProvider;
   }
 
   private credentialData(

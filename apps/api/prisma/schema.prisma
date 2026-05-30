@@ -72,6 +72,19 @@ enum ProviderCredentialStatus {
   INVALID
 }
 
+enum PricingMeter {
+  MINUTE
+  TOKEN
+  CHARACTER
+  REQUEST
+}
+
+enum PricingRoundingMode {
+  HALF_UP
+  CEIL
+  FLOOR
+}
+
 // ─────────────────────────────────────────────
 // ORGANIZATION
 // ─────────────────────────────────────────────
@@ -379,6 +392,46 @@ model OrganizationProviderCredential {
   @@index([providerId])
   @@index([status])
   @@map("organization_provider_credentials")
+}
+
+model ProviderPricingVersion {
+  id            String   @id @default(cuid())
+  providerId    String
+  version       Int
+  label         String
+  currency      String   @default("USD")
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  isActive      Boolean  @default(true)
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  rates ProviderPricingRate[]
+
+  @@unique([providerId, version])
+  @@index([providerId, isActive])
+  @@index([providerId, effectiveFrom, effectiveTo])
+  @@map("provider_pricing_versions")
+}
+
+model ProviderPricingRate {
+  id                      String                @id @default(cuid())
+  providerPricingVersionId String
+  providerModelId         String
+  meter                   PricingMeter
+  unitQuantity            Int                   @default(1)
+  priceUsdMicros          Int
+  minChargeUsdMicros      Int?
+  roundingMode            PricingRoundingMode  @default(HALF_UP)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  providerPricingVersion ProviderPricingVersion @relation(fields: [providerPricingVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([providerPricingVersionId, providerModelId, meter])
+  @@index([providerModelId, meter])
+  @@map("provider_pricing_rates")
 }
 
 model ApiKey {

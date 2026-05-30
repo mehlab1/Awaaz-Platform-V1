@@ -1,4 +1,4 @@
-import { PrismaClient, Role } from '@prisma/client';
+import { PrismaClient, PricingMeter, PricingRoundingMode, Role } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -15,6 +15,135 @@ const OWNER_USER_ID = env(
 const OWNER_EMAIL = env('SIRIUS_SEED_OWNER_EMAIL', 'habibaimrannn@gmail.com');
 const SIRIUS_PHONE_NUMBER = env('SIRIUS_SEED_PHONE_NUMBER', '+15550174243');
 const SIRIUS_VOICE_ID = env('SIRIUS_SEED_VOICE_ID', 'astra');
+
+const PRICING_VERSION = 1;
+
+const PRICING_SEEDS = [
+  {
+    providerId: 'groq',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Rates are additive and not used by billing yet.',
+    rates: [
+      {
+        providerModelId: 'llama-3.3-70b-versatile',
+        meter: PricingMeter.TOKEN,
+        unitQuantity: 1_000_000,
+        priceUsdMicros: 790_000,
+      },
+      {
+        providerModelId: 'openai/gpt-oss-120b',
+        meter: PricingMeter.TOKEN,
+        unitQuantity: 1_000_000,
+        priceUsdMicros: 0,
+      },
+      {
+        providerModelId: 'openai/gpt-oss-20b',
+        meter: PricingMeter.TOKEN,
+        unitQuantity: 1_000_000,
+        priceUsdMicros: 0,
+      },
+    ],
+  },
+  {
+    providerId: 'rime',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Rime row is grounded in current runtime cost constants.',
+    rates: [
+      {
+        providerModelId: 'default',
+        meter: PricingMeter.CHARACTER,
+        unitQuantity: 1_000,
+        priceUsdMicros: 20_000,
+      },
+    ],
+  },
+  {
+    providerId: 'cartesia',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Exact provider pricing was not available in repo docs.',
+    rates: [
+      {
+        providerModelId: 'default',
+        meter: PricingMeter.CHARACTER,
+        unitQuantity: 1_000,
+        priceUsdMicros: 0,
+      },
+    ],
+  },
+  {
+    providerId: 'elevenlabs',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Exact provider pricing was not available in repo docs.',
+    rates: [
+      {
+        providerModelId: 'default',
+        meter: PricingMeter.CHARACTER,
+        unitQuantity: 1_000,
+        priceUsdMicros: 0,
+      },
+    ],
+  },
+  {
+    providerId: 'inworld',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Exact provider pricing was not available in repo docs.',
+    rates: [
+      {
+        providerModelId: 'default',
+        meter: PricingMeter.REQUEST,
+        unitQuantity: 1,
+        priceUsdMicros: 0,
+      },
+    ],
+  },
+  {
+    providerId: 'deepgram',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Deepgram row is grounded in current runtime cost constants.',
+    rates: [
+      {
+        providerModelId: 'nova-2-conversationalai',
+        meter: PricingMeter.MINUTE,
+        unitQuantity: 1,
+        priceUsdMicros: 4_300,
+      },
+    ],
+  },
+  {
+    providerId: 'assemblyai',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Exact provider pricing was not available in repo docs.',
+    rates: [
+      {
+        providerModelId: 'default',
+        meter: PricingMeter.MINUTE,
+        unitQuantity: 1,
+        priceUsdMicros: 0,
+      },
+    ],
+  },
+  {
+    providerId: 'groq-whisper',
+    label: 'Initial Phase 6.1 registry',
+    notes:
+      'Internal placeholder registry for Phase 6.1. Exact provider pricing was not available in repo docs.',
+    rates: [
+      {
+        providerModelId: 'default',
+        meter: PricingMeter.MINUTE,
+        unitQuantity: 1,
+        priceUsdMicros: 0,
+      },
+    ],
+  },
+] as const;
 
 const SIRIUS_AGENT_NAME = 'Sirius Agent';
 const SIRIUS_DESCRIPTION = 'Default Finova voice agent for inbound calls.';
@@ -164,6 +293,63 @@ async function main() {
     },
   });
 
+  const pricingResults = [] as Array<{
+    providerId: string;
+    version: number;
+    rateCount: number;
+  }>;
+
+  for (const seed of PRICING_SEEDS) {
+    const pricingVersion = await prisma.providerPricingVersion.upsert({
+      where: {
+        providerId_version: {
+          providerId: seed.providerId,
+          version: PRICING_VERSION,
+        },
+      },
+      update: {
+        label: seed.label,
+        currency: 'USD',
+        effectiveFrom: publishedAt,
+        effectiveTo: null,
+        isActive: true,
+        notes: seed.notes,
+      },
+      create: {
+        providerId: seed.providerId,
+        version: PRICING_VERSION,
+        label: seed.label,
+        currency: 'USD',
+        effectiveFrom: publishedAt,
+        effectiveTo: null,
+        isActive: true,
+        notes: seed.notes,
+      },
+    });
+
+    await prisma.providerPricingRate.deleteMany({
+      where: { providerPricingVersionId: pricingVersion.id },
+    });
+
+    await prisma.providerPricingRate.createMany({
+      data: seed.rates.map((rate) => ({
+        providerPricingVersionId: pricingVersion.id,
+        providerModelId: rate.providerModelId,
+        meter: rate.meter,
+        unitQuantity: rate.unitQuantity,
+        priceUsdMicros: rate.priceUsdMicros,
+        minChargeUsdMicros: null,
+        roundingMode: PricingRoundingMode.HALF_UP,
+      })),
+    });
+
+    pricingResults.push({
+      providerId: seed.providerId,
+      version: pricingVersion.version,
+      rateCount: seed.rates.length,
+    });
+  }
+
   console.log(
     JSON.stringify(
       {
@@ -191,6 +377,7 @@ async function main() {
           agentId: phoneNumber.agentId,
           liveKitDispatchRuleId: phoneNumber.liveKitDispatchRuleId,
         },
+        pricing: pricingResults,
       },
       null,
       2,
