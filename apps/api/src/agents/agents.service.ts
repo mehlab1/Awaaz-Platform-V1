@@ -11,10 +11,16 @@ import { AuditAction, Prisma, CallStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { VoicesService } from '../voices/voices.service';
+import { VoicesService, type ResolvedRimeVoice } from '../voices/voices.service';
 import type { CreateAgentVersionDto } from './dto/create-agent-version.dto';
 import type { CreateAgentDto } from './dto/create-agent.dto';
 import type { PatchAgentDto } from './dto/patch-agent.dto';
+
+const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
+const DEFAULT_TTS_PROVIDER_ID = 'rime';
+const DEFAULT_LLM_PROVIDER_ID = 'groq';
+const DEFAULT_STT_PROVIDER_ID = 'deepgram';
+const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
 
 @Injectable()
 export class AgentsService {
@@ -213,8 +219,7 @@ export class AgentsService {
             agentId,
             versionNumber: (last?.versionNumber ?? 0) + 1,
             systemPrompt: dto.systemPrompt,
-            voiceId: resolvedVoice.rimeVoiceId,
-            model: dto.model,
+            ...this.v1CompatiblePipelineData(dto, resolvedVoice),
             temperature: dto.temperature,
             maxTokens: dto.maxTokens,
             firstMessage: dto.firstMessage,
@@ -233,6 +238,12 @@ export class AgentsService {
               versionNumber: version.versionNumber,
               requestedVoiceId: dto.voiceId,
               voiceId: version.voiceId,
+              ttsProviderId: version.ttsProviderId,
+              ttsVoiceId: version.ttsVoiceId,
+              llmProviderId: version.llmProviderId,
+              llmModel: version.llmModel,
+              sttProviderId: version.sttProviderId,
+              sttModel: version.sttModel,
               voiceModelId: resolvedVoice.modelId,
               voiceLang: resolvedVoice.lang,
               model: version.model,
@@ -273,8 +284,7 @@ export class AgentsService {
         where: { id: versionId },
         data: {
           systemPrompt: dto.systemPrompt,
-          voiceId: resolvedVoice.rimeVoiceId,
-          model: dto.model,
+          ...this.v1CompatiblePipelineData(dto, resolvedVoice),
           temperature: dto.temperature,
           maxTokens: dto.maxTokens,
           firstMessage: dto.firstMessage,
@@ -295,6 +305,12 @@ export class AgentsService {
             updatedLiveVersion: existing.isLive,
             requestedVoiceId: dto.voiceId,
             voiceId: version.voiceId,
+            ttsProviderId: version.ttsProviderId,
+            ttsVoiceId: version.ttsVoiceId,
+            llmProviderId: version.llmProviderId,
+            llmModel: version.llmModel,
+            sttProviderId: version.sttProviderId,
+            sttModel: version.sttModel,
             voiceModelId: resolvedVoice.modelId,
             voiceLang: resolvedVoice.lang,
             model: version.model,
@@ -385,6 +401,13 @@ export class AgentsService {
             systemPrompt: source.systemPrompt,
             voiceId: source.voiceId,
             model: source.model,
+            ttsProviderId: source.ttsProviderId,
+            ttsModel: source.ttsModel,
+            ttsVoiceId: source.ttsVoiceId ?? source.voiceId,
+            llmProviderId: source.llmProviderId,
+            llmModel: source.llmModel ?? source.model,
+            sttProviderId: source.sttProviderId,
+            sttModel: source.sttModel,
             temperature: source.temperature,
             maxTokens: source.maxTokens,
             firstMessage: source.firstMessage,
@@ -669,5 +692,23 @@ export class AgentsService {
     if (!agent) {
       throw new NotFoundException('Agent not found');
     }
+  }
+
+  private v1CompatiblePipelineData(
+    dto: CreateAgentVersionDto,
+    resolvedVoice: ResolvedRimeVoice,
+  ) {
+    const llmModel = dto.model ?? DEFAULT_LLM_MODEL;
+    return {
+      voiceId: resolvedVoice.rimeVoiceId,
+      model: llmModel,
+      ttsProviderId: DEFAULT_TTS_PROVIDER_ID,
+      ttsModel: resolvedVoice.modelId,
+      ttsVoiceId: resolvedVoice.rimeVoiceId,
+      llmProviderId: DEFAULT_LLM_PROVIDER_ID,
+      llmModel,
+      sttProviderId: DEFAULT_STT_PROVIDER_ID,
+      sttModel: DEFAULT_STT_MODEL,
+    };
   }
 }

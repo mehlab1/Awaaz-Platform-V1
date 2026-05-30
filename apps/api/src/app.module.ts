@@ -28,6 +28,11 @@ import { OrganizationsController } from './organizations/organizations.controlle
 import { OrganizationsModule } from './organizations/organizations.module';
 import { PhoneNumbersController } from './phone-numbers/phone-numbers.controller';
 import { PhoneNumbersModule } from './phone-numbers/phone-numbers.module';
+import {
+  PluginCredentialsController,
+  PluginsCatalogController,
+} from './plugins/plugins.controller';
+import { PluginsModule } from './plugins/plugins.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { VoicesController } from './voices/voices.controller';
 import { VoicesModule } from './voices/voices.module';
@@ -51,6 +56,7 @@ import { WebhooksModule } from './webhooks/webhooks.module';
     CallsModule,
     PhoneNumbersModule,
     VoicesModule,
+    PluginsModule,
     InternalModule,
   ],
   controllers: [AppController],
@@ -78,6 +84,8 @@ export class AppModule implements NestModule {
       CallsController,
       PhoneNumbersController,
       VoicesController,
+      PluginsCatalogController,
+      PluginCredentialsController,
     );
 
     // Tenant header required only on org-scoped routes — same `forRoutes('*')` + exclude
@@ -95,6 +103,8 @@ export class AppModule implements NestModule {
       CallsController,
       PhoneNumbersController,
       VoicesController,
+      PluginsCatalogController,
+      PluginCredentialsController,
     );
   }
 }

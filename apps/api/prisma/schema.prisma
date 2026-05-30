@@ -60,6 +60,18 @@ enum AuditAction {
   UNASSIGNED
 }
 
+enum ProviderCredentialMode {
+  BYOK
+  FINOVA_MANAGED
+}
+
+enum ProviderCredentialStatus {
+  NOT_CONFIGURED
+  CONFIGURED
+  VALID
+  INVALID
+}
+
 // ─────────────────────────────────────────────
 // ORGANIZATION
 // ─────────────────────────────────────────────
@@ -78,7 +90,9 @@ model Organization {
   phoneNumbers      PhoneNumber[]
   calls             Call[]
   apiKeys           ApiKey[]
+  providerCredentials OrganizationProviderCredential[]
   auditLogs         AuditLog[]
+  voices            Voice[]
 
   @@map("organizations")
 }
@@ -177,6 +191,13 @@ model AgentVersion {
   systemPrompt  String   @db.Text
   voiceId       String
   model         String   @default("llama-3.3-70b-versatile")
+  ttsProviderId String   @default("rime")
+  ttsModel      String?
+  ttsVoiceId    String?
+  llmProviderId String   @default("groq")
+  llmModel      String?
+  sttProviderId String   @default("deepgram")
+  sttModel      String   @default("nova-2-conversationalai")
   temperature   Float    @default(0.7)
   maxTokens     Int      @default(1024)
   firstMessage  String?
@@ -305,6 +326,9 @@ model Transcript {
 
 model Voice {
   id             String   @id @default(cuid())
+  organizationId String?
+  providerId     String   @default("rime")
+  providerVoiceId String  @default("")
   rimeVoiceId    String   @unique   // Rime's internal voice identifier
   name           String
   description    String?
@@ -313,17 +337,49 @@ model Voice {
   modelId        String?
   gender         String?
   previewAudioUrl String?  // R2 presigned-compatible key
+  metadata       Json?
   isActive       Boolean  @default(true)
   syncedAt       DateTime @default(now())
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, providerId])
+  @@index([providerId, providerVoiceId])
   @@map("voices")
 }
 
 // ─────────────────────────────────────────────
 // API KEY
 // ─────────────────────────────────────────────
+
+model OrganizationProviderCredential {
+  id                  String                   @id @default(cuid())
+  organizationId      String
+  providerId          String
+  credentialMode      ProviderCredentialMode   @default(FINOVA_MANAGED)
+  status              ProviderCredentialStatus @default(NOT_CONFIGURED)
+  keyPrefix           String?
+  keyFingerprint      String?
+  secretCiphertext    String?                  @db.Text
+  secretIv            String?
+  secretAuthTag       String?
+  validationError     String?                  @db.Text
+  lastValidatedAt     DateTime?
+  lastUsedAt          DateTime?
+  markupBps           Int                      @default(0)
+  metadata            Json?
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, providerId])
+  @@index([providerId])
+  @@index([status])
+  @@map("organization_provider_credentials")
+}
 
 model ApiKey {
   id             String   @id @default(cuid())
