@@ -990,7 +990,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       body.firstMessage = fm;
     }
     return body;
-  }, [prompt, selectedModelId, selectedVoiceId]);
+  }, [prompt, selectedModelId, selectedVoiceId, selectedVersion, agent?.currentVersion]);
 
   const updateCurrentVersionFlow = async () => {
     if (saveInFlightRef.current || saveBusy !== null || versionPanelBusy) {
@@ -4017,8 +4017,6 @@ function voiceProviderInitials(providerId: VoiceProviderId): string {
       return 'CA';
     case 'inworld':
       return 'IW';
-    case 'future':
-      return '+';
     case 'rime':
     default:
       return 'RI';

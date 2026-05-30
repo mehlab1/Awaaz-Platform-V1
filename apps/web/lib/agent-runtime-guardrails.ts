@@ -190,8 +190,5 @@ export function assessRuntimeConfig(params: {
 /** @deprecated Use isRuntimeTtsProvider — kept for call sites migrating gradually. */
 export function isCatalogOnlyVoiceProvider(providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
-  if (normalized === 'future') {
-    return false;
-  }
   return !isRuntimeTtsProvider(normalized);
 }
