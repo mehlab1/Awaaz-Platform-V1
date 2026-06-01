@@ -25,9 +25,6 @@ export const CATALOG_ONLY_VOICE_MESSAGE =
 export const GROQ_RUNTIME_ISSUE_MESSAGE =
   'Live runtime currently supports Groq models only (Llama 3.3 70B or GPT-OSS).';
 
-export const RUNTIME_PIPELINE_FOOTNOTE =
-  'Live runtime uses Deepgram STT, Groq LLM, and your selected TTS provider (Rime, Cartesia, ElevenLabs, or Inworld). Additional catalog providers are not wired to the worker yet.';
-
 export const VOICE_PREVIEW_UNAVAILABLE_MESSAGE =
   'Preview is not available for this provider yet.';
 

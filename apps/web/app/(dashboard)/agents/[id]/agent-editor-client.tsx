@@ -56,7 +56,6 @@ import {
   CATALOG_ONLY_VOICE_MESSAGE,
   isCatalogOnlyVoiceProvider,
   isRuntimeTtsProvider,
-  RUNTIME_PIPELINE_FOOTNOTE,
   RUNTIME_TTS_PROVIDER,
   type VoiceRuntimeStatusLabel,
   VOICE_PREVIEW_UNAVAILABLE_MESSAGE,
@@ -415,7 +414,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const [loading, setLoading] = useState(true);
   const [saveBusy, setSaveBusy] = useState<
-    'update' | 'create' | 'publish' | 'phone' | null
+    'update' | 'create' | 'publish' | 'phone' | 'runtime' | null
   >(null);
   const [loadingPreviewKey, setLoadingPreviewKey] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -563,17 +562,20 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const hasUnsavedChanges =
     promptHydrated &&
     (selectedVersion
-      ? prompt !== selectedVersion.systemPrompt ||
-        selectedVoiceId !== selectedVersion.voiceId ||
-        selectedTtsProvider !== versionTtsProvider(selectedVersion, voices) ||
-        selectedLlmProvider !== (selectedVersion.llmProviderId ?? DEFAULT_LLM_PROVIDER) ||
-        selectedSttProvider !== (selectedVersion.sttProviderId ?? DEFAULT_STT_PROVIDER) ||
-        selectedModelId !== (selectedVersion.model ?? DEFAULT_LLM_MODEL) ||
-        selectedSttModel !== (selectedVersion.sttModel ?? DEFAULT_STT_MODEL) ||
-        ttsCredentialMode !== credentialModeOrDefault(selectedVersion.ttsCredentialMode) ||
-        llmCredentialMode !== credentialModeOrDefault(selectedVersion.llmCredentialMode) ||
-        sttCredentialMode !== credentialModeOrDefault(selectedVersion.sttCredentialMode)
+      ? prompt !== selectedVersion.systemPrompt
       : prompt.trim().length > 0);
+  const hasRuntimeChanges =
+    promptHydrated &&
+    selectedVersion != null &&
+    (selectedVoiceId !== selectedVersion.voiceId ||
+      selectedTtsProvider !== versionTtsProvider(selectedVersion, voices) ||
+      selectedLlmProvider !== (selectedVersion.llmProviderId ?? DEFAULT_LLM_PROVIDER) ||
+      selectedSttProvider !== (selectedVersion.sttProviderId ?? DEFAULT_STT_PROVIDER) ||
+      selectedModelId !== (selectedVersion.model ?? DEFAULT_LLM_MODEL) ||
+      selectedSttModel !== (selectedVersion.sttModel ?? DEFAULT_STT_MODEL) ||
+      ttsCredentialMode !== credentialModeOrDefault(selectedVersion.ttsCredentialMode) ||
+      llmCredentialMode !== credentialModeOrDefault(selectedVersion.llmCredentialMode) ||
+      sttCredentialMode !== credentialModeOrDefault(selectedVersion.sttCredentialMode));
 
   const editorRuntimeAssessment = useMemo(
     () =>
@@ -608,6 +610,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const promptIsValid = prompt.trim().length > 0 && selectedVoiceId.trim().length > 0;
   const versionPanelBusy = versionMutating !== null;
+  const canSaveRuntimeSettings =
+    promptHydrated &&
+    selectedVersion != null &&
+    hasRuntimeChanges &&
+    selectedVoiceId.trim().length > 0 &&
+    saveBusy === null &&
+    !versionPanelBusy &&
+    !voiceSaveBusy;
   const canUpdateCurrentVersion =
     promptHydrated &&
     selectedVersion != null &&
@@ -969,7 +979,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setToast(
         versionRuntime.canPublishLive
           ? `Viewing V${version.versionNumber}. Update this version or save V${nextVersionNumber} as a new version.`
-          : `Viewing V${version.versionNumber} (catalog-only draft — not publishable until you switch to a Rime voice and Groq model).`,
+          : `Viewing V${version.versionNumber} (catalog-only draft - switch to a runtime TTS voice and Groq model before publishing).`,
       );
     },
     [hasUnsavedChanges, nextVersionNumber, selectedVersionId, setDraftPrompt, voices],
@@ -1172,6 +1182,105 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
   };
 
+  const saveRuntimeSettings = async (
+    overrides: Partial<{
+      voiceId: string;
+      llmProviderId: string;
+      model: string;
+      sttProviderId: string;
+      sttModel: string;
+      ttsCredentialMode: CredentialMode;
+      llmCredentialMode: CredentialMode;
+      sttCredentialMode: CredentialMode;
+    }> = {},
+    options: { toastMessage?: string; reloadCatalog?: boolean } = {},
+  ): Promise<AgentVersion | null> => {
+    if (saveInFlightRef.current || saveBusy !== null || versionPanelBusy) {
+      return null;
+    }
+    if (!activeOrgId || !agent || !selectedVersion) {
+      return null;
+    }
+
+    const nextVoiceId = overrides.voiceId ?? selectedVoiceId;
+    if (!nextVoiceId.trim()) {
+      setToast('Select a voice before saving runtime settings.');
+      return null;
+    }
+
+    saveInFlightRef.current = true;
+    setSaveBusy('runtime');
+    setPageError(null);
+    try {
+      const res = await apiCall(
+        `/api/v1/agents/${agentId}/versions/${selectedVersion.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemPrompt: selectedVersion.systemPrompt,
+            voiceId: nextVoiceId,
+            llmProviderId: overrides.llmProviderId ?? selectedLlmProvider,
+            model: overrides.model ?? selectedModelId,
+            sttProviderId: overrides.sttProviderId ?? selectedSttProvider,
+            sttModel: overrides.sttModel ?? selectedSttModel,
+            ttsCredentialMode: overrides.ttsCredentialMode ?? ttsCredentialMode,
+            llmCredentialMode: overrides.llmCredentialMode ?? llmCredentialMode,
+            sttCredentialMode: overrides.sttCredentialMode ?? sttCredentialMode,
+            temperature: selectedVersion.temperature,
+            maxTokens: selectedVersion.maxTokens,
+            firstMessage: selectedVersion.firstMessage,
+            endCallPhrases: selectedVersion.endCallPhrases,
+          }),
+        },
+      );
+
+      if (!res.ok) {
+        throw new Error(await res.text() || res.statusText);
+      }
+
+      const updated = (await res.json()) as AgentVersion;
+      setVersions((current) =>
+        sortVersionsDesc(
+          [updated, ...current.filter((version) => version.id !== updated.id)],
+        ),
+      );
+      if (agent.currentVersion?.id === updated.id) {
+        setAgent({
+          ...agent,
+          currentVersion: updated,
+        });
+      }
+      setSelectedVoiceId(updated.voiceId);
+      setSelectedTtsProvider(versionTtsProvider(updated, voices));
+      setSelectedLlmProvider(updated.llmProviderId ?? DEFAULT_LLM_PROVIDER);
+      setSelectedSttProvider(updated.sttProviderId ?? DEFAULT_STT_PROVIDER);
+      setSelectedModelId(updated.model ?? DEFAULT_LLM_MODEL);
+      setSelectedSttModel(updated.sttModel ?? DEFAULT_STT_MODEL);
+      setTtsCredentialMode(credentialModeOrDefault(updated.ttsCredentialMode));
+      setLlmCredentialMode(credentialModeOrDefault(updated.llmCredentialMode));
+      setSttCredentialMode(credentialModeOrDefault(updated.sttCredentialMode));
+      setOpenVersionMenuId(null);
+      setToast(
+        options.toastMessage ??
+          (updated.isLive
+            ? 'Runtime settings saved for live calls.'
+            : `Runtime settings saved for V${updated.versionNumber}.`),
+      );
+      if (options.reloadCatalog) {
+        await loadData(showAllVersions && allVersionsLoaded);
+      }
+      return updated;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setPageError(message);
+      return null;
+    } finally {
+      saveInFlightRef.current = false;
+      setSaveBusy(null);
+    }
+  };
+
   const onVoiceSelect = async (voiceId: string) => {
     const nextVoice = voices.find((voice) => voice.rimeVoiceId === voiceId) ?? null;
     const nextTtsProvider = voiceProviderId(nextVoice);
@@ -1191,67 +1300,31 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         setToast(
           pendingRuntime.isRuntimeTtsVoice
             ? 'Voice selected for the next saved version.'
-            : 'Catalog-only voice selected. Pick a runtime TTS provider before publishing.',
+            : 'Catalog-only voice selected. Pick a runtime TTS provider before testing.',
         );
       }
       setVoiceSaveBusy(false);
       return;
     }
 
-    try {
-      const res = await apiCall(
-        `/api/v1/agents/${agentId}/versions/${selectedVersion.id}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemPrompt: selectedVersion.systemPrompt,
-            voiceId: voiceId,
-            llmProviderId: selectedLlmProvider,
-            model: selectedModelId,
-            sttProviderId: selectedSttProvider,
-            sttModel: selectedSttModel,
-            ttsCredentialMode,
-            llmCredentialMode,
-            sttCredentialMode,
-            temperature: selectedVersion.temperature,
-            maxTokens: selectedVersion.maxTokens,
-            firstMessage: selectedVersion.firstMessage,
-            endCallPhrases: selectedVersion.endCallPhrases,
-          }),
-        },
-      );
-
-      if (!res.ok) {
-        throw new Error(await res.text() || res.statusText);
-      }
-
-      const updated = (await res.json()) as AgentVersion;
-      setVersions((current) =>
-        current.map((v) => (v.id === updated.id ? updated : v))
-      );
-      if (agent && agent.currentVersion && agent.currentVersion.id === updated.id) {
-        setAgent({
-          ...agent,
-          currentVersion: updated,
-        });
-      }
-      const savedRuntime = assessRuntimeConfig({
-        voiceId,
-        model: selectedModelId,
-        voices,
-      });
-      setToast(
-        savedRuntime.isRuntimeTtsVoice
+    const savedRuntime = assessRuntimeConfig({
+      voiceId,
+      model: selectedModelId,
+      voices,
+    });
+    await saveRuntimeSettings(
+      { voiceId },
+      {
+        toastMessage: savedRuntime.isRuntimeTtsVoice
           ? 'Voice setting saved.'
-          : 'Voice saved. Publish and Test Agent require a runtime TTS voice and Groq model.',
-      );
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setToast(`Failed to update voice: ${message}`);
-    } finally {
-      setVoiceSaveBusy(false);
-    }
+          : 'Voice saved. Pick a runtime TTS provider before testing.',
+      },
+    );
+    setVoiceSaveBusy(false);
+  };
+
+  const saveRuntimeSettingsFromPanel = async () => {
+    await saveRuntimeSettings();
   };
 
   const createVersionFlow = async (
@@ -1497,13 +1570,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   ]);
   let sttOptions = buildModelOptions(selectedSttProvider, STT_OPTIONS);
   let llmOptions = buildModelOptions(selectedLlmProvider, LLM_OPTIONS);
-  let ttsVoiceOptions: PipelineOption[] = voices
-    .filter((voice) => voiceProviderId(voice) === selectedTtsProvider)
-    .map((voice) => ({
-      value: voice.rimeVoiceId,
-      label: voice.name,
-      description: voiceTraitText(voice),
-    }));
 
   if (!ttsProviderOptions.some((o) => o.value === selectedTtsProvider)) {
     ttsProviderOptions = [
@@ -1523,21 +1589,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     llmProviderOptions = [
       ...llmProviderOptions,
       { value: selectedLlmProvider, label: `Current LLM provider - ${selectedLlmProvider}`, disabled: true },
-    ];
-  }
-
-  if (selectedVoiceId && !ttsVoiceOptions.some((o) => o.value === selectedVoiceId)) {
-    const currentVoice = voices.find((voice) => voice.rimeVoiceId === selectedVoiceId);
-    ttsVoiceOptions = [
-      ...ttsVoiceOptions,
-      {
-        value: selectedVoiceId,
-        label: currentVoice?.name ?? `Current voice - ${selectedVoiceId}`,
-        disabled: currentVoice ? voiceProviderId(currentVoice) !== selectedTtsProvider : true,
-        description: currentVoice
-          ? `Selected ${voiceProviderLabel(voiceProviderId(currentVoice))} voice`
-          : 'Voice is not available in the current catalog',
-      },
     ];
   }
 
@@ -1621,9 +1672,34 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         throw new Error(await validateRes.text() || validateRes.statusText);
       }
 
+      const providerKind = providerMeta(providerId)?.kind;
+      if (providerKind === 'tts') {
+        setTtsCredentialMode('BYOK');
+      } else if (providerKind === 'llm') {
+        setLlmCredentialMode('BYOK');
+      } else if (providerKind === 'stt') {
+        setSttCredentialMode('BYOK');
+      }
       setProviderKeyDrafts((current) => ({ ...current, [providerId]: '' }));
-      setToast('BYOK key saved and validated.');
-      await loadData(showAllVersions && allVersionsLoaded);
+      if (providerKind === 'tts') {
+        await saveRuntimeSettings(
+          { ttsCredentialMode: 'BYOK' },
+          { toastMessage: 'BYOK key saved and selected for TTS.', reloadCatalog: true },
+        );
+      } else if (providerKind === 'llm') {
+        await saveRuntimeSettings(
+          { llmCredentialMode: 'BYOK' },
+          { toastMessage: 'BYOK key saved and selected for LLM.', reloadCatalog: true },
+        );
+      } else if (providerKind === 'stt') {
+        await saveRuntimeSettings(
+          { sttCredentialMode: 'BYOK' },
+          { toastMessage: 'BYOK key saved and selected for STT.', reloadCatalog: true },
+        );
+      } else {
+        setToast('BYOK key saved and validated.');
+        await loadData(showAllVersions && allVersionsLoaded);
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setPageError(message);
@@ -1686,16 +1762,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             ? 'Editor is still loading.'
             : hasUnsavedChanges
               ? 'Save or discard unsaved changes before testing.'
-              : !agent.isActive
-                ? 'Activate the agent before testing.'
-                : !liveVersion
-                  ? 'Publish a version before testing.'
-                  : !hasUsableLiveConfig
-                    ? 'Live version is missing a system prompt or voice.'
-                    : !liveRuntimeAssessment.canTestLive
-                      ? (liveRuntimeAssessment.issues[0] ??
-                        'Live version uses providers not supported by the current runtime.')
-                      : null;
+              : hasRuntimeChanges
+                ? 'Save runtime settings before testing.'
+                : !agent.isActive
+                  ? 'Activate the agent before testing.'
+                  : !liveVersion
+                    ? 'Publish a version before testing.'
+                    : !hasUsableLiveConfig
+                      ? 'Live version is missing a system prompt or voice.'
+                      : !liveRuntimeAssessment.canTestLive
+                        ? (liveRuntimeAssessment.issues[0] ??
+                          'Live version uses providers not supported by the current runtime.')
+                        : null;
 
   const canTest = testCallBlockedReason === null;
 
@@ -1706,6 +1784,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       loading,
       promptHydrated,
       hasUnsavedChanges,
+      hasRuntimeChanges,
       saveBusy,
       versionPanelBusy,
       agentActive: agent?.isActive ?? null,
@@ -1722,6 +1801,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     agent?.currentVersionId,
     agent?.isActive,
     canTest,
+    hasRuntimeChanges,
     hasUnsavedChanges,
     hasUsableLiveConfig,
     loading,
@@ -2605,15 +2685,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 providerOptions={ttsProviderOptions}
                 onProviderChange={onTtsProviderChange}
                 detailLabel="Voice"
-                detailValue={selectedVoiceId}
-                detailOptions={ttsVoiceOptions}
-                onDetailChange={(voiceId) => {
-                  const voice = voices.find((item) => item.rimeVoiceId === voiceId) ?? null;
-                  setSelectedVoiceId(voiceId);
-                  if (voice) {
-                    setSelectedTtsProvider(voiceProviderId(voice));
-                  }
-                }}
+                detailContent={
+                  <SelectedVoiceTextarea
+                    voice={selectedVoice}
+                    voiceId={selectedVoiceId}
+                  />
+                }
                 detailAction={
                   <Button
                     type="button"
@@ -2640,6 +2717,29 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 credentialBusy={credentialSaveBusy === selectedTtsProvider}
               />
 
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/70 p-3">
+                <p className="min-w-0 text-[11px] leading-relaxed text-muted-foreground">
+                  {hasRuntimeChanges
+                    ? 'Runtime settings have changes ready to save.'
+                    : 'Runtime settings are saved.'}
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={hasRuntimeChanges ? 'default' : 'outline'}
+                  className="h-8 shrink-0 text-xs"
+                  disabled={!canSaveRuntimeSettings}
+                  onClick={() => void saveRuntimeSettingsFromPanel()}
+                >
+                  {saveBusy === 'runtime' ? (
+                    <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <Save className="size-3.5" aria-hidden />
+                  )}
+                  Save Runtime
+                </Button>
+              </div>
+
               {selectedVoiceId && editorRuntimeAssessment.issues.length > 0 ? (
                 <RuntimeGuardrailBanner
                   issues={editorRuntimeAssessment.issues}
@@ -2650,9 +2750,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   labels={voiceRuntimeStatusLabels(selectedVoice, voices)}
                 />
               ) : null}
-              <p className="text-[10px] leading-relaxed text-muted-foreground">
-                {RUNTIME_PIPELINE_FOOTNOTE}
-              </p>
             </div>
           </div>
 
@@ -3876,6 +3973,7 @@ function PipelineProviderCard({
   detailValue,
   detailOptions,
   onDetailChange,
+  detailContent,
   detailAction,
   credentialMode,
   onCredentialModeChange,
@@ -3890,9 +3988,10 @@ function PipelineProviderCard({
   providerOptions: readonly PipelineOption[];
   onProviderChange: (value: string) => void;
   detailLabel: string;
-  detailValue: string;
-  detailOptions: readonly PipelineOption[];
-  onDetailChange: (value: string) => void;
+  detailValue?: string;
+  detailOptions?: readonly PipelineOption[];
+  onDetailChange?: (value: string) => void;
+  detailContent?: ReactNode;
   detailAction?: ReactNode;
   credentialMode: CredentialMode;
   onCredentialModeChange: (value: CredentialMode) => void;
@@ -3920,12 +4019,14 @@ function PipelineProviderCard({
         />
         <div className="flex items-end gap-2">
           <div className="min-w-0 flex-1">
-            <PipelineSelect
-              label={detailLabel}
-              value={detailValue}
-              options={detailOptions}
-              onValueChange={onDetailChange}
-            />
+            {detailContent ?? (
+              <PipelineSelect
+                label={detailLabel}
+                value={detailValue ?? ''}
+                options={detailOptions ?? []}
+                onValueChange={onDetailChange}
+              />
+            )}
           </div>
           {detailAction}
         </div>
@@ -4022,7 +4123,7 @@ function CredentialModePanel({
       </div>
 
       <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-        This setting is saved on this agent version. The stored {providerLabel} key can be reused by other agents in this workspace.
+        This setting is saved with runtime settings. The stored {providerLabel} key can be reused by other agents in this workspace.
       </p>
 
       <label className="mt-3 block">
@@ -4151,6 +4252,36 @@ function byokCredentialStatusLabel(
     return 'Invalid';
   }
   return 'Configured';
+}
+
+function SelectedVoiceTextarea({
+  voice,
+  voiceId,
+}: {
+  voice: VoiceDto | undefined;
+  voiceId: string;
+}) {
+  const provider = voice ? voiceProviderLabel(voiceProviderId(voice)) : '';
+  const value = voice
+    ? `${voice.name}${provider ? ` - ${provider}` : ''}\n${voice.rimeVoiceId}`
+    : voiceId.trim()
+      ? voiceId
+      : 'No voice selected';
+
+  return (
+    <label className="block">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Voice
+      </span>
+      <textarea
+        readOnly
+        rows={2}
+        value={value}
+        aria-label="Selected TTS voice"
+        className="mt-1 min-h-[4.25rem] w-full resize-none rounded-md border border-border/70 bg-background/70 px-2.5 py-2 text-xs font-medium leading-relaxed text-foreground outline-none"
+      />
+    </label>
+  );
 }
 
 function PipelineSelect({

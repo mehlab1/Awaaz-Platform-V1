@@ -181,6 +181,23 @@ interface BrowserTestSession {
   serverUrl: string;
   participantToken: string;
   roomName: string;
+  runtime: BrowserTestRuntimeSummary | null;
+}
+
+type CredentialMode = 'BYOK' | 'FINOVA_MANAGED';
+
+interface BrowserTestRuntimeProvider {
+  providerId: string;
+  credentialMode: CredentialMode;
+  model?: string | null;
+  voiceId?: string | null;
+}
+
+interface BrowserTestRuntimeSummary {
+  versionNumber?: number | null;
+  tts?: BrowserTestRuntimeProvider | null;
+  llm?: BrowserTestRuntimeProvider | null;
+  stt?: BrowserTestRuntimeProvider | null;
 }
 
 type BrowserSessionPhase =
@@ -274,6 +291,42 @@ const voiceModeMeta: Record<
   },
 };
 
+function readCredentialMode(value: unknown): CredentialMode {
+  return value === 'BYOK' ? 'BYOK' : 'FINOVA_MANAGED';
+}
+
+function readRuntimeProvider(value: unknown): BrowserTestRuntimeProvider | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const providerId = typeof record.providerId === 'string' ? record.providerId : '';
+  if (!providerId.trim()) {
+    return null;
+  }
+  return {
+    providerId,
+    credentialMode: readCredentialMode(record.credentialMode),
+    model: typeof record.model === 'string' ? record.model : null,
+    voiceId: typeof record.voiceId === 'string' ? record.voiceId : null,
+  };
+}
+
+function readRuntimeSummary(value: unknown): BrowserTestRuntimeSummary | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const versionNumber =
+    typeof record.versionNumber === 'number' ? record.versionNumber : null;
+  return {
+    versionNumber,
+    tts: readRuntimeProvider(record.tts),
+    llm: readRuntimeProvider(record.llm),
+    stt: readRuntimeProvider(record.stt),
+  };
+}
+
 function readSessionDto(body: unknown): BrowserTestSession {
   const o = body as Record<string, unknown>;
   const serverUrl = o.serverUrl;
@@ -288,7 +341,7 @@ function readSessionDto(body: unknown): BrowserTestSession {
   if (typeof serverUrl !== 'string' || !participantToken || !serverUrl || !callId) {
     throw new Error('Unexpected test-call response.');
   }
-  return { callId, serverUrl, participantToken, roomName };
+  return { callId, serverUrl, participantToken, roomName, runtime: readRuntimeSummary(o.runtime) };
 }
 
 function phaseLabel(p: BrowserTestPhaseBadge): string {
@@ -301,6 +354,49 @@ function phaseLabel(p: BrowserTestPhaseBadge): string {
     fetch_error: 'Unavailable',
   };
   return labels[p];
+}
+
+function credentialModeLabel(mode: CredentialMode): string {
+  return mode === 'BYOK' ? 'BYOK' : 'Finova Managed';
+}
+
+function RuntimeCredentialStrip({
+  runtime,
+}: {
+  runtime: BrowserTestRuntimeSummary | null;
+}) {
+  if (!runtime) {
+    return null;
+  }
+  const items = [
+    { label: 'TTS', provider: runtime.tts },
+    { label: 'LLM', provider: runtime.llm },
+    { label: 'STT', provider: runtime.stt },
+  ].filter((item): item is { label: string; provider: BrowserTestRuntimeProvider } =>
+    Boolean(item.provider),
+  );
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {items.map((item) => (
+        <Badge
+          key={item.label}
+          variant="outline"
+          className="border-border/60 bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground"
+        >
+          Using {credentialModeLabel(item.provider.credentialMode)} for {item.label}
+        </Badge>
+      ))}
+      {runtime.versionNumber ? (
+        <span className="text-[10px] text-muted-foreground/75">
+          Live V{runtime.versionNumber}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 
@@ -1335,8 +1431,9 @@ export function TestCallModal(props: TestCallModalProps) {
               {lifecycleNotice ??
                 (sessionPhase === 'ENDING'
                   ? 'Ending session...'
-                  : 'Run a local voice check with browser audio before publishing changes.')}
+                  : 'Run a local voice check with browser audio.')}
             </p>
+            <RuntimeCredentialStrip runtime={session?.runtime ?? null} />
           </div>
           <Button
             type="button"

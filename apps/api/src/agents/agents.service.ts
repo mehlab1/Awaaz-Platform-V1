@@ -468,6 +468,7 @@ export class AgentsService {
     }
 
     const callId = randomUUID();
+    const runtimeSummary = this.browserTestRuntimeSummary(agent.currentVersion);
     await this.prisma.call.create({
       data: {
         id: callId,
@@ -484,6 +485,7 @@ export class AgentsService {
           isTest: true,
           isTestCall: true,
           identityStatus: 'created',
+          runtime: runtimeSummary,
         },
       },
     });
@@ -510,6 +512,7 @@ export class AgentsService {
             isTestCall: true,
             identityStatus: 'room_ready',
             liveKitRoomName: session.roomName,
+            runtime: runtimeSummary,
             ...(session.recordingObjectKey
               ? {
                   recordingProvider: 'livekit-egress',
@@ -529,7 +532,7 @@ export class AgentsService {
       );
       /* eslint-enable no-console */
 
-      return session;
+      return { ...session, runtime: runtimeSummary };
     } catch (error: unknown) {
       await this.prisma.call.update({
         where: { id: callId },
@@ -687,6 +690,45 @@ export class AgentsService {
         ...updateLifecycle,
       },
     } as Prisma.InputJsonObject;
+  }
+
+  private browserTestRuntimeSummary(version: {
+    versionNumber: number;
+    voiceId: string;
+    model: string;
+    ttsProviderId: string | null;
+    ttsModel: string | null;
+    ttsVoiceId: string | null;
+    ttsCredentialMode: ProviderCredentialMode | null;
+    llmProviderId: string | null;
+    llmModel: string | null;
+    llmCredentialMode: ProviderCredentialMode | null;
+    sttProviderId: string | null;
+    sttModel: string | null;
+    sttCredentialMode: ProviderCredentialMode | null;
+  }) {
+    return {
+      versionNumber: version.versionNumber,
+      tts: {
+        providerId: version.ttsProviderId ?? 'rime',
+        credentialMode:
+          version.ttsCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED,
+        voiceId: version.ttsVoiceId ?? version.voiceId,
+        model: version.ttsModel,
+      },
+      llm: {
+        providerId: version.llmProviderId ?? DEFAULT_LLM_PROVIDER_ID,
+        credentialMode:
+          version.llmCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED,
+        model: version.llmModel ?? version.model,
+      },
+      stt: {
+        providerId: version.sttProviderId ?? DEFAULT_STT_PROVIDER_ID,
+        credentialMode:
+          version.sttCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED,
+        model: version.sttModel ?? DEFAULT_STT_MODEL,
+      },
+    };
   }
 
   private async ensureAgent(
