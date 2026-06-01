@@ -1353,6 +1353,20 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const selectedPanelProviderLabel = selectedPanelVoice
     ? voiceProviderLabel(voiceProviderId(selectedPanelVoice))
     : voiceProviderLabel(selectedVoiceProvider);
+
+  const voiceProviderCatalogOptions = useMemo(() => {
+    const catalogTtsProviders =
+      catalogProviders
+        ?.filter((provider) => provider.kind === 'tts')
+        .map((provider) => ({ id: provider.id, label: provider.label })) ?? [];
+
+    if (catalogTtsProviders.length > 0) {
+      return catalogTtsProviders;
+    }
+
+    return [...DEFAULT_VOICE_PROVIDER_OPTIONS];
+  }, [catalogProviders]);
+
   const voiceProviderCounts = useMemo(() => {
     const counts = Object.fromEntries(
       voiceProviderCatalogOptions.map((provider) => [provider.id, 0]),
@@ -1436,19 +1450,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const providerMeta = (providerId: string) =>
     catalogProviders?.find((provider) => provider.id === providerId) ?? null;
-
-  const voiceProviderCatalogOptions = useMemo(() => {
-    const catalogTtsProviders =
-      catalogProviders
-        ?.filter((provider) => provider.kind === 'tts')
-        .map((provider) => ({ id: provider.id, label: provider.label })) ?? [];
-
-    if (catalogTtsProviders.length > 0) {
-      return catalogTtsProviders;
-    }
-
-    return [...DEFAULT_VOICE_PROVIDER_OPTIONS];
-  }, [catalogProviders]);
 
   const buildProviderOptions = (
     kind: 'tts' | 'stt' | 'llm',
