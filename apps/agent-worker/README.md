@@ -2,7 +2,7 @@
 
 Python LiveKit voice agent for Awaaz browser test calls and (future) SIP sessions.
 
-**Pipeline:** Deepgram STT → Groq LLM → Rime TTS
+**Pipeline:** Deepgram, AssemblyAI, or Groq Whisper STT → Groq LLM → Rime, Cartesia, ElevenLabs, or Inworld TTS
 **Features:** barge-in/interruption, graceful `end_call`, speech event + latency telemetry to Nest internal API
 **Redis:** not used — all persistence via HTTP to the API
 
@@ -40,9 +40,13 @@ Requires local or deployed API reachable at `AWAAZ_API_URL` with matching `WORKE
 | `LIVEKIT_AGENT_NAME` | Must match API test-call dispatch |
 | `AWAAZ_API_URL` | Render API base URL |
 | `WORKER_SECRET` | Header `x-worker-secret` |
-| `DEEPGRAM_API_KEY` | STT |
-| `GROQ_API_KEY` | LLM |
-| `RIME_API_KEY` | TTS |
+| `FINOVA_DEEPGRAM_API_KEY` or `DEEPGRAM_API_KEY` | Deepgram STT fallback |
+| `FINOVA_ASSEMBLYAI_API_KEY` or `ASSEMBLYAI_API_KEY` | AssemblyAI STT fallback |
+| `FINOVA_GROQ_API_KEY` or `GROQ_API_KEY` | Groq LLM and Groq Whisper STT fallback |
+| `FINOVA_RIME_API_KEY` or `RIME_API_KEY` | Rime TTS fallback |
+| `FINOVA_CARTESIA_API_KEY` or `CARTESIA_API_KEY` | Cartesia TTS fallback |
+| `FINOVA_ELEVENLABS_API_KEY`, `ELEVENLABS_API_KEY`, or `ELEVEN_API_KEY` | ElevenLabs TTS fallback |
+| `FINOVA_INWORLD_API_KEY` or `INWORLD_API_KEY` | Inworld TTS fallback |
 
 Do **not** configure `REDIS_URL` on this service.
 

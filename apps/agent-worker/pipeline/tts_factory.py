@@ -54,10 +54,13 @@ def build_tts(
         )
 
     if resolved.provider_id == RUNTIME_TTS_PROVIDER_CARTESIA:
-        api_key = resolved.api_key
+        api_key = resolved.api_key or _first_env(
+            "FINOVA_CARTESIA_API_KEY",
+            "CARTESIA_API_KEY",
+        )
         if not api_key:
             raise ValueError(
-                "Cartesia TTS requires credentials.tts.apiKey from internal agent config",
+                "Cartesia TTS requires credentials.tts.apiKey, FINOVA_CARTESIA_API_KEY, or CARTESIA_API_KEY",
             )
         return CartesiaTTS(
             voice_id=resolved.voice_id,
@@ -67,10 +70,14 @@ def build_tts(
         )
 
     if resolved.provider_id == RUNTIME_TTS_PROVIDER_ELEVENLABS:
-        api_key = resolved.api_key
+        api_key = resolved.api_key or _first_env(
+            "FINOVA_ELEVENLABS_API_KEY",
+            "ELEVENLABS_API_KEY",
+            "ELEVEN_API_KEY",
+        )
         if not api_key:
             raise ValueError(
-                "ElevenLabs TTS requires credentials.tts.apiKey from internal agent config",
+                "ElevenLabs TTS requires credentials.tts.apiKey, FINOVA_ELEVENLABS_API_KEY, ELEVENLABS_API_KEY, or ELEVEN_API_KEY",
             )
         return ElevenLabsTTS(
             voice_id=resolved.voice_id,
@@ -80,10 +87,13 @@ def build_tts(
         )
 
     if resolved.provider_id == RUNTIME_TTS_PROVIDER_INWORLD:
-        api_key = resolved.api_key
+        api_key = resolved.api_key or _first_env(
+            "FINOVA_INWORLD_API_KEY",
+            "INWORLD_API_KEY",
+        )
         if not api_key:
             raise ValueError(
-                "Inworld TTS requires credentials.tts.apiKey from internal agent config",
+                "Inworld TTS requires credentials.tts.apiKey, FINOVA_INWORLD_API_KEY, or INWORLD_API_KEY",
             )
         return InworldTTS(
             voice_id=resolved.voice_id,
@@ -92,9 +102,9 @@ def build_tts(
             api_key=api_key,
         )
 
-    api_key = resolved.api_key or os.getenv("RIME_API_KEY")
+    api_key = resolved.api_key or _first_env("FINOVA_RIME_API_KEY", "RIME_API_KEY")
     if not api_key:
-        raise ValueError("RIME_API_KEY is required")
+        raise ValueError("FINOVA_RIME_API_KEY or RIME_API_KEY is required")
 
     return RimeTTS(
         voice_id=resolved.voice_id,
@@ -212,3 +222,11 @@ def _legacy_string(
 
 def _normalize_provider_id(provider_id: str) -> str:
     return provider_id.strip().lower() or RUNTIME_TTS_PROVIDER_RIME
+
+
+def _first_env(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip()
+    return None

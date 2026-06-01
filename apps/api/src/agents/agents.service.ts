@@ -10,6 +10,7 @@ import { AuditAction, Prisma, CallStatus, ProviderCredentialMode } from '@prisma
 
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
+import { providerById } from '../plugins/provider-catalog';
 import { PrismaService } from '../prisma/prisma.service';
 import { VoicesService, type ResolvedTtsVoice } from '../voices/voices.service';
 import type { CreateAgentVersionDto } from './dto/create-agent-version.dto';
@@ -21,11 +22,15 @@ const DEFAULT_LLM_PROVIDER_ID = 'groq';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
 const RUNTIME_LLM_PROVIDER_IDS = new Set([DEFAULT_LLM_PROVIDER_ID]);
-const RUNTIME_STT_PROVIDER_IDS = new Set([DEFAULT_STT_PROVIDER_ID]);
-const RUNTIME_STT_MODEL_IDS = new Set([
-  DEFAULT_STT_MODEL,
-  'nova-2',
-  'nova-3',
+const RUNTIME_STT_PROVIDER_IDS = new Set([
+  DEFAULT_STT_PROVIDER_ID,
+  'assemblyai',
+  'groq-whisper',
+]);
+const DEFAULT_STT_MODEL_BY_PROVIDER = new Map<string, string>([
+  [DEFAULT_STT_PROVIDER_ID, DEFAULT_STT_MODEL],
+  ['assemblyai', 'universal-streaming-v2'],
+  ['groq-whisper', 'whisper-large-v3-turbo'],
 ]);
 
 @Injectable()
@@ -762,18 +767,38 @@ export class AgentsService {
     dto: CreateAgentVersionDto,
     resolvedVoice: ResolvedTtsVoice,
   ) {
-    const llmProviderId = dto.llmProviderId?.trim() || DEFAULT_LLM_PROVIDER_ID;
+    const llmProviderId =
+      dto.llmProviderId?.trim().toLowerCase() || DEFAULT_LLM_PROVIDER_ID;
     if (!RUNTIME_LLM_PROVIDER_IDS.has(llmProviderId)) {
       throw new BadRequestException(`Unsupported LLM provider: ${llmProviderId}`);
     }
-    const llmModel = dto.model ?? DEFAULT_LLM_MODEL;
-    const sttProviderId = dto.sttProviderId?.trim() || DEFAULT_STT_PROVIDER_ID;
+    const llmModel = dto.model?.trim() || DEFAULT_LLM_MODEL;
+    const llmProvider = providerById(llmProviderId);
+    const supportedLlmModelIds = new Set(
+      llmProvider?.models?.map((model) => model.id) ?? [],
+    );
+    if (supportedLlmModelIds.size > 0 && !supportedLlmModelIds.has(llmModel)) {
+      throw new BadRequestException(
+        `Unsupported ${llmProvider?.label ?? llmProviderId} LLM model: ${llmModel}`,
+      );
+    }
+    const sttProviderId =
+      dto.sttProviderId?.trim().toLowerCase() || DEFAULT_STT_PROVIDER_ID;
     if (!RUNTIME_STT_PROVIDER_IDS.has(sttProviderId)) {
       throw new BadRequestException(`Unsupported STT provider: ${sttProviderId}`);
     }
-    const sttModel = dto.sttModel?.trim() || DEFAULT_STT_MODEL;
-    if (!RUNTIME_STT_MODEL_IDS.has(sttModel)) {
-      throw new BadRequestException(`Unsupported Deepgram STT model: ${sttModel}`);
+    const sttModel =
+      (dto.sttModel?.trim() ||
+        DEFAULT_STT_MODEL_BY_PROVIDER.get(sttProviderId)) ??
+      DEFAULT_STT_MODEL;
+    const sttProvider = providerById(sttProviderId);
+    const supportedSttModelIds = new Set(
+      sttProvider?.models?.map((model) => model.id) ?? [],
+    );
+    if (supportedSttModelIds.size > 0 && !supportedSttModelIds.has(sttModel)) {
+      throw new BadRequestException(
+        `Unsupported ${sttProvider?.label ?? sttProviderId} STT model: ${sttModel}`,
+      );
     }
     const ttsCredentialMode = dto.ttsCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
     const llmCredentialMode = dto.llmCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;

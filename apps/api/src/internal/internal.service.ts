@@ -14,6 +14,7 @@ import {
 import type { Queue } from 'bullmq';
 
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
+import { providerById } from '../plugins/provider-catalog';
 import { PluginsService } from '../plugins/plugins.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TRANSCRIPT_QUEUE } from '../queues/queue.constants';
@@ -28,8 +29,15 @@ import type { StartCallDto } from './dto/start-call.dto';
 import type { WorkerAgentConfigResponse } from './worker-agent-config.types';
 
 const DEFAULT_LLM_PROVIDER_ID = 'groq';
+const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
+const RUNTIME_LLM_PROVIDER_IDS = new Set([DEFAULT_LLM_PROVIDER_ID]);
+const RUNTIME_STT_PROVIDER_IDS = new Set([
+  DEFAULT_STT_PROVIDER_ID,
+  'assemblyai',
+  'groq-whisper',
+]);
 
 type WorkerProviderSecret = {
   providerId: string;
@@ -80,10 +88,16 @@ export class InternalService {
     }
     await this.plugins.markProviderCredentialUsed(ttsSecret.credentialId);
 
-    const sttProviderId = version.sttProviderId ?? DEFAULT_STT_PROVIDER_ID;
-    const sttModel = version.sttModel ?? DEFAULT_STT_MODEL;
-    const llmProviderId = version.llmProviderId ?? DEFAULT_LLM_PROVIDER_ID;
-    const llmModel = version.llmModel ?? version.model;
+    const sttProviderId = (
+      version.sttProviderId ?? DEFAULT_STT_PROVIDER_ID
+    ).trim().toLowerCase();
+    const sttModel = (version.sttModel ?? DEFAULT_STT_MODEL).trim();
+    const llmProviderId = (
+      version.llmProviderId ?? DEFAULT_LLM_PROVIDER_ID
+    ).trim().toLowerCase();
+    const llmModel = (version.llmModel ?? version.model ?? DEFAULT_LLM_MODEL).trim();
+    this.ensureRuntimeModel('STT', sttProviderId, sttModel);
+    this.ensureRuntimeModel('LLM', llmProviderId, llmModel);
     const sttCredentialMode =
       version.sttCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
     const llmCredentialMode =
@@ -199,6 +213,30 @@ export class InternalService {
       apiKey: secret.key,
       keyFingerprint: this.plugins.keyFingerprint(secret.key),
     };
+  }
+
+  private ensureRuntimeModel(
+    label: 'STT' | 'LLM',
+    providerId: string,
+    modelId: string,
+  ): void {
+    const provider = providerById(providerId);
+    const expectedKind = label.toLowerCase();
+    const runtimeProviderIds =
+      label === 'LLM' ? RUNTIME_LLM_PROVIDER_IDS : RUNTIME_STT_PROVIDER_IDS;
+    if (!runtimeProviderIds.has(providerId) || !provider || provider.kind !== expectedKind) {
+      throw new ServiceUnavailableException(
+        `${label} provider "${providerId}" is not enabled for worker runtime`,
+      );
+    }
+    const supportedModelIds = new Set(
+      provider.models?.map((model) => model.id) ?? [],
+    );
+    if (supportedModelIds.size > 0 && !supportedModelIds.has(modelId)) {
+      throw new ServiceUnavailableException(
+        `${label} model "${modelId}" is not enabled for provider "${providerId}"`,
+      );
+    }
   }
 
   async startCall(dto: StartCallDto) {

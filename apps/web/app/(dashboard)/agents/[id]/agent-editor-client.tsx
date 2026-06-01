@@ -1043,7 +1043,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     if (!publishRuntime.canPublishLive) {
       setToast(
         publishRuntime.issues[0] ??
-          'Cannot publish live: current runtime supports Rime, Deepgram, and Groq only.',
+          'Cannot publish live: current runtime supports Rime, Cartesia, ElevenLabs, or Inworld TTS; Deepgram, AssemblyAI, or Groq Whisper STT; and Groq LLM.',
       );
       return;
     }

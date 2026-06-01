@@ -12,9 +12,11 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, llm, tts
 from livekit.agents.llm import ChatContext, LLMStream
 from livekit.agents.voice_assistant import VoiceAssistant
-from livekit.plugins import deepgram, openai, silero
+from livekit.plugins import silero
 
 from api_client import AwaazAPIClient
+from pipeline.llm_factory import build_llm, parse_llm_runtime_selection
+from pipeline.stt_factory import build_stt, parse_stt_runtime_selection
 from pipeline.tts_factory import build_tts, close_tts, parse_tts_runtime_selection
 from tools.end_call import end_call
 from tools.transfer_to_human import transfer_to_human
@@ -805,44 +807,20 @@ def create_assistant(
         int_env("DEEPGRAM_ENDPOINTING_MS", 25),
         interrupt_min_words > 0,
     )
-    pipeline = mapping_value(config, "pipeline")
-    pipeline_stt = mapping_value(pipeline, "stt") if pipeline else None
-    pipeline_llm = mapping_value(pipeline, "llm") if pipeline else None
-    credentials = mapping_value(config, "credentials")
-    credentials_stt = mapping_value(credentials, "stt") if credentials else None
-    credentials_llm = mapping_value(credentials, "llm") if credentials else None
-    stt_model = (string_value(pipeline_stt, "model") if pipeline_stt else None) or os.getenv(
-        "DEEPGRAM_MODEL",
-        "nova-2-conversationalai",
-    )
-    stt_api_key = string_value(credentials_stt, "apiKey") if credentials_stt else None
-    llm_model = (string_value(pipeline_llm, "model") if pipeline_llm else None) or required_string(
-        config,
-        "model",
-        "llama-3.1-8b-instant",
-    )
-    llm_api_key = string_value(credentials_llm, "apiKey") if credentials_llm else None
+    stt_selection = parse_stt_runtime_selection(config)
+    stt_engine = build_stt(config, stt_selection)
+    llm_selection = parse_llm_runtime_selection(config)
+    llm_engine = build_llm(config, llm_selection)
+    timing.set_llm_runtime(llm_selection.provider_id, llm_selection.model_id)
     logger.info(
-        "pipeline_config_loaded stt_provider=deepgram stt_model=%s stt_key=%s llm_provider=groq llm_model=%s llm_key=%s",
-        stt_model,
-        "provided" if stt_api_key else "env",
-        llm_model,
-        "provided" if llm_api_key else "env",
+        "pipeline_config_loaded stt_provider=%s stt_model=%s stt_key=%s llm_provider=%s llm_model=%s llm_key=%s",
+        stt_selection.provider_id,
+        stt_selection.model_id,
+        "provided" if stt_selection.api_key else "env",
+        llm_selection.provider_id,
+        llm_selection.model_id,
+        "provided" if llm_selection.api_key else "env",
     )
-
-    stt_kwargs = {
-        "model": stt_model,
-        "language": os.getenv("DEEPGRAM_LANGUAGE", "en-US"),
-        "interim_results": True,
-        "no_delay": True,
-        "endpointing_ms": int_env("DEEPGRAM_ENDPOINTING_MS", 25),
-    }
-    if stt_api_key:
-        stt_kwargs["api_key"] = stt_api_key
-
-    llm_kwargs = {"model": llm_model}
-    if llm_api_key:
-        llm_kwargs["api_key"] = llm_api_key
 
     return VoiceAssistant(
         vad=silero.VAD.load(
@@ -851,8 +829,8 @@ def create_assistant(
             padding_duration=vad_padding,
             activation_threshold=vad_activation,
         ),
-        stt=deepgram.STT(**stt_kwargs),
-        llm=openai.LLM.with_groq(**llm_kwargs),
+        stt=stt_engine,
+        llm=llm_engine,
         tts=tts_engine,
         chat_ctx=chat_ctx,
         fnc_ctx=tools,
@@ -999,9 +977,15 @@ class PipelineTiming:
         self.audio_queue_flushed_before_ms: int | None = None
         self.audio_queue_flushed_after_ms: int | None = None
         self._lifecycle: CallLifecycle | None = None
+        self.llm_provider_id = "unknown"
+        self.llm_model_id = "unknown"
 
     def set_lifecycle(self, lifecycle: CallLifecycle) -> None:
         self._lifecycle = lifecycle
+
+    def set_llm_runtime(self, provider_id: str, model_id: str) -> None:
+        self.llm_provider_id = provider_id
+        self.llm_model_id = model_id
 
     def mark_user_started(self) -> None:
         self.turn_id += 1
@@ -1057,19 +1041,33 @@ class PipelineTiming:
         if chat_ctx.messages:
             user_text = message_text(chat_ctx.messages[-1])
         logger.info(
-            "voice_llm_start turn=%s response=%s user_chars=%s since_final_ms=%s since_user_stop_ms=%s",
+            "voice_llm_start turn=%s response=%s provider=%s model=%s user_chars=%s since_final_ms=%s since_user_stop_ms=%s",
             response.turn_id,
             response.response_id,
+            self.llm_provider_id,
+            self.llm_model_id,
             len(user_text),
             elapsed_ms(response.final_transcript_at, response.llm_started_at),
             elapsed_ms(response.user_stopped_at, response.llm_started_at),
         )
-        stream = assistant.llm.chat(
-            chat_ctx=chat_ctx,
-            fnc_ctx=assistant.fnc_ctx,
-            temperature=0.3,
-            parallel_tool_calls=False,
-        )
+        try:
+            stream = assistant.llm.chat(
+                chat_ctx=chat_ctx,
+                fnc_ctx=assistant.fnc_ctx,
+                temperature=0.3,
+                parallel_tool_calls=False,
+            )
+        except Exception:
+            logger.error(
+                "voice_llm_start_failed turn=%s response=%s provider=%s model=%s",
+                response.turn_id,
+                response.response_id,
+                self.llm_provider_id,
+                self.llm_model_id,
+                exc_info=True,
+            )
+            self.mark_llm_finished(response)
+            raise
         return TimedLLMStream(stream, self, response)
 
     def before_tts(
@@ -1248,6 +1246,8 @@ class PipelineTiming:
         if response is not None:
             metrics["turnId"] = response.turn_id
             metrics["responseId"] = response.response_id
+        metrics["llmProviderId"] = self.llm_provider_id
+        metrics["llmModel"] = self.llm_model_id
         return metrics
 
     def user_speech_payload(self) -> dict[str, object]:
@@ -1372,6 +1372,14 @@ class TimedLLMStream(LLMStream):
             self._mark_finished_once()
             raise
         except Exception:
+            logger.error(
+                "voice_llm_stream_failed turn=%s response=%s provider=%s model=%s",
+                self._response.turn_id,
+                self._response.response_id,
+                self._timing.llm_provider_id,
+                self._timing.llm_model_id,
+                exc_info=True,
+            )
             self._mark_finished_once()
             raise
 

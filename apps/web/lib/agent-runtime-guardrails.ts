@@ -23,7 +23,7 @@ export const CATALOG_ONLY_VOICE_MESSAGE =
   'Catalog only: this provider is not enabled for live calls or Test Agent yet.';
 
 export const GROQ_RUNTIME_ISSUE_MESSAGE =
-  'Live runtime currently supports Groq models only (Llama 3.3 70B or GPT-OSS).';
+  'Live runtime supports verified Groq chat models only.';
 
 export const VOICE_PREVIEW_UNAVAILABLE_MESSAGE =
   'Preview is not available for this provider yet.';

@@ -138,10 +138,6 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
         label: 'Universal Streaming v2',
         default: true,
       },
-      {
-        id: 'universal-v2',
-        label: 'Universal v2',
-      },
     ],
     finovaEnvVars: ['FINOVA_ASSEMBLYAI_API_KEY', 'ASSEMBLYAI_API_KEY'],
     validationStyle: 'assemblyai-transcripts',
