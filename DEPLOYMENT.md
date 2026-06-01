@@ -76,6 +76,7 @@ node apps/api/dist/main.js
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | |
 | `LIVEKIT_AGENT_NAME` | e.g. `awaaz-agent` |
 | `WORKER_SECRET` | Shared with worker |
+| `PROVIDER_CREDENTIAL_ENCRYPTION_KEY` | Required to store/decrypt BYOK provider secrets (32-byte base64/hex recommended) |
 | `REDIS_URL` | Upstash `rediss://…` |
 | `GROQ_API_KEY` / `DEEPGRAM_API_KEY` / `RIME_API_KEY` | Voice preview + worker config source |
 | `CLOUDFLARE_R2_ACCOUNT_ID` | Browser recordings |

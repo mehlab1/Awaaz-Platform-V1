@@ -265,6 +265,44 @@ BullMQ queues enabled after Redis preflight
 
 ---
 
+## BYOK credential save returns 503
+
+**Error:** `BYOK credential encryption key is missing. Set PROVIDER_CREDENTIAL_ENCRYPTION_KEY (preferred) or WORKER_SECRET.`
+
+**Why it happens:** API must encrypt BYOK provider secrets before writing `organizationProviderCredential.secretCiphertext`. If no encryption key is configured, save fails before Prisma write.
+
+**Checks:**
+
+1. Render API has one of:
+	- `PROVIDER_CREDENTIAL_ENCRYPTION_KEY` (preferred)
+	- `PROVIDER_ENCRYPTION_KEY`
+	- `CREDENTIAL_ENCRYPTION_KEY`
+	- fallback: `WORKER_SECRET`
+2. Redeploy API after setting env vars.
+3. Retry `PUT /api/v1/plugin-credentials/:providerId`.
+
+**Key generation (recommended):**
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Set output as `PROVIDER_CREDENTIAL_ENCRYPTION_KEY`.
+
+---
+
+## "Finova Managed is not configured" for Deepgram
+
+**Why it happens:** This is not because Deepgram is paid. It means API runtime does not currently have a Finova-managed Deepgram key (`FINOVA_DEEPGRAM_API_KEY` or `DEEPGRAM_API_KEY`) available to serve shared Finova mode.
+
+**Checks:**
+
+1. Confirm env var exists on Render API (not only worker).
+2. Open `GET /api/v1/plugins/catalog` and verify `deepgram.finovaManagedAvailable = true`.
+3. If you only want BYOK, this message is expected and harmless after BYOK key is saved.
+
+---
+
 ## Verification checklist after incident
 
 ```powershell

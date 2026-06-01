@@ -33,6 +33,11 @@ const AES_GCM_IV_BYTES = 12;
 const AES_GCM_AUTH_TAG_BYTES = 16;
 const VALIDATION_TIMEOUT_MS = 10_000;
 const CARTESIA_API_VERSION = '2026-03-01';
+const ENCRYPTION_KEY_ENV_VARS = [
+  'PROVIDER_CREDENTIAL_ENCRYPTION_KEY',
+  'PROVIDER_ENCRYPTION_KEY',
+  'CREDENTIAL_ENCRYPTION_KEY',
+] as const;
 
 type SanitizedCredential = {
   id: string;
@@ -725,10 +730,14 @@ export class PluginsService {
   }
 
   private encryptionKey(): Buffer {
-    const raw = this.config.get<string>('PROVIDER_CREDENTIAL_ENCRYPTION_KEY')?.trim();
+    const explicitRaw = ENCRYPTION_KEY_ENV_VARS
+      .map((envVar) => this.config.get<string>(envVar)?.trim())
+      .find((value): value is string => Boolean(value));
+
+    const raw = explicitRaw ?? this.config.get<string>('WORKER_SECRET')?.trim();
     if (!raw) {
       throw new ServiceUnavailableException(
-        'PROVIDER_CREDENTIAL_ENCRYPTION_KEY is required for BYOK credentials',
+        'BYOK credential encryption key is missing. Set PROVIDER_CREDENTIAL_ENCRYPTION_KEY (preferred) or WORKER_SECRET.',
       );
     }
 
@@ -740,7 +749,7 @@ export class PluginsService {
     if (base64) {
       return base64;
     }
-    if (raw.length < 32) {
+    if (explicitRaw && raw.length < 32) {
       throw new ServiceUnavailableException(
         'PROVIDER_CREDENTIAL_ENCRYPTION_KEY must be at least 32 characters, 64 hex characters, or 32 bytes base64',
       );

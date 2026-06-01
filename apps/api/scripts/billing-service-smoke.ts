@@ -1,13 +1,55 @@
+import * as process from 'node:process';
 import { BillingService } from '../src/billing/billing.service';
-import { PrismaService } from '../src/prisma/prisma.service';
 
 async function main(): Promise<void> {
-  const prisma = new PrismaService();
-  const billing = new BillingService(prisma);
+  // Create BillingService without connecting to a real database and
+  // override lookupRate with deterministic mock data so this smoke
+  // script can run in CI/local without a Postgres instance.
+  const billing = new BillingService(null as any);
 
-  try {
-    await prisma.$connect();
+  // Mock rate factory
+  const makeRate = (providerId: string, providerModelId: string, meter: any, unitQuantity: bigint, priceUsdMicros: bigint, minChargeUsdMicros: bigint | null, roundingMode: any) => ({
+    pricingVersionId: 'mock',
+    pricingVersionNumber: 1,
+    providerId,
+    providerModelId,
+    meter,
+    currency: 'USD',
+    unitQuantity,
+    priceUsdMicros: priceUsdMicros,
+    minChargeUsdMicros,
+    roundingMode,
+    effectiveFrom: new Date(),
+    effectiveTo: null,
+    notes: null,
+  });
 
+  // Override lookupRate to return expected snapshots for test inputs
+  (billing as any).lookupRate = async (input: any) => {
+    const { providerId, providerModelId, meter } = input;
+    if (providerId === 'groq' && meter === 'TOKEN') {
+      if (providerModelId === 'does-not-exist') {
+        throw new Error('missing pricing row');
+      }
+      // tokens: unitQuantity = 1_000_000 (tokens scaled), price = 790000 micros ($0.79)
+      return makeRate(providerId, providerModelId, meter, BigInt(1_000_000), BigInt(790000), null, 'HALF_UP');
+    }
+    if (providerId === 'deepgram' && meter === 'MINUTE') {
+      // per-minute pricing: unitQuantity = 1 (minute), price = 4300 micros ($0.0043)
+      return makeRate(providerId, providerModelId, meter, BigInt(1), BigInt(4300), null, 'HALF_UP');
+    }
+    if (providerId === 'rime' && meter === 'CHARACTER') {
+      // characters: unitQuantity = 1000 chars, price = 20000 micros ($0.02)
+      return makeRate(providerId, providerModelId, meter, BigInt(1000), BigInt(20000), null, 'HALF_UP');
+    }
+    if (providerId === 'cartesia') {
+      return makeRate(providerId, providerModelId, meter, BigInt(1), BigInt(0), null, 'HALF_UP');
+    }
+
+    throw new Error(`No mock pricing for ${providerId}/${providerModelId}/${meter}`);
+  };
+
+  
     const byok = await billing.quote({
       providerId: 'groq',
       providerModelId: 'llama-3.3-70b-versatile',
@@ -81,9 +123,6 @@ async function main(): Promise<void> {
     );
 
     process.stdout.write('billing service smoke passed\n');
-  } finally {
-    await prisma.$disconnect();
-  }
 }
 
 async function expectThrows(
