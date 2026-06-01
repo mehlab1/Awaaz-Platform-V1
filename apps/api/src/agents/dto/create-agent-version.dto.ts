@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -10,6 +11,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { ProviderCredentialMode } from '@prisma/client';
 
 export class CreateAgentVersionDto {
   @IsString()
@@ -31,7 +33,31 @@ export class CreateAgentVersionDto {
   @IsString()
   @MinLength(1)
   @MaxLength(100)
+  llmProviderId?: string;
+
+  @IsOptional()
+  @IsEnum(ProviderCredentialMode)
+  llmCredentialMode?: ProviderCredentialMode;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  sttProviderId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
   sttModel?: string;
+
+  @IsOptional()
+  @IsEnum(ProviderCredentialMode)
+  sttCredentialMode?: ProviderCredentialMode;
+
+  @IsOptional()
+  @IsEnum(ProviderCredentialMode)
+  ttsCredentialMode?: ProviderCredentialMode;
 
   @IsOptional()
   @IsNumber()

@@ -6,7 +6,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { AuditAction, Prisma, CallStatus } from '@prisma/client';
+import { AuditAction, Prisma, CallStatus, ProviderCredentialMode } from '@prisma/client';
 
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
@@ -20,6 +20,8 @@ const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
 const DEFAULT_LLM_PROVIDER_ID = 'groq';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
+const RUNTIME_LLM_PROVIDER_IDS = new Set([DEFAULT_LLM_PROVIDER_ID]);
+const RUNTIME_STT_PROVIDER_IDS = new Set([DEFAULT_STT_PROVIDER_ID]);
 const RUNTIME_STT_MODEL_IDS = new Set([
   DEFAULT_STT_MODEL,
   'nova-2',
@@ -247,10 +249,13 @@ export class AgentsService {
               voiceId: version.voiceId,
               ttsProviderId: version.ttsProviderId,
               ttsVoiceId: version.ttsVoiceId,
+              ttsCredentialMode: version.ttsCredentialMode,
               llmProviderId: version.llmProviderId,
               llmModel: version.llmModel,
+              llmCredentialMode: version.llmCredentialMode,
               sttProviderId: version.sttProviderId,
               sttModel: version.sttModel,
+              sttCredentialMode: version.sttCredentialMode,
               voiceModelId: resolvedVoice.modelId,
               voiceLang: resolvedVoice.lang,
               voiceProviderId: resolvedVoice.providerId,
@@ -318,10 +323,13 @@ export class AgentsService {
             voiceId: version.voiceId,
             ttsProviderId: version.ttsProviderId,
             ttsVoiceId: version.ttsVoiceId,
+            ttsCredentialMode: version.ttsCredentialMode,
             llmProviderId: version.llmProviderId,
             llmModel: version.llmModel,
+            llmCredentialMode: version.llmCredentialMode,
             sttProviderId: version.sttProviderId,
             sttModel: version.sttModel,
+            sttCredentialMode: version.sttCredentialMode,
             voiceModelId: resolvedVoice.modelId,
             voiceLang: resolvedVoice.lang,
             model: version.model,
@@ -415,10 +423,13 @@ export class AgentsService {
             ttsProviderId: source.ttsProviderId,
             ttsModel: source.ttsModel,
             ttsVoiceId: source.ttsVoiceId ?? source.voiceId,
+            ttsCredentialMode: source.ttsCredentialMode,
             llmProviderId: source.llmProviderId,
             llmModel: source.llmModel ?? source.model,
+            llmCredentialMode: source.llmCredentialMode,
             sttProviderId: source.sttProviderId,
             sttModel: source.sttModel,
+            sttCredentialMode: source.sttCredentialMode,
             temperature: source.temperature,
             maxTokens: source.maxTokens,
             firstMessage: source.firstMessage,
@@ -709,21 +720,35 @@ export class AgentsService {
     dto: CreateAgentVersionDto,
     resolvedVoice: ResolvedTtsVoice,
   ) {
+    const llmProviderId = dto.llmProviderId?.trim() || DEFAULT_LLM_PROVIDER_ID;
+    if (!RUNTIME_LLM_PROVIDER_IDS.has(llmProviderId)) {
+      throw new BadRequestException(`Unsupported LLM provider: ${llmProviderId}`);
+    }
     const llmModel = dto.model ?? DEFAULT_LLM_MODEL;
+    const sttProviderId = dto.sttProviderId?.trim() || DEFAULT_STT_PROVIDER_ID;
+    if (!RUNTIME_STT_PROVIDER_IDS.has(sttProviderId)) {
+      throw new BadRequestException(`Unsupported STT provider: ${sttProviderId}`);
+    }
     const sttModel = dto.sttModel?.trim() || DEFAULT_STT_MODEL;
     if (!RUNTIME_STT_MODEL_IDS.has(sttModel)) {
       throw new BadRequestException(`Unsupported Deepgram STT model: ${sttModel}`);
     }
+    const ttsCredentialMode = dto.ttsCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
+    const llmCredentialMode = dto.llmCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
+    const sttCredentialMode = dto.sttCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
     return {
       voiceId: resolvedVoice.storedVoiceId,
       model: llmModel,
       ttsProviderId: resolvedVoice.providerId,
       ttsModel: resolvedVoice.modelId,
       ttsVoiceId: resolvedVoice.providerVoiceId,
-      llmProviderId: DEFAULT_LLM_PROVIDER_ID,
+      ttsCredentialMode,
+      llmProviderId,
       llmModel,
-      sttProviderId: DEFAULT_STT_PROVIDER_ID,
+      llmCredentialMode,
+      sttProviderId,
       sttModel,
+      sttCredentialMode,
     };
   }
 }

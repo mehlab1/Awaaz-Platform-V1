@@ -205,7 +205,11 @@ export class BillingAttributionService {
 
     const sttDurationMinutes = this.sumSpeechDurationMs(events, 'USER_SPEECH') / 60_000;
     if (sttDurationMinutes > 0) {
-      const credential = await this.providerCredential(call.organizationId, agentVersion.sttProviderId);
+      const credential = await this.providerCredential(
+        call.organizationId,
+        agentVersion.sttProviderId,
+        agentVersion.sttCredentialMode,
+      );
       sources.push({
         source: 'stt',
         providerId: agentVersion.sttProviderId,
@@ -219,7 +223,11 @@ export class BillingAttributionService {
 
     const llmTokens = this.sumTokens(events);
     if (llmTokens > 0) {
-      const credential = await this.providerCredential(call.organizationId, agentVersion.llmProviderId);
+      const credential = await this.providerCredential(
+        call.organizationId,
+        agentVersion.llmProviderId,
+        agentVersion.llmCredentialMode,
+      );
       sources.push({
         source: 'llm',
         providerId: agentVersion.llmProviderId,
@@ -233,7 +241,11 @@ export class BillingAttributionService {
 
     const ttsCharacters = this.sumSpeechCharacters(events);
     if (ttsCharacters > 0) {
-      const credential = await this.providerCredential(call.organizationId, agentVersion.ttsProviderId);
+      const credential = await this.providerCredential(
+        call.organizationId,
+        agentVersion.ttsProviderId,
+        agentVersion.ttsCredentialMode,
+      );
       sources.push({
         source: 'tts',
         providerId: agentVersion.ttsProviderId,
@@ -263,10 +275,15 @@ export class BillingAttributionService {
     return sources;
   }
 
-  private async providerCredential(organizationId: string, providerId: string): Promise<{
+  private async providerCredential(
+    organizationId: string,
+    providerId: string,
+    selectedMode: ProviderCredentialMode | null | undefined,
+  ): Promise<{
     credentialMode: ProviderCredentialMode;
     markupBps: number;
   }> {
+    const credentialMode = selectedMode ?? 'FINOVA_MANAGED';
     const credential = await this.prisma.organizationProviderCredential.findUnique({
       where: {
         organizationId_providerId: {
@@ -278,8 +295,8 @@ export class BillingAttributionService {
     });
 
     return {
-      credentialMode: credential?.credentialMode ?? 'FINOVA_MANAGED',
-      markupBps: credential?.markupBps ?? 0,
+      credentialMode,
+      markupBps: credentialMode === 'BYOK' ? 0 : credential?.markupBps ?? 0,
     };
   }
 

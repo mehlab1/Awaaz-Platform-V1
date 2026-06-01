@@ -807,11 +807,42 @@ def create_assistant(
     )
     pipeline = mapping_value(config, "pipeline")
     pipeline_stt = mapping_value(pipeline, "stt") if pipeline else None
+    pipeline_llm = mapping_value(pipeline, "llm") if pipeline else None
+    credentials = mapping_value(config, "credentials")
+    credentials_stt = mapping_value(credentials, "stt") if credentials else None
+    credentials_llm = mapping_value(credentials, "llm") if credentials else None
     stt_model = (string_value(pipeline_stt, "model") if pipeline_stt else None) or os.getenv(
         "DEEPGRAM_MODEL",
         "nova-2-conversationalai",
     )
-    logger.info("stt_config_loaded provider=deepgram model=%s", stt_model)
+    stt_api_key = string_value(credentials_stt, "apiKey") if credentials_stt else None
+    llm_model = (string_value(pipeline_llm, "model") if pipeline_llm else None) or required_string(
+        config,
+        "model",
+        "llama-3.1-8b-instant",
+    )
+    llm_api_key = string_value(credentials_llm, "apiKey") if credentials_llm else None
+    logger.info(
+        "pipeline_config_loaded stt_provider=deepgram stt_model=%s stt_key=%s llm_provider=groq llm_model=%s llm_key=%s",
+        stt_model,
+        "provided" if stt_api_key else "env",
+        llm_model,
+        "provided" if llm_api_key else "env",
+    )
+
+    stt_kwargs = {
+        "model": stt_model,
+        "language": os.getenv("DEEPGRAM_LANGUAGE", "en-US"),
+        "interim_results": True,
+        "no_delay": True,
+        "endpointing_ms": int_env("DEEPGRAM_ENDPOINTING_MS", 25),
+    }
+    if stt_api_key:
+        stt_kwargs["api_key"] = stt_api_key
+
+    llm_kwargs = {"model": llm_model}
+    if llm_api_key:
+        llm_kwargs["api_key"] = llm_api_key
 
     return VoiceAssistant(
         vad=silero.VAD.load(
@@ -820,16 +851,8 @@ def create_assistant(
             padding_duration=vad_padding,
             activation_threshold=vad_activation,
         ),
-        stt=deepgram.STT(
-            model=stt_model,
-            language=os.getenv("DEEPGRAM_LANGUAGE", "en-US"),
-            interim_results=True,
-            no_delay=True,
-            endpointing_ms=int_env("DEEPGRAM_ENDPOINTING_MS", 25),
-        ),
-        llm=openai.LLM.with_groq(
-            model=required_string(config, "model", "llama-3.1-8b-instant"),
-        ),
+        stt=deepgram.STT(**stt_kwargs),
+        llm=openai.LLM.with_groq(**llm_kwargs),
         tts=tts_engine,
         chat_ctx=chat_ctx,
         fnc_ctx=tools,

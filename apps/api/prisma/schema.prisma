@@ -209,10 +209,13 @@ model AgentVersion {
   ttsProviderId String   @default("rime")
   ttsModel      String?
   ttsVoiceId    String?
+  ttsCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
   llmProviderId String   @default("groq")
   llmModel      String?
+  llmCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
   sttProviderId String   @default("deepgram")
   sttModel      String   @default("nova-2-conversationalai")
+  sttCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
   temperature   Float    @default(0.7)
   maxTokens     Int      @default(1024)
   firstMessage  String?

@@ -51,6 +51,12 @@ export class BillingController {
     );
   }
 
+  @Get('agent-breakdown')
+  @Roles(Role.VIEWER)
+  agentBreakdown(@Req() req: Request, @Query() query: BillingReportQueryDto) {
+    return this.billing.agentBreakdown(organizationIdFromRequest(req), query);
+  }
+
   @Get('recent-calls')
   @Roles(Role.VIEWER)
   recentCalls(@Req() req: Request, @Query() query: BillingRecentCallsQueryDto) {

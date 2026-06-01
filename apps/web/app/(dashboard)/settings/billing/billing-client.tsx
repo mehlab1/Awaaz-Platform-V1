@@ -74,15 +74,15 @@ export function BillingClient() {
     credentialMode: credentialMode === 'all' ? undefined : credentialMode as ProviderCredentialMode,
   };
 
-  const { summary, providerBreakdown, credentialModeBreakdown, usageBreakdown } = useBilling(options);
+  const { summary, providerBreakdown, credentialModeBreakdown, usageBreakdown, agentBreakdown } = useBilling(options);
   const recentCalls = useBillingRecentCalls({ ...options, page, limit: pageSize });
 
   if (!activeOrgId) {
     return <p className="text-sm text-muted-foreground">Select an organization first.</p>;
   }
 
-  const isLoading = summary.isLoading || providerBreakdown.isLoading || credentialModeBreakdown.isLoading || usageBreakdown.isLoading;
-  const isError = summary.isError || providerBreakdown.isError || credentialModeBreakdown.isError || usageBreakdown.isError;
+  const isLoading = summary.isLoading || providerBreakdown.isLoading || credentialModeBreakdown.isLoading || usageBreakdown.isLoading || agentBreakdown.isLoading;
+  const isError = summary.isError || providerBreakdown.isError || credentialModeBreakdown.isError || usageBreakdown.isError || agentBreakdown.isError;
   const isRecentCallsLoading = recentCalls.isLoading;
 
   return (
@@ -196,7 +196,33 @@ export function BillingClient() {
             </Card>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {/* Cost by Agent */}
+            <Card className="col-span-1">
+              <CardHeader>
+                <CardTitle className="text-base">Cost by Agent</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {agentBreakdown.data?.items.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No data available.</p>
+                ) : (
+                  <div className="space-y-4">
+                    {agentBreakdown.data?.items.slice(0, 5).map((item) => (
+                      <div key={item.bucket} className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 space-y-1">
+                          <p className="truncate text-sm font-medium leading-none">{item.bucketLabel}</p>
+                          <p className="text-xs text-muted-foreground">{item.callCount} calls</p>
+                        </div>
+                        <div className="shrink-0 text-sm font-medium">
+                          ${item.totalCostUsd.toFixed(4)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             {/* Cost by Provider */}
             <Card className="col-span-1">
               <CardHeader>
@@ -308,6 +334,7 @@ export function BillingClient() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Call Date</TableHead>
+                          <TableHead>Agent</TableHead>
                           <TableHead>Call ID</TableHead>
                           <TableHead>Providers</TableHead>
                           <TableHead>Modes</TableHead>
@@ -321,6 +348,9 @@ export function BillingClient() {
                           <TableRow key={call.callId}>
                             <TableCell className="whitespace-nowrap">
                               {format(new Date(call.createdAt), 'MMM d, yyyy HH:mm')}
+                            </TableCell>
+                            <TableCell className="max-w-[180px] truncate">
+                              {call.agent?.name ?? 'Unassigned'}
                             </TableCell>
                             <TableCell className="font-mono text-xs">
                               {call.callId}

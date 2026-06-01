@@ -84,7 +84,6 @@ const navGroups: NavGroup[] = [
     items: [
       { href: '/settings/members', label: 'Members', icon: Users },
       { href: '/settings/api-keys', label: 'API Keys', icon: KeyRound },
-      { href: '/settings/ai-providers', label: 'AI Providers', icon: Sparkles },
       { href: '/settings/billing', label: 'Billing', icon: Receipt },
       { href: '/settings/organization', label: 'Organization', icon: Building2 },
     ],

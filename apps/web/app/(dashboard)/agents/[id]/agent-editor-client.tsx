@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
@@ -9,6 +9,7 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   AlertTriangle,
   ArrowLeft,
+  Building2,
   Check,
   ChevronRight,
   Clock,
@@ -17,6 +18,7 @@ import {
   GitCompare,
   History,
   Info,
+  KeyRound,
   Loader2,
   MoreVertical,
   Play,
@@ -92,7 +94,12 @@ function preloadTestCallModal() {
 
 const VERSION_HISTORY_PREVIEW_LIMIT = 3;
 const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
+const DEFAULT_LLM_PROVIDER = 'groq';
+const DEFAULT_STT_PROVIDER = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
+const DEFAULT_CREDENTIAL_MODE = 'FINOVA_MANAGED' as const;
+
+type CredentialMode = 'FINOVA_MANAGED' | 'BYOK';
 
 const LLM_OPTIONS = [
   { value: DEFAULT_LLM_MODEL, label: 'Groq - Llama 3.3 70B Versatile' },
@@ -266,7 +273,16 @@ interface AgentVersion {
   systemPrompt: string;
   voiceId: string;
   model: string;
+  ttsProviderId?: string | null;
+  ttsModel?: string | null;
+  ttsVoiceId?: string | null;
+  ttsCredentialMode?: CredentialMode | null;
+  llmProviderId?: string | null;
+  llmModel?: string | null;
+  llmCredentialMode?: CredentialMode | null;
+  sttProviderId?: string | null;
   sttModel?: string | null;
+  sttCredentialMode?: CredentialMode | null;
   temperature: number;
   maxTokens: number;
   firstMessage: string | null;
@@ -324,8 +340,28 @@ interface CatalogProviderDto {
     label: string;
     default?: boolean;
   }>;
+  supportsByok?: boolean;
+  supportsFinovaManaged?: boolean;
+  finovaManagedAvailable?: boolean;
+  organizationCredential?: ProviderCredentialDto | null;
   available: boolean;
   availableVia?: string | null;
+}
+
+interface ProviderCredentialDto {
+  id: string;
+  providerId: string;
+  kind: string;
+  label: string;
+  credentialMode: CredentialMode;
+  status: 'NOT_CONFIGURED' | 'CONFIGURED' | 'VALID' | 'INVALID';
+  keyPrefix: string | null;
+  hasSecret: boolean;
+  finovaManagedAvailable: boolean;
+  validationError: string | null;
+  lastValidatedAt: string | null;
+  lastUsedAt: string | null;
+  markupBps?: number | null;
 }
 
 interface PipelineOption {
@@ -364,8 +400,16 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const [prompt, setPrompt] = useState('');
   const [selectedVoiceId, setSelectedVoiceId] = useState('');
+  const [selectedTtsProvider, setSelectedTtsProvider] = useState<VoiceProviderId>('rime');
+  const [selectedLlmProvider, setSelectedLlmProvider] = useState(DEFAULT_LLM_PROVIDER);
+  const [selectedSttProvider, setSelectedSttProvider] = useState(DEFAULT_STT_PROVIDER);
   const [selectedModelId, setSelectedModelId] = useState(DEFAULT_LLM_MODEL);
   const [selectedSttModel, setSelectedSttModel] = useState(DEFAULT_STT_MODEL);
+  const [ttsCredentialMode, setTtsCredentialMode] = useState<CredentialMode>(DEFAULT_CREDENTIAL_MODE);
+  const [llmCredentialMode, setLlmCredentialMode] = useState<CredentialMode>(DEFAULT_CREDENTIAL_MODE);
+  const [sttCredentialMode, setSttCredentialMode] = useState<CredentialMode>(DEFAULT_CREDENTIAL_MODE);
+  const [providerKeyDrafts, setProviderKeyDrafts] = useState<Record<string, string>>({});
+  const [credentialSaveBusy, setCredentialSaveBusy] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [promptHydrated, setPromptHydrated] = useState(false);
 
@@ -416,17 +460,25 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     if (voiceModalOpen) {
       const currentVoice = voices.find((voice) => voice.rimeVoiceId === selectedVoiceId);
       setTempSelectedVoiceId(selectedVoiceId);
-      setSelectedVoiceProvider(voiceProviderId(currentVoice));
+      setSelectedVoiceProvider(currentVoice ? voiceProviderId(currentVoice) : selectedTtsProvider);
       setVoiceGenderFilter('all');
       setVoiceAccentFilter('all');
       setVoiceTypeFilter('all');
     }
-  }, [voiceModalOpen, selectedVoiceId, voices]);
+  }, [voiceModalOpen, selectedTtsProvider, selectedVoiceId, voices]);
 
   useEffect(() => {
     setPromptHydrated(false);
     setPrompt('');
     setSelectedVoiceId('');
+    setSelectedTtsProvider('rime');
+    setSelectedLlmProvider(DEFAULT_LLM_PROVIDER);
+    setSelectedSttProvider(DEFAULT_STT_PROVIDER);
+    setSelectedModelId(DEFAULT_LLM_MODEL);
+    setSelectedSttModel(DEFAULT_STT_MODEL);
+    setTtsCredentialMode(DEFAULT_CREDENTIAL_MODE);
+    setLlmCredentialMode(DEFAULT_CREDENTIAL_MODE);
+    setSttCredentialMode(DEFAULT_CREDENTIAL_MODE);
     setSelectedVersionId(null);
     setAllVersionsLoaded(false);
     setShowAllVersions(false);
@@ -513,8 +565,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     (selectedVersion
       ? prompt !== selectedVersion.systemPrompt ||
         selectedVoiceId !== selectedVersion.voiceId ||
+        selectedTtsProvider !== versionTtsProvider(selectedVersion, voices) ||
+        selectedLlmProvider !== (selectedVersion.llmProviderId ?? DEFAULT_LLM_PROVIDER) ||
+        selectedSttProvider !== (selectedVersion.sttProviderId ?? DEFAULT_STT_PROVIDER) ||
         selectedModelId !== (selectedVersion.model ?? DEFAULT_LLM_MODEL) ||
-        selectedSttModel !== (selectedVersion.sttModel ?? DEFAULT_STT_MODEL)
+        selectedSttModel !== (selectedVersion.sttModel ?? DEFAULT_STT_MODEL) ||
+        ttsCredentialMode !== credentialModeOrDefault(selectedVersion.ttsCredentialMode) ||
+        llmCredentialMode !== credentialModeOrDefault(selectedVersion.llmCredentialMode) ||
+        sttCredentialMode !== credentialModeOrDefault(selectedVersion.sttCredentialMode)
       : prompt.trim().length > 0);
 
   const editorRuntimeAssessment = useMemo(
@@ -618,11 +676,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const useDraft = draftPrompt.trim().length > 0;
     setPrompt(useDraft ? draftPrompt : baseline);
     setSelectedVoiceId(baselineVersion?.voiceId ?? '');
+    setSelectedTtsProvider(versionTtsProvider(baselineVersion, voices));
+    setSelectedLlmProvider(baselineVersion?.llmProviderId ?? DEFAULT_LLM_PROVIDER);
+    setSelectedSttProvider(baselineVersion?.sttProviderId ?? DEFAULT_STT_PROVIDER);
     setSelectedModelId(baselineVersion?.model ?? DEFAULT_LLM_MODEL);
     setSelectedSttModel(baselineVersion?.sttModel ?? DEFAULT_STT_MODEL);
+    setTtsCredentialMode(credentialModeOrDefault(baselineVersion?.ttsCredentialMode));
+    setLlmCredentialMode(credentialModeOrDefault(baselineVersion?.llmCredentialMode));
+    setSttCredentialMode(credentialModeOrDefault(baselineVersion?.sttCredentialMode));
     setSelectedVersionId(baselineVersion?.id ?? null);
     setPromptHydrated(true);
-  }, [agent, draftPrompt, promptHydrated, versions]);
+  }, [agent, draftPrompt, promptHydrated, versions, voices]);
 
   useEffect(() => {
     if (!promptHydrated) {
@@ -886,8 +950,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(version.id);
       setPrompt(version.systemPrompt);
       setSelectedVoiceId(version.voiceId);
+      setSelectedTtsProvider(versionTtsProvider(version, voices));
+      setSelectedLlmProvider(version.llmProviderId ?? DEFAULT_LLM_PROVIDER);
+      setSelectedSttProvider(version.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(version.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(version.sttModel ?? DEFAULT_STT_MODEL);
+      setTtsCredentialMode(credentialModeOrDefault(version.ttsCredentialMode));
+      setLlmCredentialMode(credentialModeOrDefault(version.llmCredentialMode));
+      setSttCredentialMode(credentialModeOrDefault(version.sttCredentialMode));
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setPreviewingVersion(null);
@@ -929,8 +999,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(restored.id);
       setPrompt(restored.systemPrompt);
       setSelectedVoiceId(restored.voiceId);
+      setSelectedTtsProvider(versionTtsProvider(restored, voices));
+      setSelectedLlmProvider(restored.llmProviderId ?? DEFAULT_LLM_PROVIDER);
+      setSelectedSttProvider(restored.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(restored.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(restored.sttModel ?? DEFAULT_STT_MODEL);
+      setTtsCredentialMode(credentialModeOrDefault(restored.ttsCredentialMode));
+      setLlmCredentialMode(credentialModeOrDefault(restored.llmCredentialMode));
+      setSttCredentialMode(credentialModeOrDefault(restored.sttCredentialMode));
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setRestoreTarget(null);
@@ -988,8 +1064,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const body: Record<string, unknown> = {
       systemPrompt: prompt,
       voiceId: selectedVoiceId,
+      llmProviderId: selectedLlmProvider,
       model: selectedModelId,
+      sttProviderId: selectedSttProvider,
       sttModel: selectedSttModel,
+      ttsCredentialMode,
+      llmCredentialMode,
+      sttCredentialMode,
       temperature: source?.temperature ?? 0.7,
       maxTokens: source?.maxTokens ?? 1024,
       endCallPhrases: source?.endCallPhrases ?? [],
@@ -999,7 +1080,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       body.firstMessage = fm;
     }
     return body;
-  }, [prompt, selectedModelId, selectedSttModel, selectedVoiceId, selectedVersion, agent?.currentVersion]);
+  }, [
+    prompt,
+    selectedLlmProvider,
+    selectedModelId,
+    selectedSttModel,
+    selectedSttProvider,
+    selectedVoiceId,
+    ttsCredentialMode,
+    llmCredentialMode,
+    sttCredentialMode,
+    selectedVersion,
+    agent?.currentVersion,
+  ]);
 
   const updateCurrentVersionFlow = async () => {
     if (saveInFlightRef.current || saveBusy !== null || versionPanelBusy) {
@@ -1054,8 +1147,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(updated.id);
       setPrompt(updated.systemPrompt);
       setSelectedVoiceId(updated.voiceId);
+      setSelectedTtsProvider(versionTtsProvider(updated, voices));
+      setSelectedLlmProvider(updated.llmProviderId ?? DEFAULT_LLM_PROVIDER);
+      setSelectedSttProvider(updated.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(updated.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(updated.sttModel ?? DEFAULT_STT_MODEL);
+      setTtsCredentialMode(credentialModeOrDefault(updated.ttsCredentialMode));
+      setLlmCredentialMode(credentialModeOrDefault(updated.llmCredentialMode));
+      setSttCredentialMode(credentialModeOrDefault(updated.sttCredentialMode));
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setToast(
@@ -1074,7 +1173,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const onVoiceSelect = async (voiceId: string) => {
+    const nextVoice = voices.find((voice) => voice.rimeVoiceId === voiceId) ?? null;
+    const nextTtsProvider = voiceProviderId(nextVoice);
     setSelectedVoiceId(voiceId);
+    setSelectedTtsProvider(nextTtsProvider);
     setVoiceModalOpen(false);
     setVoiceSearchQuery('');
     setVoiceSaveBusy(true);
@@ -1105,8 +1207,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           body: JSON.stringify({
             systemPrompt: selectedVersion.systemPrompt,
             voiceId: voiceId,
+            llmProviderId: selectedLlmProvider,
             model: selectedModelId,
+            sttProviderId: selectedSttProvider,
             sttModel: selectedSttModel,
+            ttsCredentialMode,
+            llmCredentialMode,
+            sttCredentialMode,
             temperature: selectedVersion.temperature,
             maxTokens: selectedVersion.maxTokens,
             firstMessage: selectedVersion.firstMessage,
@@ -1208,8 +1315,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(created.id);
       setPrompt(created.systemPrompt);
       setSelectedVoiceId(created.voiceId);
+      setSelectedTtsProvider(versionTtsProvider(created, voices));
+      setSelectedLlmProvider(created.llmProviderId ?? DEFAULT_LLM_PROVIDER);
+      setSelectedSttProvider(created.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(created.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(created.sttModel ?? DEFAULT_STT_MODEL);
+      setTtsCredentialMode(credentialModeOrDefault(created.ttsCredentialMode));
+      setLlmCredentialMode(credentialModeOrDefault(created.llmCredentialMode));
+      setSttCredentialMode(credentialModeOrDefault(created.sttCredentialMode));
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       console.debug('[AgentEditor] Saved version voice', {
@@ -1320,8 +1433,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     });
   }, [selectedModelId, tempSelectedVoiceId, voices]);
 
-  const buildCatalogProviderOptions = (
-    kind: 'tts' | 'stt',
+  const providerMeta = (providerId: string) =>
+    catalogProviders?.find((provider) => provider.id === providerId) ?? null;
+
+  const buildProviderOptions = (
+    kind: 'tts' | 'stt' | 'llm',
     fallback: readonly PipelineOption[],
   ) => {
     if (!catalogProviders) return fallback;
@@ -1330,74 +1446,92 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return matching.map((p) => ({
       value: p.id,
       label: p.label,
-      disabled: !p.available,
-      description: !p.available && p.availableVia ? `Available via ${p.availableVia}` : undefined,
+      disabled:
+        (kind === 'stt' && p.id !== DEFAULT_STT_PROVIDER) ||
+        (kind === 'llm' && p.id !== DEFAULT_LLM_PROVIDER),
+      description:
+        kind === 'stt' && p.id !== DEFAULT_STT_PROVIDER
+          ? 'Runtime support coming in a future release'
+          : kind === 'llm' && p.id !== DEFAULT_LLM_PROVIDER
+            ? 'Runtime support coming in a future release'
+            : p.finovaManagedAvailable
+              ? 'Finova Managed available'
+              : p.organizationCredential?.hasSecret
+                ? 'BYOK key configured'
+                : 'Setup required',
     }));
   };
 
-  const buildLlmOptions = (fallback: readonly PipelineOption[]) => {
-    if (!catalogProviders) return fallback;
-    const matching = catalogProviders.filter((p) => p.kind === 'llm');
-    if (matching.length === 0) return fallback;
-
-    const options = matching.flatMap((provider) => {
-      if (provider.id === 'anthropic') {
-        return [
-          {
-            value: 'anthropic-runtime-locked',
-            label: `${provider.label} (coming soon)`,
-            disabled: true,
-            description: 'Runtime support coming in a future release',
-          },
-        ];
-      }
-
-      if (provider.id !== 'groq') {
-        return [];
-      }
-
-      const models = provider.models?.length
-        ? provider.models
-        : provider.defaultModel
-          ? [{ id: provider.defaultModel, label: provider.defaultModel }]
-          : [];
-
-      return models.map((model) => ({
-        value: model.id,
-        label: `${provider.label} - ${model.label}`,
-        disabled: !provider.available,
-        description: !provider.available && provider.availableVia
-          ? `Available via ${provider.availableVia}`
-          : undefined,
-      }));
-    });
-
-    return options.length > 0 ? options : fallback;
-  };
-
-  const buildSttModelOptions = (fallback: readonly PipelineOption[]) => {
-    if (!catalogProviders) return fallback;
-    const deepgram = catalogProviders.find((p) => p.kind === 'stt' && p.id === 'deepgram');
-    if (!deepgram) return fallback;
-    const models = deepgram.models?.length
-      ? deepgram.models
-      : deepgram.defaultModel
-        ? [{ id: deepgram.defaultModel, label: deepgram.defaultModel }]
+  const buildModelOptions = (
+    providerId: string,
+    fallback: readonly PipelineOption[],
+  ) => {
+    const provider = providerMeta(providerId);
+    if (!provider) return fallback;
+    const models = provider.models?.length
+      ? provider.models
+      : provider.defaultModel
+        ? [{ id: provider.defaultModel, label: provider.defaultModel }]
         : [];
     const options = models.map((model) => ({
       value: model.id,
-      label: `${deepgram.label} - ${model.label}`,
-      disabled: !deepgram.available,
-      description: !deepgram.available && deepgram.availableVia
-        ? `Available via ${deepgram.availableVia}`
-        : undefined,
+      label: model.label,
     }));
     return options.length > 0 ? options : fallback;
   };
 
-  const ttsOptions = buildCatalogProviderOptions('tts', TTS_OPTIONS);
-  let sttOptions = buildSttModelOptions(STT_OPTIONS);
-  let llmOptions = buildLlmOptions(LLM_OPTIONS);
+  let ttsProviderOptions = buildProviderOptions('tts', TTS_OPTIONS);
+  let sttProviderOptions = buildProviderOptions('stt', [
+    { value: DEFAULT_STT_PROVIDER, label: 'Deepgram' },
+  ]);
+  let llmProviderOptions = buildProviderOptions('llm', [
+    { value: DEFAULT_LLM_PROVIDER, label: 'Groq' },
+  ]);
+  let sttOptions = buildModelOptions(selectedSttProvider, STT_OPTIONS);
+  let llmOptions = buildModelOptions(selectedLlmProvider, LLM_OPTIONS);
+  let ttsVoiceOptions: PipelineOption[] = voices
+    .filter((voice) => voiceProviderId(voice) === selectedTtsProvider)
+    .map((voice) => ({
+      value: voice.rimeVoiceId,
+      label: voice.name,
+      description: voiceTraitText(voice),
+    }));
+
+  if (!ttsProviderOptions.some((o) => o.value === selectedTtsProvider)) {
+    ttsProviderOptions = [
+      ...ttsProviderOptions,
+      { value: selectedTtsProvider, label: voiceProviderLabel(selectedTtsProvider) },
+    ];
+  }
+
+  if (!sttProviderOptions.some((o) => o.value === selectedSttProvider)) {
+    sttProviderOptions = [
+      ...sttProviderOptions,
+      { value: selectedSttProvider, label: `Current STT provider - ${selectedSttProvider}`, disabled: true },
+    ];
+  }
+
+  if (!llmProviderOptions.some((o) => o.value === selectedLlmProvider)) {
+    llmProviderOptions = [
+      ...llmProviderOptions,
+      { value: selectedLlmProvider, label: `Current LLM provider - ${selectedLlmProvider}`, disabled: true },
+    ];
+  }
+
+  if (selectedVoiceId && !ttsVoiceOptions.some((o) => o.value === selectedVoiceId)) {
+    const currentVoice = voices.find((voice) => voice.rimeVoiceId === selectedVoiceId);
+    ttsVoiceOptions = [
+      ...ttsVoiceOptions,
+      {
+        value: selectedVoiceId,
+        label: currentVoice?.name ?? `Current voice - ${selectedVoiceId}`,
+        disabled: currentVoice ? voiceProviderId(currentVoice) !== selectedTtsProvider : true,
+        description: currentVoice
+          ? `Selected ${voiceProviderLabel(voiceProviderId(currentVoice))} voice`
+          : 'Voice is not available in the current catalog',
+      },
+    ];
+  }
 
   if (!sttOptions.some((o) => o.value === selectedSttModel)) {
     sttOptions = [
@@ -1422,6 +1556,73 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       },
     ];
   }
+
+  const onTtsProviderChange = (providerId: string) => {
+    const nextProvider = normalizeVoiceProviderId(providerId) ?? 'rime';
+    setSelectedTtsProvider(nextProvider);
+    setSelectedVoiceProvider(nextProvider);
+    const currentVoice = voices.find((voice) => voice.rimeVoiceId === selectedVoiceId);
+    if (currentVoice && voiceProviderId(currentVoice) !== nextProvider) {
+      setSelectedVoiceId('');
+    }
+  };
+
+  const onSttProviderChange = (providerId: string) => {
+    setSelectedSttProvider(providerId);
+    const provider = providerMeta(providerId);
+    const defaultModel =
+      provider?.models?.find((model) => model.default)?.id ??
+      provider?.defaultModel ??
+      DEFAULT_STT_MODEL;
+    setSelectedSttModel(defaultModel);
+  };
+
+  const onLlmProviderChange = (providerId: string) => {
+    setSelectedLlmProvider(providerId);
+    const provider = providerMeta(providerId);
+    const defaultModel =
+      provider?.models?.find((model) => model.default)?.id ??
+      provider?.defaultModel ??
+      DEFAULT_LLM_MODEL;
+    setSelectedModelId(defaultModel);
+  };
+
+  const saveProviderKey = async (providerId: string) => {
+    const apiKey = providerKeyDrafts[providerId]?.trim();
+    if (!apiKey) {
+      setToast('Enter an API key before saving BYOK credentials.');
+      return;
+    }
+
+    setCredentialSaveBusy(providerId);
+    setPageError(null);
+    try {
+      const res = await apiCall(`/api/v1/plugin-credentials/${providerId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credentialMode: 'BYOK', apiKey }),
+      });
+      if (!res.ok) {
+        throw new Error(await res.text() || res.statusText);
+      }
+
+      const validateRes = await apiCall(`/api/v1/plugin-credentials/${providerId}/validate`, {
+        method: 'POST',
+      });
+      if (!validateRes.ok) {
+        throw new Error(await validateRes.text() || validateRes.statusText);
+      }
+
+      setProviderKeyDrafts((current) => ({ ...current, [providerId]: '' }));
+      setToast('BYOK key saved and validated.');
+      await loadData(showAllVersions && allVersionsLoaded);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setPageError(message);
+    } finally {
+      setCredentialSaveBusy(null);
+    }
+  };
 
   const hasUsableLiveConfig =
     liveVersion != null &&
@@ -1816,6 +2017,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedVersionId(created.id);
       setPrompt(created.systemPrompt);
       setSelectedVoiceId(created.voiceId);
+      setSelectedTtsProvider(versionTtsProvider(created, voices));
+      setSelectedLlmProvider(created.llmProviderId ?? DEFAULT_LLM_PROVIDER);
+      setSelectedSttProvider(created.sttProviderId ?? DEFAULT_STT_PROVIDER);
+      setSelectedModelId(created.model ?? DEFAULT_LLM_MODEL);
+      setSelectedSttModel(created.sttModel ?? DEFAULT_STT_MODEL);
+      setTtsCredentialMode(credentialModeOrDefault(created.ttsCredentialMode));
+      setLlmCredentialMode(credentialModeOrDefault(created.llmCredentialMode));
+      setSttCredentialMode(credentialModeOrDefault(created.sttCredentialMode));
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setToast(`Duplicated V${version.versionNumber} as V${created.versionNumber}.`);
@@ -2335,22 +2544,69 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               </p>
             </div>
 
-            <div className="space-y-3">
-              <div className="rounded-lg border border-border/40 bg-background/70 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Voice
-                    </p>
-                    <p className="mt-1 truncate text-sm font-medium text-foreground">
-                      {(selectedVoice?.name ?? selectedVoiceId) || 'Choose a voice'}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {selectedVoice
-                        ? selectedVoice.rimeVoiceId
-                        : 'Required before saving or publishing a version.'}
-                    </p>
-                  </div>
+            <div className="space-y-4">
+              <PipelineProviderCard
+                title="Speech-to-Text"
+                providerValue={selectedSttProvider}
+                providerOptions={sttProviderOptions}
+                onProviderChange={onSttProviderChange}
+                detailLabel="Model"
+                detailValue={selectedSttModel}
+                detailOptions={sttOptions}
+                onDetailChange={setSelectedSttModel}
+                credentialMode={sttCredentialMode}
+                onCredentialModeChange={setSttCredentialMode}
+                provider={providerMeta(selectedSttProvider)}
+                keyDraft={providerKeyDrafts[selectedSttProvider] ?? ''}
+                onKeyDraftChange={(value) =>
+                  setProviderKeyDrafts((current) => ({
+                    ...current,
+                    [selectedSttProvider]: value,
+                  }))
+                }
+                onSaveKey={() => saveProviderKey(selectedSttProvider)}
+                credentialBusy={credentialSaveBusy === selectedSttProvider}
+              />
+
+              <PipelineProviderCard
+                title="Text Generation"
+                providerValue={selectedLlmProvider}
+                providerOptions={llmProviderOptions}
+                onProviderChange={onLlmProviderChange}
+                detailLabel="Model"
+                detailValue={selectedModelId}
+                detailOptions={llmOptions}
+                onDetailChange={setSelectedModelId}
+                credentialMode={llmCredentialMode}
+                onCredentialModeChange={setLlmCredentialMode}
+                provider={providerMeta(selectedLlmProvider)}
+                keyDraft={providerKeyDrafts[selectedLlmProvider] ?? ''}
+                onKeyDraftChange={(value) =>
+                  setProviderKeyDrafts((current) => ({
+                    ...current,
+                    [selectedLlmProvider]: value,
+                  }))
+                }
+                onSaveKey={() => saveProviderKey(selectedLlmProvider)}
+                credentialBusy={credentialSaveBusy === selectedLlmProvider}
+              />
+
+              <PipelineProviderCard
+                title="Text-to-Speech"
+                providerValue={selectedTtsProvider}
+                providerOptions={ttsProviderOptions}
+                onProviderChange={onTtsProviderChange}
+                detailLabel="Voice"
+                detailValue={selectedVoiceId}
+                detailOptions={ttsVoiceOptions}
+                onDetailChange={(voiceId) => {
+                  const voice = voices.find((item) => item.rimeVoiceId === voiceId) ?? null;
+                  setSelectedVoiceId(voiceId);
+                  if (voice) {
+                    setSelectedTtsProvider(voiceProviderId(voice));
+                  }
+                }}
+                detailAction={
                   <Button
                     type="button"
                     variant="outline"
@@ -2359,49 +2615,36 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     disabled={saveBusy !== null || voiceSaveBusy}
                     onClick={() => setVoiceModalOpen(true)}
                   >
-                    {selectedVoiceId ? 'Change' : 'Choose'}
+                    Browse
                   </Button>
-                </div>
-                {selectedVoiceId && editorRuntimeAssessment.issues.length > 0 ? (
-                  <RuntimeGuardrailBanner
-                    className="mt-3"
-                    issues={editorRuntimeAssessment.issues}
-                  />
-                ) : null}
-                {selectedVoice && selectedVoiceId ? (
-                  <VoiceRuntimeStatusPills
-                    className="mt-2"
-                    labels={voiceRuntimeStatusLabels(selectedVoice, voices)}
-                  />
-                ) : null}
-              </div>
-
-              <PipelineRuntimeField
-                label="TTS"
-                valueLabel={
-                  selectedVoiceId && editorRuntimeAssessment.isRuntimeTtsVoice
-                    ? voiceProviderLabel(
-                        editorRuntimeAssessment.voiceProviderId as VoiceProviderId,
-                      )
-                    : ttsOptions.find((option) => option.value === RUNTIME_TTS_PROVIDER)
-                        ?.label ?? 'Rime'
                 }
+                credentialMode={ttsCredentialMode}
+                onCredentialModeChange={setTtsCredentialMode}
+                provider={providerMeta(selectedTtsProvider)}
+                keyDraft={providerKeyDrafts[selectedTtsProvider] ?? ''}
+                onKeyDraftChange={(value) =>
+                  setProviderKeyDrafts((current) => ({
+                    ...current,
+                    [selectedTtsProvider]: value,
+                  }))
+                }
+                onSaveKey={() => saveProviderKey(selectedTtsProvider)}
+                credentialBusy={credentialSaveBusy === selectedTtsProvider}
               />
-              <PipelineSelect
-                label="STT"
-                value={selectedSttModel}
-                options={sttOptions}
-                onValueChange={setSelectedSttModel}
-              />
+
+              {selectedVoiceId && editorRuntimeAssessment.issues.length > 0 ? (
+                <RuntimeGuardrailBanner
+                  issues={editorRuntimeAssessment.issues}
+                />
+              ) : null}
+              {selectedVoice && selectedVoiceId ? (
+                <VoiceRuntimeStatusPills
+                  labels={voiceRuntimeStatusLabels(selectedVoice, voices)}
+                />
+              ) : null}
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {RUNTIME_PIPELINE_FOOTNOTE}
               </p>
-              <PipelineSelect
-                label="LLM"
-                value={selectedModelId}
-                options={llmOptions}
-                onValueChange={setSelectedModelId}
-              />
             </div>
           </div>
 
@@ -3616,27 +3859,290 @@ function VoiceRuntimeStatusPill({
   );
 }
 
-function PipelineRuntimeField({
-  label,
-  valueLabel,
+function PipelineProviderCard({
+  title,
+  providerValue,
+  providerOptions,
+  onProviderChange,
+  detailLabel,
+  detailValue,
+  detailOptions,
+  onDetailChange,
+  detailAction,
+  credentialMode,
+  onCredentialModeChange,
+  provider,
+  keyDraft,
+  onKeyDraftChange,
+  onSaveKey,
+  credentialBusy,
 }: {
-  label: string;
-  valueLabel: string;
+  title: string;
+  providerValue: string;
+  providerOptions: readonly PipelineOption[];
+  onProviderChange: (value: string) => void;
+  detailLabel: string;
+  detailValue: string;
+  detailOptions: readonly PipelineOption[];
+  onDetailChange: (value: string) => void;
+  detailAction?: ReactNode;
+  credentialMode: CredentialMode;
+  onCredentialModeChange: (value: CredentialMode) => void;
+  provider: CatalogProviderDto | null;
+  keyDraft: string;
+  onKeyDraftChange: (value: string) => void;
+  onSaveKey: () => void;
+  credentialBusy: boolean;
 }) {
   return (
-    <div className="block">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <div
-        className="mt-1 flex h-9 items-center justify-between rounded-md border border-border/70 bg-muted/30 px-2.5 text-xs font-medium text-foreground"
-        aria-label={`${label} runtime`}
-      >
-        <span>{valueLabel}</span>
-        <span className="text-[10px] font-normal text-muted-foreground">Runtime</span>
+    <section className="rounded-lg border border-border/50 bg-background/70 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h4 className="text-[11px] font-semibold uppercase tracking-wider text-foreground">
+          {title}
+        </h4>
+        <CredentialStatusBadge provider={provider} credentialMode={credentialMode} />
       </div>
+
+      <div className="space-y-3">
+        <PipelineSelect
+          label="Provider"
+          value={providerValue}
+          options={providerOptions}
+          onValueChange={onProviderChange}
+        />
+        <div className="flex items-end gap-2">
+          <div className="min-w-0 flex-1">
+            <PipelineSelect
+              label={detailLabel}
+              value={detailValue}
+              options={detailOptions}
+              onValueChange={onDetailChange}
+            />
+          </div>
+          {detailAction}
+        </div>
+        <CredentialModePanel
+          provider={provider}
+          credentialMode={credentialMode}
+          onCredentialModeChange={onCredentialModeChange}
+          keyDraft={keyDraft}
+          onKeyDraftChange={onKeyDraftChange}
+          onSaveKey={onSaveKey}
+          credentialBusy={credentialBusy}
+        />
+      </div>
+    </section>
+  );
+}
+
+function CredentialModePanel({
+  provider,
+  credentialMode,
+  onCredentialModeChange,
+  keyDraft,
+  onKeyDraftChange,
+  onSaveKey,
+  credentialBusy,
+}: {
+  provider: CatalogProviderDto | null;
+  credentialMode: CredentialMode;
+  onCredentialModeChange: (value: CredentialMode) => void;
+  keyDraft: string;
+  onKeyDraftChange: (value: string) => void;
+  onSaveKey: () => void;
+  credentialBusy: boolean;
+}) {
+  const providerLabel = provider?.label ?? 'this provider';
+  const credential = provider?.organizationCredential ?? null;
+  const hasByokSecret = Boolean(credential?.hasSecret);
+  const byokStatus = credential?.status ?? 'NOT_CONFIGURED';
+  const finovaReady = Boolean(provider?.finovaManagedAvailable);
+
+  if (credentialMode === 'FINOVA_MANAGED') {
+    return (
+      <div className="rounded-md border border-border/50 bg-muted/15 p-3">
+        <div className="flex items-start gap-2">
+          <Building2 className="mt-0.5 size-4 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs font-semibold text-foreground">
+                Finova Managed
+              </p>
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-950 dark:text-emerald-100">
+                Recommended
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+              Use Finova&apos;s managed infrastructure. No API key required.
+            </p>
+            {!finovaReady ? (
+              <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
+                Finova Managed is not configured for {providerLabel}; BYOK is available if you add a key.
+              </p>
+            ) : null}
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-3 h-8 text-xs"
+          onClick={() => onCredentialModeChange('BYOK')}
+        >
+          <KeyRound className="size-3.5" aria-hidden />
+          Switch to BYOK
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-border/50 bg-background p-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <CredentialModeOption
+          active={false}
+          title="Finova Managed"
+          description="No API key required"
+          onClick={() => onCredentialModeChange('FINOVA_MANAGED')}
+        />
+        <CredentialModeOption
+          active
+          title="Bring Your Own Key"
+          description="Advanced provider billing"
+          onClick={() => onCredentialModeChange('BYOK')}
+        />
+      </div>
+
+      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+        This setting is saved on this agent version. The stored {providerLabel} key can be reused by other agents in this workspace.
+      </p>
+
+      <label className="mt-3 block">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          API Key
+        </span>
+        <input
+          type="password"
+          value={keyDraft}
+          onChange={(event) => onKeyDraftChange(event.target.value)}
+          placeholder={hasByokSecret ? 'Stored key is already configured' : `Paste ${providerLabel} API key`}
+          className="mt-1 h-9 w-full rounded-md border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
+        />
+      </label>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 text-xs"
+          disabled={credentialBusy || !keyDraft.trim()}
+          onClick={onSaveKey}
+        >
+          {credentialBusy ? (
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Save className="size-3.5" aria-hidden />
+          )}
+          Save Key
+        </Button>
+        <span className="text-[11px] text-muted-foreground">
+          Status: {byokCredentialStatusLabel(hasByokSecret, byokStatus)}
+        </span>
+      </div>
+
+      {credential?.validationError ? (
+        <p className="mt-2 text-[11px] leading-relaxed text-destructive">
+          {credential.validationError}
+        </p>
+      ) : null}
     </div>
   );
+}
+
+function CredentialModeOption({
+  active,
+  title,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        'flex items-start gap-2 rounded-md border px-2.5 py-2 text-left transition',
+        active
+          ? 'border-foreground bg-foreground/5 text-foreground'
+          : 'border-border/60 bg-muted/10 text-muted-foreground hover:bg-muted/30',
+      )}
+      onClick={onClick}
+    >
+      <span
+        className={cn(
+          'mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border',
+          active ? 'border-foreground' : 'border-muted-foreground/50',
+        )}
+        aria-hidden
+      >
+        {active ? <span className="size-1.5 rounded-full bg-foreground" /> : null}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs font-semibold">{title}</span>
+        <span className="mt-0.5 block text-[11px] leading-snug">{description}</span>
+      </span>
+    </button>
+  );
+}
+
+function CredentialStatusBadge({
+  provider,
+  credentialMode,
+}: {
+  provider: CatalogProviderDto | null;
+  credentialMode: CredentialMode;
+}) {
+  const label =
+    credentialMode === 'BYOK'
+      ? byokCredentialStatusLabel(
+          Boolean(provider?.organizationCredential?.hasSecret),
+          provider?.organizationCredential?.status ?? 'NOT_CONFIGURED',
+        )
+      : provider?.finovaManagedAvailable === false
+        ? 'Setup Required'
+        : 'Ready';
+  const ready = label === 'Ready' || label === 'Validated' || label === 'Configured';
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium',
+        ready
+          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-950 dark:text-emerald-100'
+          : 'border-amber-500/35 bg-amber-500/10 text-amber-950 dark:text-amber-100',
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function byokCredentialStatusLabel(
+  hasSecret: boolean,
+  status: ProviderCredentialDto['status'],
+): string {
+  if (!hasSecret) {
+    return 'Key Required';
+  }
+  if (status === 'VALID') {
+    return 'Validated';
+  }
+  if (status === 'INVALID') {
+    return 'Invalid';
+  }
+  return 'Configured';
 }
 
 function PipelineSelect({
@@ -3711,12 +4217,36 @@ function versionPayloadFromVersion(version: AgentVersion): Record<string, unknow
   return {
     systemPrompt: version.systemPrompt,
     voiceId: version.voiceId,
+    llmProviderId: version.llmProviderId ?? DEFAULT_LLM_PROVIDER,
     model: version.model,
+    sttProviderId: version.sttProviderId ?? DEFAULT_STT_PROVIDER,
+    sttModel: version.sttModel ?? DEFAULT_STT_MODEL,
+    ttsCredentialMode: credentialModeOrDefault(version.ttsCredentialMode),
+    llmCredentialMode: credentialModeOrDefault(version.llmCredentialMode),
+    sttCredentialMode: credentialModeOrDefault(version.sttCredentialMode),
     temperature: version.temperature,
     maxTokens: version.maxTokens,
     firstMessage: version.firstMessage ?? undefined,
     endCallPhrases: version.endCallPhrases,
   };
+}
+
+function credentialModeOrDefault(
+  value: CredentialMode | null | undefined,
+): CredentialMode {
+  return value === 'BYOK' ? 'BYOK' : DEFAULT_CREDENTIAL_MODE;
+}
+
+function versionTtsProvider(
+  version: AgentVersion | null | undefined,
+  voices: VoiceDto[],
+): VoiceProviderId {
+  const storedProvider = normalizeVoiceProviderId(version?.ttsProviderId ?? '');
+  if (storedProvider) {
+    return storedProvider;
+  }
+  const voice = voices.find((item) => item.rimeVoiceId === version?.voiceId);
+  return voiceProviderId(voice);
 }
 
 function versionStatus(
@@ -4041,6 +4571,12 @@ function voiceProviderId(voice?: VoiceDto | null): VoiceProviderId {
     }
   }
   return 'rime';
+}
+
+function normalizeVoiceProviderId(value: string): VoiceProviderId | null {
+  const normalized = normalizeVoiceFilterValue(value);
+  const match = VOICE_PROVIDERS.find((item) => item.id === normalized);
+  return match?.id ?? null;
 }
 
 function voiceProviderLabel(providerId: VoiceProviderId): string {

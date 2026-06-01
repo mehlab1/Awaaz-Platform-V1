@@ -9,6 +9,7 @@ import {
   CallStatus,
   EventType,
   Prisma,
+  ProviderCredentialMode,
 } from '@prisma/client';
 import type { Queue } from 'bullmq';
 
@@ -29,6 +30,13 @@ import type { WorkerAgentConfigResponse } from './worker-agent-config.types';
 const DEFAULT_LLM_PROVIDER_ID = 'groq';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
+
+type WorkerProviderSecret = {
+  providerId: string;
+  mode: ProviderCredentialMode;
+  apiKey: string;
+  keyFingerprint: string;
+};
 
 @Injectable()
 export class InternalService {
@@ -58,9 +66,12 @@ export class InternalService {
       version.voiceId,
       agent.organizationId,
     );
+    const ttsCredentialMode =
+      version.ttsCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
     const ttsSecret = await this.plugins.resolveOrganizationProviderSecret(
       agent.organizationId,
       voice.providerId,
+      ttsCredentialMode,
     );
     if (!ttsSecret.ok) {
       throw new ServiceUnavailableException(
@@ -73,13 +84,31 @@ export class InternalService {
     const sttModel = version.sttModel ?? DEFAULT_STT_MODEL;
     const llmProviderId = version.llmProviderId ?? DEFAULT_LLM_PROVIDER_ID;
     const llmModel = version.llmModel ?? version.model;
+    const sttCredentialMode =
+      version.sttCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
+    const llmCredentialMode =
+      version.llmCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
+    const sttSecret = await this.optionalWorkerProviderSecret(
+      agent.organizationId,
+      sttProviderId,
+      sttCredentialMode,
+      'STT',
+    );
+    const llmSecret = await this.optionalWorkerProviderSecret(
+      agent.organizationId,
+      llmProviderId,
+      llmCredentialMode,
+      'LLM',
+    );
     const keyFingerprint = this.plugins.keyFingerprint(ttsSecret.key);
 
     this.logger.log(
-      `Loaded agent config agent=${agent.id} version=${version.id} v${version.versionNumber} ` +
+        `Loaded agent config agent=${agent.id} version=${version.id} v${version.versionNumber} ` +
         `storedVoiceId=${version.voiceId} ttsProvider=${voice.providerId} ` +
         `ttsVoiceId=${voice.providerVoiceId} ttsModel=${voice.modelId} lang=${voice.lang} ` +
-        `credentialMode=${ttsSecret.credentialMode} keyFingerprint=${keyFingerprint}`,
+        `credentialMode=${ttsSecret.credentialMode} keyFingerprint=${keyFingerprint} ` +
+        `sttProvider=${sttProviderId} sttMode=${sttCredentialMode} ` +
+        `llmProvider=${llmProviderId} llmMode=${llmCredentialMode}`,
     );
 
     return {
@@ -118,6 +147,8 @@ export class InternalService {
           apiKey: ttsSecret.key,
           keyFingerprint,
         },
+        ...(sttSecret ? { stt: sttSecret } : {}),
+        ...(llmSecret ? { llm: llmSecret } : {}),
       },
       metadata: {
         ttsProviderId: voice.providerId,
@@ -127,10 +158,46 @@ export class InternalService {
         ttsKeyFingerprint: keyFingerprint,
         sttProviderId,
         sttModel,
+        sttCredentialMode,
+        ...(sttSecret ? { sttKeyFingerprint: sttSecret.keyFingerprint } : {}),
         llmProviderId,
         llmModel,
+        llmCredentialMode,
+        ...(llmSecret ? { llmKeyFingerprint: llmSecret.keyFingerprint } : {}),
         agentVersionNumber: version.versionNumber,
       },
+    };
+  }
+
+  private async optionalWorkerProviderSecret(
+    organizationId: string,
+    providerId: string,
+    credentialMode: ProviderCredentialMode,
+    label: 'STT' | 'LLM',
+  ): Promise<WorkerProviderSecret | null> {
+    const secret = await this.plugins.resolveOrganizationProviderSecret(
+      organizationId,
+      providerId,
+      credentialMode,
+    );
+    if (!secret.ok) {
+      if (credentialMode === ProviderCredentialMode.BYOK) {
+        throw new ServiceUnavailableException(
+          `${label} credential for provider "${providerId}" is not available: ${secret.error}`,
+        );
+      }
+      this.logger.warn(
+        `${label} Finova-managed credential for provider "${providerId}" is not available in API config; worker environment will be used if configured.`,
+      );
+      return null;
+    }
+
+    await this.plugins.markProviderCredentialUsed(secret.credentialId);
+    return {
+      providerId,
+      mode: secret.credentialMode,
+      apiKey: secret.key,
+      keyFingerprint: this.plugins.keyFingerprint(secret.key),
     };
   }
 

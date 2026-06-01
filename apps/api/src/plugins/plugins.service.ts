@@ -310,6 +310,7 @@ export class PluginsService {
   async resolveOrganizationProviderSecret(
     organizationId: string,
     providerId: string,
+    credentialMode?: ProviderCredentialMode,
   ): Promise<ResolvedProviderSecret> {
     const provider = this.mustProvider(providerId);
     const credential =
@@ -321,11 +322,14 @@ export class PluginsService {
           },
         },
       });
-    const secret = this.resolveSecret(provider, credential);
+    const secret = this.resolveSecret(provider, credential, credentialMode);
     return {
       ...secret,
       providerId: provider.id,
-      credentialId: credential?.id ?? null,
+      credentialId:
+        secret.credentialMode === ProviderCredentialMode.BYOK
+          ? credential?.id ?? null
+          : null,
     };
   }
 
@@ -541,9 +545,15 @@ export class PluginsService {
   private resolveSecret(
     provider: ProviderDefinition,
     credential: OrganizationProviderCredential | null,
+    credentialMode?: ProviderCredentialMode,
   ): ResolvedSecret {
-    if (credential?.credentialMode === ProviderCredentialMode.BYOK) {
-      if (!credential.secretCiphertext || !credential.secretIv || !credential.secretAuthTag) {
+    const mode =
+      credentialMode ??
+      credential?.credentialMode ??
+      ProviderCredentialMode.FINOVA_MANAGED;
+
+    if (mode === ProviderCredentialMode.BYOK) {
+      if (!credential?.secretCiphertext || !credential.secretIv || !credential.secretAuthTag) {
         return {
           ok: false,
           credentialMode: ProviderCredentialMode.BYOK,

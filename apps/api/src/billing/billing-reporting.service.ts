@@ -29,6 +29,10 @@ interface LedgerBreakdownRow {
   total_cost_usd_micros: unknown;
 }
 
+interface LedgerAgentBreakdownRow extends LedgerBreakdownRow {
+  bucket_label: string;
+}
+
 interface RecentSnapshotRow {
   id: string;
   lineItemCount: number;
@@ -202,6 +206,53 @@ export class BillingReportingService {
       'credentialMode',
       credentialModeLabel,
     );
+  }
+
+  async agentBreakdown(
+    organizationId: string,
+    query: BillingReportQueryDto,
+  ): Promise<BillingBreakdownResponse> {
+    const range = resolveRange(query.dateFrom, query.dateTo);
+    const filters = normalizeFilters(query);
+    const rows = await this.prisma.$queryRaw<LedgerAgentBreakdownRow[]>`
+      SELECT
+        COALESCE(c."agentId", 'unassigned') AS bucket,
+        COALESCE(a."name", 'Unassigned') AS bucket_label,
+        COUNT(DISTINCT ule."callId")::int AS call_count,
+        COUNT(*)::int AS line_item_count,
+        COALESCE(SUM(ule."usageQuantity"), 0)::text AS usage_quantity,
+        COALESCE(SUM(ule."baseCostUsdMicros"), 0)::text AS base_cost_usd_micros,
+        COALESCE(SUM(ule."markupUsdMicros"), 0)::text AS markup_cost_usd_micros,
+        COALESCE(SUM(ule."totalCostUsdMicros"), 0)::text AS total_cost_usd_micros
+      FROM "usage_ledger_entries" ule
+      INNER JOIN "calls" c ON c."id" = ule."callId"
+      LEFT JOIN "agents" a ON a."id" = c."agentId"
+      WHERE ule."createdAt" >= ${range.start}
+        AND ule."createdAt" < ${range.endExclusive}
+        AND ule."organizationId" = ${organizationId}
+        ${ledgerFilterSql(query.providerId, query.credentialMode)}
+      GROUP BY 1, 2
+      ORDER BY SUM(ule."totalCostUsdMicros") DESC, 2 ASC
+    `;
+
+    return {
+      generatedAt: new Date().toISOString(),
+      range: { dateFrom: range.dateFrom, dateTo: range.dateTo },
+      filters,
+      items: rows.map((row) => ({
+        bucket: row.bucket,
+        bucketLabel: row.bucket_label,
+        callCount: toInt(row.call_count),
+        lineItemCount: toInt(row.line_item_count),
+        usageQuantity: toNumber(row.usage_quantity),
+        baseCostUsdMicros: toMicrosString(row.base_cost_usd_micros),
+        markupCostUsdMicros: toMicrosString(row.markup_cost_usd_micros),
+        totalCostUsdMicros: toMicrosString(row.total_cost_usd_micros),
+        baseCostUsd: microsToUsd(row.base_cost_usd_micros),
+        markupCostUsd: microsToUsd(row.markup_cost_usd_micros),
+        totalCostUsd: microsToUsd(row.total_cost_usd_micros),
+      })),
+    };
   }
 
   async recentCalls(

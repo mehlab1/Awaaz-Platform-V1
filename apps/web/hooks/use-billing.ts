@@ -129,6 +129,12 @@ export function useBilling(options: UseBillingQueryOptions = {}) {
     return res.json() as Promise<BillingBreakdownResponse>;
   };
 
+  const fetchAgentBreakdown = async () => {
+    const res = await apiCall(`/api/v1/billing/agent-breakdown${buildQueryString(options)}`);
+    if (!res.ok) throw new Error('Failed to fetch agent breakdown');
+    return res.json() as Promise<BillingBreakdownResponse>;
+  };
+
   const summary = useQuery({
     queryKey: ['billing', 'summary', activeOrgId, options],
     queryFn: fetchSummary,
@@ -153,11 +159,18 @@ export function useBilling(options: UseBillingQueryOptions = {}) {
     enabled: !!activeOrgId,
   });
 
+  const agentBreakdown = useQuery({
+    queryKey: ['billing', 'agentBreakdown', activeOrgId, options],
+    queryFn: fetchAgentBreakdown,
+    enabled: !!activeOrgId,
+  });
+
   return {
     summary,
     providerBreakdown,
     credentialModeBreakdown,
     usageBreakdown,
+    agentBreakdown,
   };
 }
 

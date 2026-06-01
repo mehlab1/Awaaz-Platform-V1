@@ -24,6 +24,13 @@ export interface WorkerTtsCredentials {
   keyFingerprint: string;
 }
 
+export interface WorkerProviderCredentials {
+  providerId: string;
+  mode: ProviderCredentialMode;
+  apiKey: string;
+  keyFingerprint: string;
+}
+
 export interface WorkerAgentConfigMetadata {
   ttsProviderId: string;
   ttsModel: string;
@@ -32,8 +39,12 @@ export interface WorkerAgentConfigMetadata {
   ttsKeyFingerprint: string;
   sttProviderId: string;
   sttModel: string;
+  sttCredentialMode: ProviderCredentialMode;
+  sttKeyFingerprint?: string;
   llmProviderId: string;
   llmModel: string;
+  llmCredentialMode: ProviderCredentialMode;
+  llmKeyFingerprint?: string;
   agentVersionNumber: number;
 }
 
@@ -61,6 +72,8 @@ export interface WorkerAgentConfigResponse {
   };
   credentials: {
     tts: WorkerTtsCredentials;
+    stt?: WorkerProviderCredentials;
+    llm?: WorkerProviderCredentials;
   };
   metadata: WorkerAgentConfigMetadata;
 }
