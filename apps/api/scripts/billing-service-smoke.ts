@@ -1,7 +1,12 @@
-import * as process from 'node:process';
 import { BillingService } from '../src/billing/billing.service';
 
 async function main(): Promise<void> {
+  const runtimeProcess = (globalThis as any).process as {
+    stdout: { write: (value: string) => void };
+    stderr: { write: (value: string) => void };
+    exit: (code: number) => never;
+  };
+
   // Create BillingService without connecting to a real database and
   // override lookupRate with deterministic mock data so this smoke
   // script can run in CI/local without a Postgres instance.
@@ -122,7 +127,7 @@ async function main(): Promise<void> {
       'missing pricing row',
     );
 
-    process.stdout.write('billing service smoke passed\n');
+    runtimeProcess.stdout.write('billing service smoke passed\n');
 }
 
 async function expectThrows(
@@ -148,6 +153,10 @@ function assertEqual(actual: unknown, expected: unknown, label: string): void {
 }
 
 main().catch((error: unknown) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
+  const runtimeProcess = (globalThis as any).process as {
+    stderr: { write: (value: string) => void };
+    exit: (code: number) => never;
+  };
+  runtimeProcess.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  runtimeProcess.exit(1);
 });
