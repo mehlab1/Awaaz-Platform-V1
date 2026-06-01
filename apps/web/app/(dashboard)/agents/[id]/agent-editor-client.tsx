@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
@@ -11,6 +11,7 @@ import {
   ArrowLeft,
   Building2,
   Check,
+  ChevronDown,
   ChevronRight,
   Clock,
   Copy,
@@ -2685,6 +2686,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 providerOptions={ttsProviderOptions}
                 onProviderChange={onTtsProviderChange}
                 detailLabel="Voice"
+                detailSummary={selectedVoice?.name ?? selectedVoiceId}
                 detailContent={
                   <SelectedVoiceTextarea
                     voice={selectedVoice}
@@ -3973,6 +3975,7 @@ function PipelineProviderCard({
   detailValue,
   detailOptions,
   onDetailChange,
+  detailSummary,
   detailContent,
   detailAction,
   credentialMode,
@@ -3991,6 +3994,7 @@ function PipelineProviderCard({
   detailValue?: string;
   detailOptions?: readonly PipelineOption[];
   onDetailChange?: (value: string) => void;
+  detailSummary?: string;
   detailContent?: ReactNode;
   detailAction?: ReactNode;
   credentialMode: CredentialMode;
@@ -4001,45 +4005,80 @@ function PipelineProviderCard({
   onSaveKey: () => void;
   credentialBusy: boolean;
 }) {
-  return (
-    <section className="rounded-lg border border-border/50 bg-background/70 p-3">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h4 className="text-[11px] font-semibold uppercase tracking-wider text-foreground">
-          {title}
-        </h4>
-        <CredentialStatusBadge provider={provider} credentialMode={credentialMode} />
-      </div>
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const providerLabel =
+    providerOptions.find((option) => option.value === providerValue)?.label ??
+    provider?.label ??
+    providerValue;
+  const selectedDetailLabel =
+    detailSummary ??
+    detailOptions?.find((option) => option.value === detailValue)?.label ??
+    detailValue ??
+    '';
 
-      <div className="space-y-3">
-        <PipelineSelect
-          label="Provider"
-          value={providerValue}
-          options={providerOptions}
-          onValueChange={onProviderChange}
-        />
-        <div className="flex items-end gap-2">
-          <div className="min-w-0 flex-1">
-            {detailContent ?? (
-              <PipelineSelect
-                label={detailLabel}
-                value={detailValue ?? ''}
-                options={detailOptions ?? []}
-                onValueChange={onDetailChange}
-              />
-            )}
+  return (
+    <section className="overflow-hidden rounded-lg border border-border/50 bg-background/70">
+      <button
+        type="button"
+        className="flex w-full items-center gap-3 px-3 py-3 text-left transition hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h4 className="truncate text-[11px] font-semibold uppercase tracking-wider text-foreground">
+              {title}
+            </h4>
+            <CredentialStatusBadge provider={provider} credentialMode={credentialMode} />
           </div>
-          {detailAction}
+          <p className="mt-1 truncate text-[11px] text-muted-foreground">
+            {providerLabel}
+            {selectedDetailLabel ? ` - ${selectedDetailLabel}` : ''}
+          </p>
         </div>
-        <CredentialModePanel
-          provider={provider}
-          credentialMode={credentialMode}
-          onCredentialModeChange={onCredentialModeChange}
-          keyDraft={keyDraft}
-          onKeyDraftChange={onKeyDraftChange}
-          onSaveKey={onSaveKey}
-          credentialBusy={credentialBusy}
+        <ChevronDown
+          className={cn(
+            'size-4 shrink-0 text-muted-foreground transition-transform',
+            open && 'rotate-180',
+          )}
+          aria-hidden
         />
-      </div>
+      </button>
+
+      {open ? (
+        <div id={panelId} className="space-y-3 border-t border-border/40 p-3">
+          <PipelineSelect
+            label="Provider"
+            value={providerValue}
+            options={providerOptions}
+            onValueChange={onProviderChange}
+          />
+          <div className="flex items-end gap-2">
+            <div className="min-w-0 flex-1">
+              {detailContent ?? (
+                <PipelineSelect
+                  label={detailLabel}
+                  value={detailValue ?? ''}
+                  options={detailOptions ?? []}
+                  onValueChange={onDetailChange}
+                />
+              )}
+            </div>
+            {detailAction}
+          </div>
+          <CredentialModePanel
+            provider={provider}
+            credentialMode={credentialMode}
+            onCredentialModeChange={onCredentialModeChange}
+            keyDraft={keyDraft}
+            onKeyDraftChange={onKeyDraftChange}
+            onSaveKey={onSaveKey}
+            credentialBusy={credentialBusy}
+          />
+        </div>
+      ) : null}
     </section>
   );
 }

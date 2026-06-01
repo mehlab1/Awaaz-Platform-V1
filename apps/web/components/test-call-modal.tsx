@@ -250,14 +250,14 @@ const voiceModeMeta: Record<
     description: 'Speak naturally. The agent is ready for your next turn.',
     Icon: Mic,
     orbClassName:
-      'border-transparent bg-gradient-to-tr from-indigo-500 via-purple-500 to-pink-500 text-white shadow-[0_0_50px_rgba(139,92,246,0.4)]',
-    badgeClassName: 'border-purple-500/20 bg-purple-500/10 text-purple-700 dark:text-purple-300',
+      'border-primary/25 bg-primary/10 text-primary shadow-sm hover:border-primary/40',
+    badgeClassName: 'border-primary/25 bg-primary/10 text-primary',
   },
   thinking: {
     label: 'Thinking',
     description: 'The agent is preparing a response.',
     Icon: AudioLines,
-    orbClassName: 'border-transparent bg-gradient-to-tr from-amber-500 to-orange-600 text-white shadow-[0_0_50px_rgba(245,158,11,0.3)] animate-pulse',
+    orbClassName: 'border-amber-500/30 bg-amber-500/10 text-amber-700 shadow-sm dark:text-amber-300',
     badgeClassName: 'border-orange-500/20 bg-orange-500/10 text-orange-700 dark:text-orange-300',
   },
   speaking: {
@@ -265,7 +265,7 @@ const voiceModeMeta: Record<
     description: 'Audio is playing through the browser.',
     Icon: Volume2,
     orbClassName:
-      'border-transparent bg-gradient-to-tr from-emerald-500 via-teal-500 to-cyan-500 text-white shadow-[0_0_50px_rgba(20,184,166,0.4)]',
+      'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 shadow-sm dark:text-emerald-300',
     badgeClassName: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
   },
   idle: {
@@ -286,7 +286,7 @@ const voiceModeMeta: Record<
     label: 'Needs attention',
     description: 'The browser room connected, but the agent is not available.',
     Icon: AlertCircle,
-    orbClassName: 'border-destructive/30 bg-destructive/10 text-destructive shadow-[0_0_30px_rgba(239,68,68,0.2)]',
+    orbClassName: 'border-destructive/30 bg-destructive/10 text-destructive shadow-sm',
     badgeClassName: 'border-destructive/20 bg-destructive/10 text-destructive',
   },
 };
@@ -455,14 +455,14 @@ function AudioLevelBars({
 
   const getBarColorClass = () => {
     if (!active) return 'bg-muted-foreground/20';
-    if (mode === 'speaking') return 'bg-gradient-to-t from-emerald-500 via-teal-500 to-cyan-400';
-    if (mode === 'listening') return 'bg-gradient-to-t from-indigo-500 via-purple-500 to-pink-400';
+    if (mode === 'speaking') return 'bg-emerald-500/75';
+    if (mode === 'listening') return 'bg-primary/75';
     return 'bg-primary/70';
   };
 
   return (
     <div
-      className="flex h-12 items-center justify-center gap-1.5"
+      className="flex h-9 items-center justify-center gap-1"
       aria-hidden
     >
       {bars.map((base, index) => {
@@ -474,7 +474,7 @@ function AudioLevelBars({
               'w-1.5 rounded-full transition-all duration-100',
               getBarColorClass(),
             )}
-            style={{ height: `${10 + liveLevel * 34}px` }}
+            style={{ height: `${8 + liveLevel * 24}px` }}
           />
         );
       })}
@@ -502,26 +502,26 @@ function VoiceOrb({
   const visualVolume = mode === 'speaking' ? agentVolume : localVolume;
   const isAnimated = mode === 'listening' || mode === 'speaking';
   const pulse = Math.min(1, Math.max(0, visualVolume * 7));
-  const scale = Math.min(1.12, 1 + pulse * 0.08);
+  const scale = Math.min(1.08, 1 + pulse * 0.05);
 
   return (
-    <div className="flex flex-col items-center gap-6 text-center">
+    <div className="flex flex-col items-center gap-4 text-center">
       <div className="relative grid place-items-center">
         {isAnimated ? (
           <>
             <span
               className={cn(
-                "absolute h-32 w-32 sm:h-40 sm:w-40 rounded-full border transition-all duration-300",
-                mode === 'speaking' ? 'border-emerald-500/25' : 'border-indigo-500/25'
+                'absolute h-24 w-24 rounded-full border transition-all duration-300 sm:h-28 sm:w-28',
+                mode === 'speaking' ? 'border-emerald-500/25' : 'border-primary/25',
               )}
               style={{
-                transform: `scale(${1 + pulse * 0.25})`,
-                opacity: 0.24 + pulse * 0.35,
+                transform: `scale(${1 + pulse * 0.2})`,
+                opacity: 0.18 + pulse * 0.28,
               }}
             />
             <span className={cn(
-              "absolute h-44 w-44 sm:h-52 sm:w-52 animate-pulse rounded-full border",
-              mode === 'speaking' ? 'border-teal-500/10' : 'border-purple-500/10'
+              'absolute h-32 w-32 animate-pulse rounded-full border sm:h-36 sm:w-36',
+              mode === 'speaking' ? 'border-emerald-500/10' : 'border-primary/10',
             )} />
           </>
         ) : null}
@@ -532,7 +532,7 @@ function VoiceOrb({
           onClick={onToggleMute}
           disabled={isBusy}
           className={cn(
-            'relative grid h-24 w-24 sm:h-32 sm:w-32 place-items-center rounded-full border transition-all duration-150',
+            'relative grid h-20 w-20 place-items-center rounded-full border transition-all duration-150 sm:h-24 sm:w-24',
             'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ring/30',
             meta.orbClassName,
             isBusy && 'cursor-not-allowed opacity-70',
@@ -540,19 +540,19 @@ function VoiceOrb({
           style={{ transform: `scale(${scale})` }}
         >
           {isBusy ? (
-            <Loader2 className="h-10 w-10 sm:h-12 sm:w-12 animate-spin" aria-hidden />
+            <Loader2 className="h-8 w-8 animate-spin sm:h-9 sm:w-9" aria-hidden />
           ) : isMuted ? (
-            <MicOff className="h-10 w-10 sm:h-12 sm:w-12" aria-hidden />
+            <MicOff className="h-8 w-8 sm:h-9 sm:w-9" aria-hidden />
           ) : (
-            <Mic className="h-10 w-10 sm:h-12 sm:w-12" aria-hidden />
+            <StatusIcon className="h-8 w-8 sm:h-9 sm:w-9" aria-hidden />
           )}
         </button>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <div
           className={cn(
-            'mx-auto inline-flex items-center gap-2 rounded-full border px-3 py-1 text-sm font-medium',
+            'mx-auto inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium',
             meta.badgeClassName,
           )}
         >
@@ -562,7 +562,7 @@ function VoiceOrb({
           />
           {meta.label}
         </div>
-        <p className="mx-auto max-w-sm text-muted-foreground text-sm">
+        <p className="mx-auto max-w-xs text-xs leading-relaxed text-muted-foreground sm:text-sm">
           {meta.description}
         </p>
       </div>
@@ -605,7 +605,7 @@ function EndCallToolbar({
       {...rest}
       disabled={!!disabled || isEnding}
       onClick={(event) => void handleClick(event)}
-      className={cn(rest.className, 'gap-2 rounded-full px-6', className)}
+      className={cn(rest.className, 'h-9 gap-2 rounded-full px-4 text-sm', className)}
     >
       {isEnding ? (
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -1084,29 +1084,35 @@ function BrowserTestRoomChrome({
   ]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/10">
       <StartAudio
         label="Enable agent audio"
         className={cn(
-          'mx-auto mt-4 inline-flex items-center justify-center rounded-md border border-border bg-card px-4 py-2',
-          'font-medium text-sm shadow-sm transition hover:bg-muted',
+          'mx-auto mt-3 inline-flex items-center justify-center rounded-md border border-border bg-background px-3 py-1.5',
+          'text-xs font-medium shadow-sm transition hover:bg-muted',
         )}
       />
       <RoomAudioRenderer volume={agentAudioRenderVolume} />
 
-      <div className="grid min-h-0 flex-1 gap-4 sm:gap-6 p-4 sm:p-8 overflow-y-auto overflow-x-hidden">
-        <section className="flex min-h-[400px] sm:min-h-[500px] flex-col rounded-2xl border border-border/70 bg-card shadow-md overflow-hidden justify-between">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/40 px-4 sm:px-6 py-4 bg-muted/[0.02]">
+      <div className="flex min-h-0 flex-1 p-3 sm:p-5">
+        <section className="flex min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-sm">
+          <div className="flex shrink-0 flex-col gap-3 border-b border-border/40 bg-card/35 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase text-muted-foreground">
+                Browser preview
+              </p>
+              <h3 className="mt-1 truncate text-base font-semibold tracking-tight sm:text-lg">
+                {agentDisplayName}
+              </h3>
+            </div>
+
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="text-[10px] px-2 py-0.5">
-                Browser Preview
-              </Badge>
-              <Badge variant={detectedAgent ? 'default' : 'secondary'} className="text-[10px] px-2 py-0.5">
+              <Badge variant={detectedAgent ? 'default' : 'secondary'} className="px-2 py-0.5 text-[10px]">
                 <Wifi className="h-3 w-3 mr-1" aria-hidden />
                 {detectedAgent ? 'Agent joined' : 'Waiting'}
               </Badge>
               <Badge
-                className="text-[10px] px-2 py-0.5"
+                className="px-2 py-0.5 text-[10px]"
                 variant={
                   isMicrophoneEnabled && isMicrophonePublished
                     ? 'outline'
@@ -1125,49 +1131,42 @@ function BrowserTestRoomChrome({
             </div>
           </div>
 
-          <div className="flex flex-1 flex-col items-center justify-center gap-6 sm:gap-8 px-4 sm:px-6 py-8 sm:py-10 bg-gradient-to-b from-card via-card to-muted/[0.04]">
-            <div className="text-center">
-              <p className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
-                Testing
-              </p>
-              <h3 className="mt-2 font-semibold text-2xl tracking-tight">
-                {agentDisplayName}
-              </h3>
+          <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
+            <div className="flex w-full max-w-lg flex-col items-center gap-4 sm:gap-5">
+              <VoiceOrb
+                mode={mode}
+                isMuted={!isMicrophoneEnabled}
+                isBusy={muteBusy}
+                localVolume={localVolume}
+                agentVolume={agentVolume}
+                onToggleMute={toggleMute}
+              />
+
+              <AudioLevelBars
+                active={isAudioActive}
+                volume={mode === 'speaking' ? agentVolume : localVolume}
+                mode={mode}
+              />
+
+              {lastMicrophoneError ? (
+                <div className="flex w-full items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  <p>{lastMicrophoneError.message}</p>
+                </div>
+              ) : null}
+              {lifecycleNotice ? (
+                <p className="max-w-full rounded-full border bg-muted/50 px-3 py-1 text-center text-xs text-muted-foreground sm:text-sm">
+                  {lifecycleNotice}
+                </p>
+              ) : null}
             </div>
-
-            <VoiceOrb
-              mode={mode}
-              isMuted={!isMicrophoneEnabled}
-              isBusy={muteBusy}
-              localVolume={localVolume}
-              agentVolume={agentVolume}
-              onToggleMute={toggleMute}
-            />
-
-            <AudioLevelBars
-              active={isAudioActive}
-              volume={mode === 'speaking' ? agentVolume : localVolume}
-              mode={mode}
-            />
-
-            {lastMicrophoneError ? (
-              <div className="flex max-w-md items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-destructive text-sm">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                <p>{lastMicrophoneError.message}</p>
-              </div>
-            ) : null}
-            {lifecycleNotice ? (
-              <p className="rounded-full border bg-muted/50 px-3 py-1 text-muted-foreground text-sm">
-                {lifecycleNotice}
-              </p>
-            ) : null}
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3 border-t border-border/40 bg-muted/20 px-4 sm:px-6 py-4">
+          <div className="flex shrink-0 flex-wrap items-center justify-center gap-2 border-t border-border/40 bg-muted/15 px-3 py-3 sm:px-4">
             <Button
               type="button"
               variant="outline"
-              className="gap-2 rounded-full px-5"
+              className="h-9 gap-2 rounded-full px-4 text-sm"
               onClick={toggleMute}
               disabled={muteBusy}
             >
@@ -1188,8 +1187,6 @@ function BrowserTestRoomChrome({
             ) : null}
           </div>
         </section>
-
-        
       </div>
     </div>
   );
@@ -1408,10 +1405,10 @@ export function TestCallModal(props: TestCallModalProps) {
       role="dialog"
       aria-modal
       aria-label="Browser agent test call"
-      className="animate-in fade-in fixed inset-0 z-[260] flex items-center justify-center bg-black/60 backdrop-blur-md p-2 sm:p-4 duration-200"
+      className="animate-in fade-in fixed inset-0 z-[260] flex items-stretch justify-center bg-black/60 p-2 backdrop-blur-md duration-200 sm:items-center sm:p-4"
     >
-      <div className="relative w-full max-w-5xl h-[95vh] sm:h-[85vh] min-h-[450px] sm:min-h-[600px] max-h-[820px] rounded-2xl sm:rounded-3xl border border-border/80 bg-background shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-        <header className="flex items-start sm:items-center justify-between gap-3 sm:gap-4 border-b border-border/40 bg-card/45 px-4 sm:px-6 py-3 sm:py-4 shrink-0">
+      <div className="relative flex h-[calc(100dvh-1rem)] w-full max-w-4xl animate-in zoom-in-95 flex-col overflow-hidden rounded-2xl border border-border/80 bg-background shadow-2xl duration-200 sm:h-[calc(100dvh-2rem)] sm:max-h-[760px]">
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border/40 bg-card/45 px-4 py-3 sm:items-center sm:gap-4 sm:px-5">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
               <Badge variant="outline" className="border-primary/20 bg-primary/5 text-primary text-[10px] px-2 py-0.5">
@@ -1424,10 +1421,10 @@ export function TestCallModal(props: TestCallModalProps) {
                 </Badge>
               ) : null}
             </div>
-            <h2 className="mt-2 truncate font-semibold text-lg tracking-tight">
+            <h2 className="mt-2 truncate text-base font-semibold tracking-tight sm:text-lg">
               Test Agent: {agentName}
             </h2>
-            <p className="mt-0.5 max-w-2xl text-muted-foreground text-[11px] sm:text-xs leading-relaxed">
+            <p className="mt-0.5 max-w-2xl text-[11px] leading-relaxed text-muted-foreground sm:text-xs">
               {lifecycleNotice ??
                 (sessionPhase === 'ENDING'
                   ? 'Ending session...'
@@ -1441,19 +1438,19 @@ export function TestCallModal(props: TestCallModalProps) {
             size="icon"
             aria-label="Close modal"
             onClick={closeModal}
-            className="shrink-0 -mr-2 sm:mr-0 h-8 w-8 sm:h-10 sm:w-10 rounded-full hover:bg-muted/50 hover:text-foreground transition-colors"
+            className="-mr-2 h-8 w-8 shrink-0 rounded-full transition-colors hover:bg-muted/50 hover:text-foreground sm:mr-0"
           >
-            <X className="h-4 w-4 sm:h-5 sm:w-5" />
+            <X className="h-4 w-4" />
           </Button>
         </header>
 
         {fetchFailed ? (
-          <div className="grid flex-1 place-items-center px-6 bg-card/30">
-            <div className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 text-center shadow-lg">
-              <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-destructive/10 text-destructive">
-                <AlertCircle className="h-6 w-6" aria-hidden />
+          <div className="grid min-h-0 flex-1 place-items-center bg-card/30 px-4 sm:px-6">
+            <div className="w-full max-w-md rounded-xl border border-border/80 bg-card p-5 text-center shadow-lg sm:p-6">
+              <div className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-destructive/10 text-destructive">
+                <AlertCircle className="h-5 w-5" aria-hidden />
               </div>
-              <h3 className="mt-4 font-semibold text-lg">
+              <h3 className="mt-4 text-base font-semibold sm:text-lg">
                 Voice preview is unavailable
               </h3>
               <p className="mt-2 text-destructive text-sm">{errorMessage}</p>
@@ -1461,7 +1458,7 @@ export function TestCallModal(props: TestCallModalProps) {
                 type="button"
                 variant="secondary"
                 onClick={() => setReloadKey((k) => k + 1)}
-                className="mt-5 gap-2 rounded-full"
+                className="mt-5 h-9 gap-2 rounded-full px-4 text-sm"
               >
                 <RefreshCw className="h-4 w-4" aria-hidden />
                 Try again
@@ -1507,12 +1504,12 @@ export function TestCallModal(props: TestCallModalProps) {
             />
           </LiveKitRoom>
         ) : session && sessionPhase === 'DISCONNECTED' ? (
-          <div className="grid flex-1 place-items-center px-6 text-center bg-card/30">
-            <div className="w-full max-w-md rounded-2xl border border-border/80 bg-card p-6 shadow-lg">
-              <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-muted text-muted-foreground">
-                <PhoneOff className="h-7 w-7" aria-hidden />
+          <div className="grid min-h-0 flex-1 place-items-center bg-card/30 px-4 text-center sm:px-6">
+            <div className="w-full max-w-md rounded-xl border border-border/80 bg-card p-5 shadow-lg sm:p-6">
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-muted text-muted-foreground">
+                <PhoneOff className="h-6 w-6" aria-hidden />
               </div>
-              <h3 className="mt-4 font-semibold text-lg">Session ended</h3>
+              <h3 className="mt-4 text-base font-semibold sm:text-lg">Session ended</h3>
               <p className="mt-2 text-muted-foreground text-sm">
                 Test calls remain available in Calls history with a Test badge.
               </p>
@@ -1520,7 +1517,7 @@ export function TestCallModal(props: TestCallModalProps) {
                 <Button
                   type="button"
                   variant="secondary"
-                  className="gap-2 rounded-full"
+                  className="h-9 gap-2 rounded-full px-4 text-sm"
                   onClick={() => setReloadKey((k) => k + 1)}
                 >
                   <RefreshCw className="h-4 w-4" aria-hidden />
@@ -1529,7 +1526,7 @@ export function TestCallModal(props: TestCallModalProps) {
                 <Button
                   type="button"
                   variant="default"
-                  className="rounded-full"
+                  className="h-9 rounded-full px-4 text-sm"
                   onClick={closeModal}
                 >
                   Close
@@ -1538,9 +1535,9 @@ export function TestCallModal(props: TestCallModalProps) {
             </div>
           </div>
         ) : (
-          <div className="grid flex-1 place-items-center px-4 sm:px-6 bg-card/30">
-            <div className="rounded-2xl border border-border/85 bg-card p-6 sm:p-8 text-center shadow-lg max-w-sm">
-              <Loader2 className="mx-auto h-10 w-10 sm:h-11 sm:w-11 animate-spin text-muted-foreground" />
+          <div className="grid min-h-0 flex-1 place-items-center bg-card/30 px-4 sm:px-6">
+            <div className="max-w-sm rounded-xl border border-border/85 bg-card p-5 text-center shadow-lg sm:p-6">
+              <Loader2 className="mx-auto h-9 w-9 animate-spin text-muted-foreground" />
               <p className="mt-4 text-muted-foreground text-sm">
                 Preparing your voice session...
               </p>
@@ -1549,7 +1546,7 @@ export function TestCallModal(props: TestCallModalProps) {
         )}
 
         {session !== null && sessionPhase === 'CONNECTING' && !fetchFailed ? (
-          <footer className="border-t border-border bg-muted/20 px-4 sm:px-8 py-3.5 text-center text-muted-foreground text-xs shrink-0">
+          <footer className="shrink-0 border-t border-border bg-muted/20 px-4 py-2.5 text-center text-xs text-muted-foreground sm:px-8">
             Allow microphone access when the browser asks.
           </footer>
         ) : null}
