@@ -95,8 +95,8 @@ const PRICING_SEEDS = [
     rates: [
       {
         providerModelId: 'default',
-        meter: PricingMeter.REQUEST,
-        unitQuantity: 1,
+        meter: PricingMeter.CHARACTER,
+        unitQuantity: 1_000,
         priceUsdMicros: 0,
       },
     ],
@@ -108,7 +108,25 @@ const PRICING_SEEDS = [
       'Internal placeholder registry for Phase 6.1. Deepgram row is grounded in current runtime cost constants.',
     rates: [
       {
+        providerModelId: 'default',
+        meter: PricingMeter.MINUTE,
+        unitQuantity: 1,
+        priceUsdMicros: 4_300,
+      },
+      {
         providerModelId: 'nova-2-conversationalai',
+        meter: PricingMeter.MINUTE,
+        unitQuantity: 1,
+        priceUsdMicros: 4_300,
+      },
+      {
+        providerModelId: 'nova-2',
+        meter: PricingMeter.MINUTE,
+        unitQuantity: 1,
+        priceUsdMicros: 4_300,
+      },
+      {
+        providerModelId: 'nova-3',
         meter: PricingMeter.MINUTE,
         unitQuantity: 1,
         priceUsdMicros: 4_300,

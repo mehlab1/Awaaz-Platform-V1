@@ -805,6 +805,14 @@ def create_assistant(
         int_env("DEEPGRAM_ENDPOINTING_MS", 25),
         interrupt_min_words > 0,
     )
+    pipeline = mapping_value(config, "pipeline")
+    pipeline_stt = mapping_value(pipeline, "stt") if pipeline else None
+    stt_model = (string_value(pipeline_stt, "model") if pipeline_stt else None) or os.getenv(
+        "DEEPGRAM_MODEL",
+        "nova-2-conversationalai",
+    )
+    logger.info("stt_config_loaded provider=deepgram model=%s", stt_model)
+
     return VoiceAssistant(
         vad=silero.VAD.load(
             min_speech_duration=vad_min_speech,
@@ -813,7 +821,7 @@ def create_assistant(
             activation_threshold=vad_activation,
         ),
         stt=deepgram.STT(
-            model=os.getenv("DEEPGRAM_MODEL", "nova-2-conversationalai"),
+            model=stt_model,
             language=os.getenv("DEEPGRAM_LANGUAGE", "en-US"),
             interim_results=True,
             no_delay=True,
@@ -1966,6 +1974,18 @@ def parse_json_object(raw: str) -> dict[str, object]:
         logger.warning("LiveKit room metadata must be a JSON object")
         return {}
     return {str(key): value for key, value in parsed.items()}
+
+
+def mapping_value(
+    source: Mapping[str, object] | None,
+    key: str,
+) -> dict[str, object] | None:
+    if source is None:
+        return None
+    value = source.get(key)
+    if not isinstance(value, dict):
+        return None
+    return {str(item_key): item_value for item_key, item_value in value.items()}
 
 
 def string_value(

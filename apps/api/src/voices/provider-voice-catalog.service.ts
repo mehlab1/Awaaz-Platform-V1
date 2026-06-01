@@ -20,6 +20,7 @@ const CARTESIA_API_VERSION = '2026-03-01';
 const CARTESIA_VOICES_URL = 'https://api.cartesia.ai/voices';
 const ELEVENLABS_VOICES_URL = 'https://api.elevenlabs.io/v2/voices';
 const INWORLD_VOICES_URL = 'https://api.inworld.ai/voices/v1/voices';
+const CARTESIA_DEFAULT_TTS_MODEL = 'sonic-3.5';
 const INWORLD_DEFAULT_TTS_MODEL = 'inworld-tts-2';
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_PAGES = 100;
@@ -176,11 +177,13 @@ export class ProviderVoiceCatalogService {
       language,
       lang: this.stringField(raw, 'language'),
       gender: this.stringField(raw, 'gender'),
+      modelId: CARTESIA_DEFAULT_TTS_MODEL,
       previewAudioUrl,
       metadata: this.compactJson({
         source: 'cartesia_voice_sync',
         providerId: 'cartesia',
         providerVoiceId,
+        previewModelId: CARTESIA_DEFAULT_TTS_MODEL,
         country: this.stringField(raw, 'country'),
         isOwner: this.booleanField(raw, 'is_owner'),
         isPublic: this.booleanField(raw, 'is_public'),

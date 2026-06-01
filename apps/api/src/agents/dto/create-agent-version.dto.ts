@@ -28,6 +28,12 @@ export class CreateAgentVersionDto {
   model?: string;
 
   @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  sttModel?: string;
+
+  @IsOptional()
   @IsNumber()
   @Min(0)
   @Max(2)

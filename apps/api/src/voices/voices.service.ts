@@ -42,6 +42,11 @@ export type VoiceListItem = Voice & {
   previewPlaybackExpiresInSeconds: number | null;
 };
 
+export interface VoicePreviewAudio {
+  audio: Uint8Array;
+  contentType: string;
+}
+
 interface ListVoicesOptions {
   organizationId?: string;
   providerId?: string;
@@ -75,6 +80,8 @@ const WORKER_RUNTIME_TTS_PROVIDER_IDS = [
   INWORLD_PROVIDER_ID,
 ] as const;
 const EXTERNAL_TTS_PROVIDER_IDS = ['cartesia', 'elevenlabs', 'inworld'] as const;
+const CARTESIA_DEFAULT_TTS_MODEL = 'sonic-3.5';
+const INWORLD_PREVIEW_CONTENT_TYPE = 'audio/mpeg';
 const VOICE_PREVIEW_EXPIRES_IN_SECONDS = 3_600;
 const VOICE_PREVIEW_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 
@@ -107,7 +114,7 @@ export class VoicesService {
   async preview(
     voiceId: string,
     organizationId?: string,
-  ): Promise<Uint8Array> {
+  ): Promise<VoicePreviewAudio> {
     const trimmed = voiceId.trim();
     const voiceRow = await this.findVoiceRow(trimmed, organizationId);
     if (voiceRow && !voiceRow.isActive) {
@@ -124,7 +131,6 @@ export class VoicesService {
         throw new ServiceUnavailableException(secret.error);
       }
 
-      const text = `Hi, this is ${voiceRow?.name ?? resolved.storedVoiceId}. I am Awaaz’s voice agent.`;
       const url = new URL('https://api.inworld.ai/tts/v1/voice:preview');
       url.searchParams.set('voice_id', resolved.providerVoiceId);
       url.searchParams.set('model_id', resolved.modelId);
@@ -133,14 +139,11 @@ export class VoicesService {
       const timeout = setTimeout(() => controller.abort(), 20000);
       try {
         const response = await fetch(url, {
-          method: 'POST',
+          method: 'GET',
           headers: {
             Authorization: `Basic ${secret.key}`,
-            'Content-Type': 'application/json',
+            Accept: 'application/json',
           },
-          body: JSON.stringify({
-            text,
-          }),
           signal: controller.signal,
         });
         if (!response.ok) {
@@ -153,42 +156,8 @@ export class VoicesService {
           throw new ServiceUnavailableException('Inworld returned empty audio for preview');
         }
 
-        const pcmData = Uint8Array.from(Buffer.from(base64Audio, 'base64'));
-
-        // Wrap raw PCM in a WAV header so the browser can play it
-        const sampleRate = 16000;
-        const numChannels = 1;
-        const bitsPerSample = 16;
-        const wavHeader = new Uint8Array(44);
-        const view = new DataView(wavHeader.buffer);
-
-        view.setUint8(0, 82); view.setUint8(1, 73); view.setUint8(2, 70); view.setUint8(3, 70); // "RIFF"
-        view.setUint32(4, 36 + pcmData.length, true);
-        view.setUint8(8, 87); view.setUint8(9, 65); view.setUint8(10, 86); view.setUint8(11, 69); // "WAVE"
-        view.setUint8(12, 102); view.setUint8(13, 109); view.setUint8(14, 116); view.setUint8(15, 32); // "fmt "
-        view.setUint32(16, 16, true);
-        view.setUint16(20, 1, true); // PCM
-        view.setUint16(22, numChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, sampleRate * numChannels * (bitsPerSample / 8), true);
-        view.setUint16(32, numChannels * (bitsPerSample / 8), true);
-        view.setUint16(34, bitsPerSample, true);
-        view.setUint8(36, 100); view.setUint8(37, 97); view.setUint8(38, 116); view.setUint8(39, 97); // "data"
-        view.setUint32(40, pcmData.length, true);
-
-        const audio = new Uint8Array(wavHeader.length + pcmData.length);
-        audio.set(wavHeader, 0);
-        audio.set(pcmData, wavHeader.length);
-
-        const dummyRimeVoice = {
-          rimeVoiceId: voiceRow?.rimeVoiceId ?? resolved.storedVoiceId,
-          name: voiceRow?.name ?? resolved.storedVoiceId,
-          language: voiceRow?.language ?? resolved.language,
-          lang: voiceRow?.lang ?? resolved.lang,
-          modelId: resolved.modelId,
-        };
-        await this.storePreviewIfNeeded(dummyRimeVoice, audio, voiceRow?.previewAudioUrl);
-        return audio;
+        const audio = Uint8Array.from(Buffer.from(base64Audio, 'base64'));
+        return { audio, contentType: INWORLD_PREVIEW_CONTENT_TYPE };
       } catch (error: unknown) {
         if (error instanceof ServiceUnavailableException) {
           throw error;
@@ -211,7 +180,7 @@ export class VoicesService {
       };
       const audio = await this.rime.synthesizePreview(rimeVoice);
       await this.storePreviewIfNeeded(rimeVoice, audio, voiceRow?.previewAudioUrl);
-      return audio;
+      return { audio, contentType: 'audio/wav' };
     } else if (resolved.providerId === CARTESIA_PROVIDER_ID) {
       this.logger.log(
         `Voice preview request Cartesia voiceId=${trimmed} cartesiaSpeaker=${resolved.providerVoiceId}`,
@@ -225,11 +194,12 @@ export class VoicesService {
       const timeout = setTimeout(() => controller.abort(), 20000);
       try {
         let audio: Uint8Array | null = null;
-        if (voiceRow?.previewAudioUrl) {
+        if (voiceRow?.previewAudioUrl && this.isHttpUrl(voiceRow.previewAudioUrl)) {
           const proxyResponse = await fetch(voiceRow.previewAudioUrl, {
             method: 'GET',
             headers: {
-              'X-Api-Key': secret.key,
+              Authorization: `Bearer ${secret.key}`,
+              'X-API-Key': secret.key,
               'Cartesia-Version': '2026-03-01',
             },
             signal: controller.signal,
@@ -243,15 +213,17 @@ export class VoicesService {
 
         if (!audio) {
           const text = `Hi, this is ${voiceRow?.name ?? resolved.providerVoiceId}. I am Awaaz’s voice agent.`;
+          const modelId = this.cartesiaPreviewModelId(resolved.modelId);
           const synthesisResponse = await fetch('https://api.cartesia.ai/tts/bytes', {
             method: 'POST',
             headers: {
-              'X-Api-Key': secret.key,
+              Authorization: `Bearer ${secret.key}`,
+              'X-API-Key': secret.key,
               'Cartesia-Version': '2026-03-01',
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              model_id: resolved.modelId || 'sonic-english',
+              model_id: modelId,
               transcript: text,
               voice: {
                 mode: 'id',
@@ -280,7 +252,7 @@ export class VoicesService {
           modelId: resolved.modelId,
         };
         await this.storePreviewIfNeeded(dummyRimeVoice, audio, voiceRow?.previewAudioUrl);
-        return audio;
+        return { audio, contentType: 'audio/wav' };
       } catch (error: unknown) {
         if (error instanceof ServiceUnavailableException) {
           throw error;
@@ -910,6 +882,14 @@ export class VoicesService {
       .trim()
       .replace(/[^a-zA-Z0-9._-]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'unknown';
+  }
+
+  private cartesiaPreviewModelId(modelId: string | null | undefined): string {
+    const trimmed = modelId?.trim();
+    if (!trimmed || trimmed === CARTESIA_PROVIDER_ID) {
+      return CARTESIA_DEFAULT_TTS_MODEL;
+    }
+    return trimmed;
   }
 
   private isHttpUrl(value: string): boolean {

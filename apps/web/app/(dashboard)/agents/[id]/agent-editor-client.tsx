@@ -55,7 +55,6 @@ import {
   isCatalogOnlyVoiceProvider,
   isRuntimeTtsProvider,
   RUNTIME_PIPELINE_FOOTNOTE,
-  RUNTIME_STT_PROVIDER,
   RUNTIME_TTS_PROVIDER,
   type VoiceRuntimeStatusLabel,
   VOICE_PREVIEW_UNAVAILABLE_MESSAGE,
@@ -93,6 +92,7 @@ function preloadTestCallModal() {
 
 const VERSION_HISTORY_PREVIEW_LIMIT = 3;
 const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
+const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
 
 const LLM_OPTIONS = [
   { value: DEFAULT_LLM_MODEL, label: 'Groq - Llama 3.3 70B Versatile' },
@@ -120,7 +120,9 @@ const VOICE_AVATAR_COUNTS = {
 type VoiceAvatarFolder = keyof typeof VOICE_AVATAR_COUNTS;
 
 const STT_OPTIONS = [
-  { value: 'deepgram', label: 'Deepgram STT' },
+  { value: DEFAULT_STT_MODEL, label: 'Deepgram - Nova-2 Conversational AI' },
+  { value: 'nova-2', label: 'Deepgram - Nova-2' },
+  { value: 'nova-3', label: 'Deepgram - Nova-3' },
 ] as const;
 
 const VOICE_PREVIEW_FALLBACK_TEXT = 'Hi, I am Awaaz’s voice agent.';
@@ -264,6 +266,7 @@ interface AgentVersion {
   systemPrompt: string;
   voiceId: string;
   model: string;
+  sttModel?: string | null;
   temperature: number;
   maxTokens: number;
   firstMessage: string | null;
@@ -362,6 +365,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [prompt, setPrompt] = useState('');
   const [selectedVoiceId, setSelectedVoiceId] = useState('');
   const [selectedModelId, setSelectedModelId] = useState(DEFAULT_LLM_MODEL);
+  const [selectedSttModel, setSelectedSttModel] = useState(DEFAULT_STT_MODEL);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [promptHydrated, setPromptHydrated] = useState(false);
 
@@ -509,7 +513,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     (selectedVersion
       ? prompt !== selectedVersion.systemPrompt ||
         selectedVoiceId !== selectedVersion.voiceId ||
-        selectedModelId !== (selectedVersion.model ?? DEFAULT_LLM_MODEL)
+        selectedModelId !== (selectedVersion.model ?? DEFAULT_LLM_MODEL) ||
+        selectedSttModel !== (selectedVersion.sttModel ?? DEFAULT_STT_MODEL)
       : prompt.trim().length > 0);
 
   const editorRuntimeAssessment = useMemo(
@@ -614,6 +619,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setPrompt(useDraft ? draftPrompt : baseline);
     setSelectedVoiceId(baselineVersion?.voiceId ?? '');
     setSelectedModelId(baselineVersion?.model ?? DEFAULT_LLM_MODEL);
+    setSelectedSttModel(baselineVersion?.sttModel ?? DEFAULT_STT_MODEL);
     setSelectedVersionId(baselineVersion?.id ?? null);
     setPromptHydrated(true);
   }, [agent, draftPrompt, promptHydrated, versions]);
@@ -881,6 +887,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(version.systemPrompt);
       setSelectedVoiceId(version.voiceId);
       setSelectedModelId(version.model ?? DEFAULT_LLM_MODEL);
+      setSelectedSttModel(version.sttModel ?? DEFAULT_STT_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setPreviewingVersion(null);
@@ -923,6 +930,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(restored.systemPrompt);
       setSelectedVoiceId(restored.voiceId);
       setSelectedModelId(restored.model ?? DEFAULT_LLM_MODEL);
+      setSelectedSttModel(restored.sttModel ?? DEFAULT_STT_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setRestoreTarget(null);
@@ -981,6 +989,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       systemPrompt: prompt,
       voiceId: selectedVoiceId,
       model: selectedModelId,
+      sttModel: selectedSttModel,
       temperature: source?.temperature ?? 0.7,
       maxTokens: source?.maxTokens ?? 1024,
       endCallPhrases: source?.endCallPhrases ?? [],
@@ -990,7 +999,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       body.firstMessage = fm;
     }
     return body;
-  }, [prompt, selectedModelId, selectedVoiceId, selectedVersion, agent?.currentVersion]);
+  }, [prompt, selectedModelId, selectedSttModel, selectedVoiceId, selectedVersion, agent?.currentVersion]);
 
   const updateCurrentVersionFlow = async () => {
     if (saveInFlightRef.current || saveBusy !== null || versionPanelBusy) {
@@ -1046,6 +1055,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(updated.systemPrompt);
       setSelectedVoiceId(updated.voiceId);
       setSelectedModelId(updated.model ?? DEFAULT_LLM_MODEL);
+      setSelectedSttModel(updated.sttModel ?? DEFAULT_STT_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setToast(
@@ -1096,6 +1106,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             systemPrompt: selectedVersion.systemPrompt,
             voiceId: voiceId,
             model: selectedModelId,
+            sttModel: selectedSttModel,
             temperature: selectedVersion.temperature,
             maxTokens: selectedVersion.maxTokens,
             firstMessage: selectedVersion.firstMessage,
@@ -1125,9 +1136,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       });
       setToast(
         savedRuntime.isRuntimeTtsVoice
-          ? savedRuntime.warnings.length > 0
-            ? 'Voice saved. Runtime is enabled; production verification is still pending.'
-            : 'Voice setting saved.'
+          ? 'Voice setting saved.'
           : 'Voice saved. Publish and Test Agent require a runtime TTS voice and Groq model.',
       );
     } catch (e) {
@@ -1200,6 +1209,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setPrompt(created.systemPrompt);
       setSelectedVoiceId(created.voiceId);
       setSelectedModelId(created.model ?? DEFAULT_LLM_MODEL);
+      setSelectedSttModel(created.sttModel ?? DEFAULT_STT_MODEL);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       console.debug('[AgentEditor] Saved version voice', {
@@ -1365,9 +1375,41 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return options.length > 0 ? options : fallback;
   };
 
+  const buildSttModelOptions = (fallback: readonly PipelineOption[]) => {
+    if (!catalogProviders) return fallback;
+    const deepgram = catalogProviders.find((p) => p.kind === 'stt' && p.id === 'deepgram');
+    if (!deepgram) return fallback;
+    const models = deepgram.models?.length
+      ? deepgram.models
+      : deepgram.defaultModel
+        ? [{ id: deepgram.defaultModel, label: deepgram.defaultModel }]
+        : [];
+    const options = models.map((model) => ({
+      value: model.id,
+      label: `${deepgram.label} - ${model.label}`,
+      disabled: !deepgram.available,
+      description: !deepgram.available && deepgram.availableVia
+        ? `Available via ${deepgram.availableVia}`
+        : undefined,
+    }));
+    return options.length > 0 ? options : fallback;
+  };
+
   const ttsOptions = buildCatalogProviderOptions('tts', TTS_OPTIONS);
-  const sttOptions = buildCatalogProviderOptions('stt', STT_OPTIONS);
+  let sttOptions = buildSttModelOptions(STT_OPTIONS);
   let llmOptions = buildLlmOptions(LLM_OPTIONS);
+
+  if (!sttOptions.some((o) => o.value === selectedSttModel)) {
+    sttOptions = [
+      ...sttOptions,
+      {
+        value: selectedSttModel,
+        label: `Current STT - ${selectedSttModel}`,
+        disabled: true,
+        description: 'Not supported for live runtime yet',
+      },
+    ];
+  }
 
   if (!llmOptions.some((o) => o.value === selectedModelId)) {
     llmOptions = [
@@ -1493,7 +1535,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         return;
       }
 
-      if (voice.provider === 'cartesia') {
+      if (voice.provider === 'cartesia' || voice.provider === 'inworld') {
         return;
       }
 
@@ -1529,7 +1571,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         const voiceProvider = voiceProviderIdFromStoredId(voice.rimeVoiceId, voices);
         const storedUrl = storedVoicePreviewUrl(voice);
 
-        if (voiceProvider !== RUNTIME_TTS_PROVIDER && voiceProvider !== 'cartesia') {
+        if (
+          voiceProvider !== RUNTIME_TTS_PROVIDER &&
+          voiceProvider !== 'cartesia' &&
+          voiceProvider !== 'inworld'
+        ) {
           if (!storedUrl) {
             throw new Error(VOICE_PREVIEW_UNAVAILABLE_MESSAGE);
           }
@@ -1538,7 +1584,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           return objectUrl;
         }
 
-        if (storedUrl && voiceProvider !== 'cartesia') {
+        if (storedUrl && voiceProvider !== 'cartesia' && voiceProvider !== 'inworld') {
           try {
             const objectUrl = await fetchStoredVoicePreviewObjectUrl(storedUrl);
             previewCacheRef.current.set(cacheKey, objectUrl);
@@ -2341,12 +2387,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                         ?.label ?? 'Rime'
                 }
               />
-              <PipelineRuntimeField
+              <PipelineSelect
                 label="STT"
-                valueLabel={
-                  sttOptions.find((option) => option.value === RUNTIME_STT_PROVIDER)
-                    ?.label ?? 'Deepgram'
-                }
+                value={selectedSttModel}
+                options={sttOptions}
+                onValueChange={setSelectedSttModel}
               />
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {RUNTIME_PIPELINE_FOOTNOTE}
@@ -2914,13 +2959,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
                   {CATALOG_ONLY_VOICE_MESSAGE}
                 </p>
-              ) : isRuntimeTtsProvider(selectedVoiceProvider) &&
-                selectedVoiceProvider !== 'rime' ? (
-                <p className="mt-2 text-[11px] leading-relaxed text-amber-900/90 dark:text-amber-100/90">
-                  Runtime enabled for {voiceProviderLabel(selectedVoiceProvider)}.
-                  Production verification is still pending before calling this
-                  stack production-ready.
-                </p>
               ) : null}
             </div>
           </div>
@@ -3051,7 +3089,6 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                             {voiceRuntimeStatusLabels(v, voices)
                               .filter(
                                 (label) =>
-                                  label === 'Verification Pending' ||
                                   label === 'Preview Unavailable',
                               )
                               .map((label) => (
@@ -3561,7 +3598,7 @@ function VoiceRuntimeStatusPill({
   label: VoiceRuntimeStatusLabel;
 }) {
   const tone =
-    label === 'Verification Pending' || label === 'Preview Unavailable'
+    label === 'Preview Unavailable'
       ? 'border-amber-500/35 bg-amber-500/10 text-amber-950 dark:text-amber-100'
       : label === 'Runtime Enabled' || label === 'Preview Available'
         ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-950 dark:text-emerald-100'

@@ -57,12 +57,12 @@ export class VoicesController {
     @Body() dto: VoicePreviewDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const audio = await this.voices.preview(dto.voiceId, organizationIdFromRequest(req));
+    const preview = await this.voices.preview(dto.voiceId, organizationIdFromRequest(req));
     res.set({
       'Cache-Control': 'no-store',
-      'Content-Length': audio.byteLength.toString(),
-      'Content-Type': 'audio/wav',
+      'Content-Length': preview.audio.byteLength.toString(),
+      'Content-Type': preview.contentType,
     });
-    return new StreamableFile(Buffer.from(audio));
+    return new StreamableFile(Buffer.from(preview.audio));
   }
 }

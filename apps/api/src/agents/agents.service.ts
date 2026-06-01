@@ -20,6 +20,11 @@ const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
 const DEFAULT_LLM_PROVIDER_ID = 'groq';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
+const RUNTIME_STT_MODEL_IDS = new Set([
+  DEFAULT_STT_MODEL,
+  'nova-2',
+  'nova-3',
+]);
 
 @Injectable()
 export class AgentsService {
@@ -705,6 +710,10 @@ export class AgentsService {
     resolvedVoice: ResolvedTtsVoice,
   ) {
     const llmModel = dto.model ?? DEFAULT_LLM_MODEL;
+    const sttModel = dto.sttModel?.trim() || DEFAULT_STT_MODEL;
+    if (!RUNTIME_STT_MODEL_IDS.has(sttModel)) {
+      throw new BadRequestException(`Unsupported Deepgram STT model: ${sttModel}`);
+    }
     return {
       voiceId: resolvedVoice.storedVoiceId,
       model: llmModel,
@@ -714,7 +723,7 @@ export class AgentsService {
       llmProviderId: DEFAULT_LLM_PROVIDER_ID,
       llmModel,
       sttProviderId: DEFAULT_STT_PROVIDER_ID,
-      sttModel: DEFAULT_STT_MODEL,
+      sttModel,
     };
   }
 }

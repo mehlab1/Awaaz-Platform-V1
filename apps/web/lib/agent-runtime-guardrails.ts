@@ -22,9 +22,6 @@ export type GroqRuntimeModelId = (typeof GROQ_RUNTIME_MODEL_IDS)[number];
 export const CATALOG_ONLY_VOICE_MESSAGE =
   'Catalog only: this provider is not enabled for live calls or Test Agent yet.';
 
-export const PROVIDER_VERIFICATION_PENDING_MESSAGE =
-  'Provider runtime enabled but awaiting production verification.';
-
 export const GROQ_RUNTIME_ISSUE_MESSAGE =
   'Live runtime currently supports Groq models only (Llama 3.3 70B or GPT-OSS).';
 
@@ -37,8 +34,7 @@ export const VOICE_PREVIEW_UNAVAILABLE_MESSAGE =
 export type VoiceRuntimeStatusLabel =
   | 'Runtime Enabled'
   | 'Preview Available'
-  | 'Preview Unavailable'
-  | 'Verification Pending';
+  | 'Preview Unavailable';
 
 export interface VoiceRef {
   rimeVoiceId: string;
@@ -153,10 +149,6 @@ export function assessRuntimeConfig(params: {
   if (!isGroqModel) {
     blockingIssues.push(GROQ_RUNTIME_ISSUE_MESSAGE);
   }
-  if (isRuntimeTtsVoice && !isRimeVoice && isGroqModel) {
-    warnings.push(PROVIDER_VERIFICATION_PENDING_MESSAGE);
-  }
-
   const canRunLive = isRuntimeTtsVoice && isGroqModel;
   const selectedVoice = params.voices.find(
     (voice) => voice.rimeVoiceId === params.voiceId.trim(),

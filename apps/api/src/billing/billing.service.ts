@@ -105,6 +105,10 @@ export class BillingService {
       (candidate) =>
         candidate.providerModelId === input.providerModelId &&
         candidate.meter === input.meter,
+    ) ?? version.rates.find(
+      (candidate) =>
+        candidate.providerModelId === 'default' &&
+        candidate.meter === input.meter,
     );
 
     if (!rate) {

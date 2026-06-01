@@ -38,6 +38,7 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
     id: 'cartesia',
     kind: 'tts',
     label: 'Cartesia',
+    defaultModel: 'sonic-3.5',
     finovaEnvVars: ['FINOVA_CARTESIA_API_KEY', 'CARTESIA_API_KEY'],
     validationStyle: 'cartesia-voices',
   },
@@ -45,6 +46,7 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
     id: 'elevenlabs',
     kind: 'tts',
     label: 'ElevenLabs',
+    defaultModel: 'eleven_flash_v2_5',
     finovaEnvVars: [
       'FINOVA_ELEVENLABS_API_KEY',
       'ELEVENLABS_API_KEY',
@@ -56,6 +58,7 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
     id: 'inworld',
     kind: 'tts',
     label: 'Inworld',
+    defaultModel: 'inworld-tts-2',
     finovaEnvVars: ['FINOVA_INWORLD_API_KEY', 'INWORLD_API_KEY'],
     validationStyle: 'local-only',
   },
@@ -94,6 +97,21 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
     kind: 'stt',
     label: 'Deepgram',
     defaultModel: 'nova-2-conversationalai',
+    models: [
+      {
+        id: 'nova-2-conversationalai',
+        label: 'Nova-2 Conversational AI',
+        default: true,
+      },
+      {
+        id: 'nova-2',
+        label: 'Nova-2',
+      },
+      {
+        id: 'nova-3',
+        label: 'Nova-3',
+      },
+    ],
     finovaEnvVars: ['FINOVA_DEEPGRAM_API_KEY', 'DEEPGRAM_API_KEY'],
     validationStyle: 'deepgram-projects',
   },
