@@ -109,14 +109,14 @@ const TTS_OPTIONS = [
   { value: 'rime', label: 'Rime TTS' },
 ] as const;
 
-const VOICE_PROVIDERS = [
+const DEFAULT_VOICE_PROVIDER_OPTIONS = [
   { id: 'rime', label: 'Rime' },
   { id: 'elevenlabs', label: 'ElevenLabs' },
   { id: 'cartesia', label: 'Cartesia' },
   { id: 'inworld', label: 'Inworld' },
 ] as const;
 
-type VoiceProviderId = (typeof VOICE_PROVIDERS)[number]['id'];
+type VoiceProviderId = string;
 
 const VOICE_AVATAR_COUNTS = {
   female: 12,
@@ -1355,13 +1355,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     : voiceProviderLabel(selectedVoiceProvider);
   const voiceProviderCounts = useMemo(() => {
     const counts = Object.fromEntries(
-      VOICE_PROVIDERS.map((provider) => [provider.id, 0]),
-    ) as Record<VoiceProviderId, number>;
+      voiceProviderCatalogOptions.map((provider) => [provider.id, 0]),
+    ) as Record<string, number>;
     for (const voice of voices) {
-      counts[voiceProviderId(voice)] += 1;
+      const providerId = voiceProviderId(voice);
+      counts[providerId] = (counts[providerId] ?? 0) + 1;
     }
     return counts;
-  }, [voices]);
+  }, [voiceProviderCatalogOptions, voices]);
   const providerVoices = useMemo(
     () =>
       voices.filter(
@@ -1436,6 +1437,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const providerMeta = (providerId: string) =>
     catalogProviders?.find((provider) => provider.id === providerId) ?? null;
 
+  const voiceProviderCatalogOptions = useMemo(() => {
+    const catalogTtsProviders =
+      catalogProviders
+        ?.filter((provider) => provider.kind === 'tts')
+        .map((provider) => ({ id: provider.id, label: provider.label })) ?? [];
+
+    if (catalogTtsProviders.length > 0) {
+      return catalogTtsProviders;
+    }
+
+    return [...DEFAULT_VOICE_PROVIDER_OPTIONS];
+  }, [catalogProviders]);
+
   const buildProviderOptions = (
     kind: 'tts' | 'stt' | 'llm',
     fallback: readonly PipelineOption[],
@@ -1446,19 +1460,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return matching.map((p) => ({
       value: p.id,
       label: p.label,
-      disabled:
-        (kind === 'stt' && p.id !== DEFAULT_STT_PROVIDER) ||
-        (kind === 'llm' && p.id !== DEFAULT_LLM_PROVIDER),
       description:
-        kind === 'stt' && p.id !== DEFAULT_STT_PROVIDER
-          ? 'Runtime support coming in a future release'
-          : kind === 'llm' && p.id !== DEFAULT_LLM_PROVIDER
-            ? 'Runtime support coming in a future release'
-            : p.finovaManagedAvailable
-              ? 'Finova Managed available'
-              : p.organizationCredential?.hasSecret
-                ? 'BYOK key configured'
-                : 'Setup required',
+        p.finovaManagedAvailable
+          ? 'Finova Managed available'
+          : p.organizationCredential?.hasSecret
+            ? 'BYOK key configured'
+            : 'Setup required',
     }));
   };
 
@@ -3157,7 +3164,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 </p>
               </div>
               <div className="mt-1.5 flex gap-2 overflow-x-auto pb-1 scrollbar-none" role="tablist" aria-label="Voice provider">
-                {VOICE_PROVIDERS.map((provider) => {
+                {voiceProviderCatalogOptions.map((provider) => {
                   const isActive = selectedVoiceProvider === provider.id;
                   const providerCount = voiceProviderCounts[provider.id];
                   return (
@@ -4565,39 +4572,37 @@ function VoiceMetaPill({ children }: { children: string }) {
 function voiceProviderId(voice?: VoiceDto | null): VoiceProviderId {
   const provider = normalizeVoiceFilterValue(voice?.provider ?? '');
   if (provider) {
-    const match = VOICE_PROVIDERS.find((item) => item.id === provider);
-    if (match) {
-      return match.id;
-    }
+    return provider;
   }
   return 'rime';
 }
 
 function normalizeVoiceProviderId(value: string): VoiceProviderId | null {
   const normalized = normalizeVoiceFilterValue(value);
-  const match = VOICE_PROVIDERS.find((item) => item.id === normalized);
-  return match?.id ?? null;
+  return normalized || null;
 }
 
 function voiceProviderLabel(providerId: VoiceProviderId): string {
-  return (
-    VOICE_PROVIDERS.find((provider) => provider.id === providerId)?.label ??
-    'Rime'
-  );
+  const knownLabels: Record<string, string> = {
+    rime: 'Rime',
+    elevenlabs: 'ElevenLabs',
+    cartesia: 'Cartesia',
+    inworld: 'Inworld',
+  };
+  return knownLabels[providerId] ?? humanizeVoiceToken(providerId);
 }
 
 function voiceProviderInitials(providerId: VoiceProviderId): string {
-  switch (providerId) {
-    case 'elevenlabs':
-      return 'EL';
-    case 'cartesia':
-      return 'CA';
-    case 'inworld':
-      return 'IW';
-    case 'rime':
-    default:
-      return 'RI';
+  const parts = voiceProviderLabel(providerId)
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean);
+  if (parts.length === 0) {
+    return 'VP';
   }
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
 }
 
 function voiceGenderLabel(voice: VoiceDto): string {

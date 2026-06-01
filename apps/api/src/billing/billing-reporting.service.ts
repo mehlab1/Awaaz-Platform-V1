@@ -33,6 +33,16 @@ interface LedgerAgentBreakdownRow extends LedgerBreakdownRow {
   bucket_label: string;
 }
 
+interface LedgerPipelineComponentBreakdownRow {
+  component: string;
+  credential_mode: ProviderCredentialMode;
+  line_item_count: unknown;
+  usage_quantity: unknown;
+  base_cost_usd_micros: unknown;
+  markup_cost_usd_micros: unknown;
+  total_cost_usd_micros: unknown;
+}
+
 interface RecentSnapshotRow {
   id: string;
   lineItemCount: number;
@@ -89,6 +99,35 @@ export interface BillingBreakdownResponse {
   range: { dateFrom: string; dateTo: string };
   filters: BillingReportFilters;
   items: BillingBreakdownResponseItem[];
+}
+
+export interface BillingPipelineComponentModeSummary {
+  credentialMode: ProviderCredentialMode;
+  lineItemCount: number;
+  usageQuantity: number;
+  baseCostUsd: number;
+  markupCostUsd: number;
+  totalCostUsd: number;
+  baseCostUsdMicros: string;
+  markupCostUsdMicros: string;
+  totalCostUsdMicros: string;
+}
+
+export interface BillingPipelineComponentSummaryItem {
+  component: string;
+  componentLabel: string;
+  modes: BillingPipelineComponentModeSummary[];
+  finovaManagedTotalCostUsd: number;
+  finovaManagedTotalCostUsdMicros: string;
+  byokUsageQuantity: number;
+  byokLineItemCount: number;
+}
+
+export interface BillingPipelineComponentBreakdownResponse {
+  generatedAt: string;
+  range: { dateFrom: string; dateTo: string };
+  filters: BillingReportFilters;
+  items: BillingPipelineComponentSummaryItem[];
 }
 
 export interface BillingRecentCallRow {
@@ -206,6 +245,111 @@ export class BillingReportingService {
       'credentialMode',
       credentialModeLabel,
     );
+  }
+
+  async pipelineComponentBreakdown(
+    organizationId: string,
+    query: BillingReportQueryDto,
+  ): Promise<BillingPipelineComponentBreakdownResponse> {
+    const range = resolveRange(query.dateFrom, query.dateTo);
+    const filters = normalizeFilters(query);
+
+    const rows = await this.prisma.$queryRaw<LedgerPipelineComponentBreakdownRow[]>`
+      SELECT
+        COALESCE(ule."metadata"->>'source', 'unknown') AS component,
+        ule."credentialMode" AS credential_mode,
+        COUNT(*)::int AS line_item_count,
+        COALESCE(SUM(ule."usageQuantity"), 0)::text AS usage_quantity,
+        COALESCE(SUM(ule."baseCostUsdMicros"), 0)::text AS base_cost_usd_micros,
+        COALESCE(SUM(ule."markupUsdMicros"), 0)::text AS markup_cost_usd_micros,
+        COALESCE(SUM(ule."totalCostUsdMicros"), 0)::text AS total_cost_usd_micros
+      FROM "usage_ledger_entries" ule
+      WHERE ule."createdAt" >= ${range.start}
+        AND ule."createdAt" < ${range.endExclusive}
+        AND ule."organizationId" = ${organizationId}
+        AND COALESCE(ule."metadata"->>'source', 'unknown') IN ('stt', 'llm', 'tts')
+        ${ledgerFilterSql(query.providerId, query.credentialMode)}
+      GROUP BY 1, 2
+      ORDER BY 1 ASC, 2 ASC
+    `;
+
+    const byComponent = new Map<string, BillingPipelineComponentSummaryItem>();
+
+    for (const row of rows) {
+      const component = row.component;
+      const modeSummary: BillingPipelineComponentModeSummary = {
+        credentialMode: row.credential_mode,
+        lineItemCount: toInt(row.line_item_count),
+        usageQuantity: toNumber(row.usage_quantity),
+        baseCostUsdMicros: toMicrosString(row.base_cost_usd_micros),
+        markupCostUsdMicros: toMicrosString(row.markup_cost_usd_micros),
+        totalCostUsdMicros: toMicrosString(row.total_cost_usd_micros),
+        baseCostUsd: microsToUsd(row.base_cost_usd_micros),
+        markupCostUsd: microsToUsd(row.markup_cost_usd_micros),
+        totalCostUsd: microsToUsd(row.total_cost_usd_micros),
+      };
+
+      const current = byComponent.get(component);
+      if (!current) {
+        byComponent.set(component, {
+          component,
+          componentLabel: pipelineComponentLabel(component),
+          modes: [modeSummary],
+          finovaManagedTotalCostUsd:
+            modeSummary.credentialMode === 'FINOVA_MANAGED'
+              ? modeSummary.totalCostUsd
+              : 0,
+          finovaManagedTotalCostUsdMicros:
+            modeSummary.credentialMode === 'FINOVA_MANAGED'
+              ? modeSummary.totalCostUsdMicros
+              : '0',
+          byokUsageQuantity:
+            modeSummary.credentialMode === 'BYOK'
+              ? modeSummary.usageQuantity
+              : 0,
+          byokLineItemCount:
+            modeSummary.credentialMode === 'BYOK'
+              ? modeSummary.lineItemCount
+              : 0,
+        });
+        continue;
+      }
+
+      current.modes.push(modeSummary);
+      if (modeSummary.credentialMode === 'FINOVA_MANAGED') {
+        current.finovaManagedTotalCostUsd = Number(
+          (current.finovaManagedTotalCostUsd + modeSummary.totalCostUsd).toFixed(
+            6,
+          ),
+        );
+        current.finovaManagedTotalCostUsdMicros = (
+          BigInt(current.finovaManagedTotalCostUsdMicros) +
+          BigInt(modeSummary.totalCostUsdMicros)
+        ).toString();
+      } else {
+        current.byokUsageQuantity += modeSummary.usageQuantity;
+        current.byokLineItemCount += modeSummary.lineItemCount;
+      }
+    }
+
+    const order = ['stt', 'llm', 'tts'];
+    const items = [...byComponent.values()].sort((a, b) => {
+      const ai = order.indexOf(a.component);
+      const bi = order.indexOf(b.component);
+      if (ai === -1 && bi === -1) {
+        return a.component.localeCompare(b.component);
+      }
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      range: { dateFrom: range.dateFrom, dateTo: range.dateTo },
+      filters,
+      items,
+    };
   }
 
   async agentBreakdown(
@@ -566,6 +710,15 @@ function usageMeterLabel(value: string): string {
 
 function credentialModeLabel(value: string): string {
   return value === 'BYOK' ? 'BYOK' : 'Finova-managed';
+}
+
+function pipelineComponentLabel(value: string): string {
+  const labels: Record<string, string> = {
+    stt: 'Speech-to-Text (STT)',
+    llm: 'Text Generation (LLM)',
+    tts: 'Text-to-Speech (TTS)',
+  };
+  return labels[value] ?? titleCase(value);
 }
 
 function titleCase(value: string): string {

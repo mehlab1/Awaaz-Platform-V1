@@ -53,17 +53,22 @@ export class BillingService {
 
   async quote(input: BillingCalculationInput): Promise<BillingQuote> {
     const rate = await this.lookupRate(input);
+    const isByok = input.credentialMode === ProviderCredentialMode.BYOK;
     const usageMicros = this.quantityToMicros(input.usageQuantity);
-    const baseCostUsdMicros = this.calculateBaseCostUsdMicros(rate, usageMicros);
+    const baseCostUsdMicros = isByok
+      ? 0n
+      : this.calculateBaseCostUsdMicros(rate, usageMicros);
     const effectiveMarkupBps =
-      input.credentialMode === ProviderCredentialMode.BYOK
+      isByok
         ? 0
         : Math.max(0, Math.trunc(input.markupBps));
-    const markupUsdMicros = this.calculateMarkupUsdMicros(
-      baseCostUsdMicros,
-      effectiveMarkupBps,
-      rate.roundingMode,
-    );
+    const markupUsdMicros = isByok
+      ? 0n
+      : this.calculateMarkupUsdMicros(
+          baseCostUsdMicros,
+          effectiveMarkupBps,
+          rate.roundingMode,
+        );
 
     return {
       ...rate,

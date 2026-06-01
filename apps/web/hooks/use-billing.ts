@@ -49,6 +49,35 @@ export interface BillingBreakdownResponse {
   items: BillingBreakdownItem[];
 }
 
+export interface BillingPipelineComponentModeSummary {
+  credentialMode: ProviderCredentialMode;
+  lineItemCount: number;
+  usageQuantity: number;
+  baseCostUsdMicros: string;
+  markupCostUsdMicros: string;
+  totalCostUsdMicros: string;
+  baseCostUsd: number;
+  markupCostUsd: number;
+  totalCostUsd: number;
+}
+
+export interface BillingPipelineComponentSummaryItem {
+  component: string;
+  componentLabel: string;
+  modes: BillingPipelineComponentModeSummary[];
+  finovaManagedTotalCostUsd: number;
+  finovaManagedTotalCostUsdMicros: string;
+  byokUsageQuantity: number;
+  byokLineItemCount: number;
+}
+
+export interface BillingPipelineComponentBreakdownResponse {
+  generatedAt: string;
+  range: { dateFrom: string; dateTo: string };
+  filters: BillingReportFilters;
+  items: BillingPipelineComponentSummaryItem[];
+}
+
 export interface BillingRecentCallItem {
   callId: string;
   callStatus: string;
@@ -135,6 +164,12 @@ export function useBilling(options: UseBillingQueryOptions = {}) {
     return res.json() as Promise<BillingBreakdownResponse>;
   };
 
+  const fetchPipelineComponentBreakdown = async () => {
+    const res = await apiCall(`/api/v1/billing/pipeline-component-breakdown${buildQueryString(options)}`);
+    if (!res.ok) throw new Error('Failed to fetch pipeline component breakdown');
+    return res.json() as Promise<BillingPipelineComponentBreakdownResponse>;
+  };
+
   const summary = useQuery({
     queryKey: ['billing', 'summary', activeOrgId, options],
     queryFn: fetchSummary,
@@ -165,12 +200,19 @@ export function useBilling(options: UseBillingQueryOptions = {}) {
     enabled: !!activeOrgId,
   });
 
+  const pipelineComponentBreakdown = useQuery({
+    queryKey: ['billing', 'pipelineComponentBreakdown', activeOrgId, options],
+    queryFn: fetchPipelineComponentBreakdown,
+    enabled: !!activeOrgId,
+  });
+
   return {
     summary,
     providerBreakdown,
     credentialModeBreakdown,
     usageBreakdown,
     agentBreakdown,
+    pipelineComponentBreakdown,
   };
 }
 

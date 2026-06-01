@@ -88,7 +88,19 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
   {
     id: 'anthropic',
     kind: 'llm',
-    label: 'Anthropic Claude',
+    label: 'Anthropic Claude (Coming Soon)',
+    defaultModel: 'claude-sonnet-4-0',
+    models: [
+      {
+        id: 'claude-sonnet-4-0',
+        label: 'Claude Sonnet 4.0',
+        default: true,
+      },
+      {
+        id: 'claude-opus-4-0',
+        label: 'Claude Opus 4.0',
+      },
+    ],
     finovaEnvVars: ['FINOVA_ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY'],
     validationStyle: 'anthropic-models',
   },
@@ -119,6 +131,18 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
     id: 'assemblyai',
     kind: 'stt',
     label: 'AssemblyAI',
+    defaultModel: 'universal-streaming-v2',
+    models: [
+      {
+        id: 'universal-streaming-v2',
+        label: 'Universal Streaming v2',
+        default: true,
+      },
+      {
+        id: 'universal-v2',
+        label: 'Universal v2',
+      },
+    ],
     finovaEnvVars: ['FINOVA_ASSEMBLYAI_API_KEY', 'ASSEMBLYAI_API_KEY'],
     validationStyle: 'assemblyai-transcripts',
   },
@@ -126,6 +150,18 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
     id: 'groq-whisper',
     kind: 'stt',
     label: 'Groq Whisper',
+    defaultModel: 'whisper-large-v3-turbo',
+    models: [
+      {
+        id: 'whisper-large-v3-turbo',
+        label: 'Whisper Large v3 Turbo',
+        default: true,
+      },
+      {
+        id: 'whisper-large-v3',
+        label: 'Whisper Large v3',
+      },
+    ],
     finovaEnvVars: ['FINOVA_GROQ_API_KEY', 'GROQ_API_KEY'],
     validationStyle: 'groq-models',
   },

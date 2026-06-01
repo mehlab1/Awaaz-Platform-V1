@@ -51,6 +51,18 @@ export class BillingController {
     );
   }
 
+  @Get('pipeline-component-breakdown')
+  @Roles(Role.VIEWER)
+  pipelineComponentBreakdown(
+    @Req() req: Request,
+    @Query() query: BillingReportQueryDto,
+  ) {
+    return this.billing.pipelineComponentBreakdown(
+      organizationIdFromRequest(req),
+      query,
+    );
+  }
+
   @Get('agent-breakdown')
   @Roles(Role.VIEWER)
   agentBreakdown(@Req() req: Request, @Query() query: BillingReportQueryDto) {

@@ -17,10 +17,10 @@ async function main(): Promise<void> {
       markupBps: 1500,
     });
 
-    assertEqual(byok.baseCostUsdMicros.toString(), '790000', 'BYOK base cost');
+    assertEqual(byok.baseCostUsdMicros.toString(), '0', 'BYOK base cost');
     assertEqual(byok.effectiveMarkupBps, 0, 'BYOK markup is zero');
     assertEqual(byok.markupUsdMicros.toString(), '0', 'BYOK markup cost');
-    assertEqual(byok.totalCostUsdMicros.toString(), '790000', 'BYOK total cost');
+    assertEqual(byok.totalCostUsdMicros.toString(), '0', 'BYOK total cost');
 
     const finova = await billing.quote({
       providerId: 'groq',

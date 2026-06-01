@@ -74,16 +74,29 @@ export function BillingClient() {
     credentialMode: credentialMode === 'all' ? undefined : credentialMode as ProviderCredentialMode,
   };
 
-  const { summary, providerBreakdown, credentialModeBreakdown, usageBreakdown, agentBreakdown } = useBilling(options);
+  const {
+    summary,
+    providerBreakdown,
+    credentialModeBreakdown,
+    usageBreakdown,
+    agentBreakdown,
+    pipelineComponentBreakdown,
+  } = useBilling(options);
   const recentCalls = useBillingRecentCalls({ ...options, page, limit: pageSize });
 
   if (!activeOrgId) {
     return <p className="text-sm text-muted-foreground">Select an organization first.</p>;
   }
 
-  const isLoading = summary.isLoading || providerBreakdown.isLoading || credentialModeBreakdown.isLoading || usageBreakdown.isLoading || agentBreakdown.isLoading;
-  const isError = summary.isError || providerBreakdown.isError || credentialModeBreakdown.isError || usageBreakdown.isError || agentBreakdown.isError;
+  const isLoading = summary.isLoading || providerBreakdown.isLoading || credentialModeBreakdown.isLoading || usageBreakdown.isLoading || agentBreakdown.isLoading || pipelineComponentBreakdown.isLoading;
+  const isError = summary.isError || providerBreakdown.isError || credentialModeBreakdown.isError || usageBreakdown.isError || agentBreakdown.isError || pipelineComponentBreakdown.isError;
   const isRecentCallsLoading = recentCalls.isLoading;
+  const pipelineItems = pipelineComponentBreakdown.data?.items ?? [];
+  const allPipelineComponentsByok =
+    pipelineItems.length > 0 &&
+    pipelineItems.every((item) =>
+      item.modes.length > 0 && item.modes.every((mode) => mode.credentialMode === 'BYOK'),
+    );
 
   return (
     <div className="space-y-6">
@@ -195,6 +208,65 @@ export function BillingClient() {
               </CardContent>
             </Card>
           </div>
+
+          {pipelineItems.length > 0 ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Pipeline Billing Attribution</CardTitle>
+                <CardDescription>
+                  Finova charges only apply to components using Finova Managed credentials.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {allPipelineComponentsByok ? (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
+                    Finova usage charges are $0 for this period because all STT/LLM/TTS components were configured with BYOK credentials.
+                  </div>
+                ) : null}
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  {pipelineItems.map((item) => {
+                    const managed = item.modes.find((mode) => mode.credentialMode === 'FINOVA_MANAGED');
+                    const byok = item.modes.find((mode) => mode.credentialMode === 'BYOK');
+                    const isByokOnly = Boolean(byok) && !managed;
+                    const isManagedOnly = Boolean(managed) && !byok;
+
+                    return (
+                      <div key={item.component} className="rounded-lg border border-border/60 bg-muted/15 p-3 space-y-1.5">
+                        <p className="text-sm font-semibold">{item.componentLabel}</p>
+                        {isManagedOnly ? (
+                          <>
+                            <p className="text-xs text-muted-foreground">Finova Managed</p>
+                            <p className="text-sm font-medium">Finova charge: ${item.finovaManagedTotalCostUsd.toFixed(4)}</p>
+                          </>
+                        ) : null}
+                        {isByokOnly ? (
+                          <>
+                            <p className="text-xs text-muted-foreground">BYOK</p>
+                            <p className="text-xs text-muted-foreground">Billed directly by provider</p>
+                            <p className="text-xs text-muted-foreground">Usage tracked but not charged by Finova</p>
+                            <p className="text-sm font-medium">Finova charge: $0.0000</p>
+                          </>
+                        ) : null}
+                        {!isManagedOnly && !isByokOnly ? (
+                          <>
+                            <p className="text-xs text-muted-foreground">Mixed credential modes in selected date range</p>
+                            <p className="text-xs text-muted-foreground">
+                              Finova Managed: ${managed?.totalCostUsd.toFixed(4) ?? '0.0000'}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              BYOK usage tracked externally: {byok?.lineItemCount ?? 0} records
+                            </p>
+                            <p className="text-sm font-medium">Finova charge: ${item.finovaManagedTotalCostUsd.toFixed(4)}</p>
+                          </>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {/* Cost by Agent */}
