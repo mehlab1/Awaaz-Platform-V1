@@ -28,7 +28,10 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
-import { dispatchOnboardingAgentCreated } from '@/components/onboarding/onboarding-provider';
+import {
+  dispatchOnboardingAgentCreated,
+  dispatchOnboardingAgentsLoaded,
+} from '@/components/onboarding/onboarding-provider';
 import { useOrgContext } from '@/components/org-context';
 import { cn } from '@/lib/utils';
 import {
@@ -128,8 +131,12 @@ export default function AgentsPage() {
         throw new Error(await responseMessage(voicesRes));
       }
 
-      setAgents((await agentsRes.json()) as AgentListRow[]);
+      const agentsData = (await agentsRes.json()) as AgentListRow[];
+      setAgents(agentsData);
       setVoices((await voicesRes.json()) as VoiceOption[]);
+      
+      const firstAgent = agentsData[0];
+      dispatchOnboardingAgentsLoaded(firstAgent?.id ?? null);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);

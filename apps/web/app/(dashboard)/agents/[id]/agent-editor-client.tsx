@@ -1061,6 +1061,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       }
       setPublishTarget(null);
       setToast(`Published live V${publishedNumber}.`);
+      
+      // Dispatch onboarding event
+      window.dispatchEvent(new CustomEvent('awaaz:onboarding:version-published'));
+      
       await loadData(showAllVersions && allVersionsLoaded);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -1701,6 +1705,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         setToast('BYOK key saved and validated.');
         await loadData(showAllVersions && allVersionsLoaded);
       }
+
+      // Dispatch onboarding event
+      window.dispatchEvent(new CustomEvent('awaaz:onboarding:api-keys-configured'));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setPageError(message);
@@ -2545,11 +2552,15 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
               <button
                 type="button"
+                data-onboarding-target="agent-blueprints"
                 className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium rounded-lg border border-border/30 bg-background hover:bg-muted/50 transition-colors",
                   blueprintDrawerOpen && "border-primary/20 bg-primary/[0.03] text-primary"
                 )}
-                onClick={() => setBlueprintDrawerOpen((prev) => !prev)}
+                onClick={() => {
+                  setBlueprintDrawerOpen((prev) => !prev);
+                  window.dispatchEvent(new CustomEvent('awaaz:onboarding:blueprints-viewed'));
+                }}
               >
                 <Sparkles className="size-3 text-amber-500" />
                 Blueprints
@@ -2573,7 +2584,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
           {/* The actual editor & blueprint drawer side-by-side */}
           <div className="flex items-start gap-4">
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0" data-onboarding-target="agent-prompt">
               {promptHydrated ? (
                 <AgentSystemPromptEditor
                   value={prompt}
@@ -2623,7 +2634,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         {/* ─── RIGHT COLUMN: Version Control Center ─── */}
         <div className="space-y-5 lg:self-start lg:sticky lg:top-[60px]">
           {/* Voice Pipeline */}
-          <div className="rounded-xl border border-border/50 bg-muted/[0.03] p-4 space-y-4">
+          <div className="rounded-xl border border-border/50 bg-muted/[0.03] p-4 space-y-4" data-onboarding-target="api-keys">
             <div>
               <h3 className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1.5">
                 <Settings2 className="size-3 text-muted-foreground" />
@@ -2656,6 +2667,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 }
                 onSaveKey={() => saveProviderKey(selectedSttProvider)}
                 credentialBusy={credentialSaveBusy === selectedSttProvider}
+                onboardingTarget="api-keys-mode"
               />
 
               <PipelineProviderCard
@@ -2841,6 +2853,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   variant="default"
                   size="sm"
                   className="w-full h-9 text-xs font-semibold rounded-lg transition-all"
+                  data-onboarding-target="publish-version"
                   onMouseEnter={() => {
                     if (canPublishLive) {
                       setHoveredVersionBtn('publish');
@@ -4005,6 +4018,7 @@ function PipelineProviderCard({
   onKeyDraftChange: (value: string) => void;
   onSaveKey: () => void;
   credentialBusy: boolean;
+  onboardingTarget?: string;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -4022,10 +4036,16 @@ function PipelineProviderCard({
     <section className="overflow-hidden rounded-lg border border-border/50 bg-background/70">
       <button
         type="button"
+        data-onboarding-target={onboardingTarget}
         className="flex w-full items-center gap-3 px-3 py-3 text-left transition hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-expanded={open}
         aria-controls={panelId}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          setOpen((current) => !current);
+          if (onboardingTarget) {
+            window.dispatchEvent(new CustomEvent(`awaaz:onboarding:${onboardingTarget}-clicked`));
+          }
+        }}
       >
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

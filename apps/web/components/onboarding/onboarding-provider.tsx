@@ -12,6 +12,7 @@ import {
 import { useUser } from '@clerk/nextjs';
 import { usePathname, useRouter } from 'next/navigation';
 import useLocalStorageState from 'use-local-storage-state';
+import { useState } from 'react';
 
 import { useOrgContext } from '@/components/org-context';
 
@@ -19,6 +20,11 @@ export type OnboardingStepId =
   | 'welcome'
   | 'organization'
   | 'agent'
+  | 'agentBlueprints'
+  | 'agentPrompt'
+  | 'apiKeysMode'
+  | 'apiKeys'
+  | 'publishVersion'
   | 'testCall';
 
 export type OnboardingStatus =
@@ -30,6 +36,11 @@ export type OnboardingStatus =
 interface OnboardingStepState {
   organizationCreated: boolean;
   agentCreated: boolean;
+  blueprintsViewed: boolean;
+  promptConfigured: boolean;
+  apiKeysModeViewed: boolean;
+  apiKeysConfigured: boolean;
+  versionPublished: boolean;
   testCallCompleted: boolean;
 }
 
@@ -74,13 +85,24 @@ const DEFAULT_STATE: StoredOnboardingState = {
   steps: {
     organizationCreated: false,
     agentCreated: false,
+    blueprintsViewed: false,
+    promptConfigured: false,
+    apiKeysModeViewed: false,
+    apiKeysConfigured: false,
+    versionPublished: false,
     testCallCompleted: false,
   },
 };
 
 const ONBOARDING_EVENT_AGENT_CREATED = 'awaaz:onboarding:agent-created';
+const ONBOARDING_EVENT_BLUEPRINTS_VIEWED = 'awaaz:onboarding:blueprints-viewed';
+const ONBOARDING_EVENT_PROMPT_CONFIGURED = 'awaaz:onboarding:prompt-configured';
+const ONBOARDING_EVENT_API_KEYS_MODE_VIEWED = 'awaaz:onboarding:api-keys-mode-clicked';
+const ONBOARDING_EVENT_API_KEYS_CONFIGURED = 'awaaz:onboarding:api-keys-configured';
+const ONBOARDING_EVENT_VERSION_PUBLISHED = 'awaaz:onboarding:version-published';
 const ONBOARDING_EVENT_TEST_COMPLETED =
   'awaaz:onboarding:test-interaction-completed';
+const ONBOARDING_EVENT_AGENTS_LOADED = 'awaaz:onboarding:agents-loaded';
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 
@@ -96,6 +118,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     storageKey,
     { defaultValue: DEFAULT_STATE },
   );
+  const [firstAgentId, setFirstAgentId] = useState<string | null>(null);
 
   const normalizedState = normalizeState(state);
   const organizationCreated =
@@ -126,6 +149,44 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         completed: normalizedState.steps.agentCreated,
       },
       {
+        id: 'agentBlueprints',
+        title: 'Start with a Blueprint',
+        description: 'Explore pre-built prompt templates to kickstart your agent.',
+        target: 'agent-blueprints',
+        completed: normalizedState.steps.blueprintsViewed,
+      },
+      {
+        id: 'agentPrompt',
+        title: 'Write a system prompt',
+        description:
+          'Define the agent\'s behavior and knowledge. Save it to continue.',
+        target: 'agent-prompt',
+        completed: normalizedState.steps.promptConfigured,
+      },
+      {
+        id: 'apiKeysMode',
+        title: 'Choose Key Management',
+        description: 'Select between Finova Managed infrastructure or Bring Your Own Keys.',
+        target: 'api-keys-mode',
+        completed: normalizedState.steps.apiKeysModeViewed,
+      },
+      {
+        id: 'apiKeys',
+        title: 'Configure API Keys',
+        description:
+          'Set up your Voice Pipeline keys (STT, LLM, TTS) and save runtime settings.',
+        target: 'api-keys',
+        completed: normalizedState.steps.apiKeysConfigured,
+      },
+      {
+        id: 'publishVersion',
+        title: 'Publish Live',
+        description:
+          'Publish your agent version to make it live for testing.',
+        target: 'publish-version',
+        completed: normalizedState.steps.versionPublished,
+      },
+      {
         id: 'testCall',
         title: 'Run a browser test call',
         description:
@@ -137,6 +198,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     [
       normalizedState.status,
       normalizedState.steps.agentCreated,
+      normalizedState.steps.blueprintsViewed,
+      normalizedState.steps.promptConfigured,
+      normalizedState.steps.apiKeysModeViewed,
+      normalizedState.steps.apiKeysConfigured,
+      normalizedState.steps.versionPublished,
       normalizedState.steps.testCallCompleted,
       organizationCreated,
     ],
@@ -223,6 +289,81 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     });
   }, [patchState]);
 
+  const markBlueprintsViewed = useCallback(() => {
+    patchState((current) => {
+      if (current.steps.blueprintsViewed) {
+        return current;
+      }
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          blueprintsViewed: true,
+        },
+      };
+    });
+  }, [patchState]);
+
+  const markPromptConfigured = useCallback(() => {
+    patchState((current) => {
+      if (current.steps.promptConfigured) {
+        return current;
+      }
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          promptConfigured: true,
+        },
+      };
+    });
+  }, [patchState]);
+
+  const markApiKeysModeViewed = useCallback(() => {
+    patchState((current) => {
+      if (current.steps.apiKeysModeViewed) {
+        return current;
+      }
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          apiKeysModeViewed: true,
+        },
+      };
+    });
+  }, [patchState]);
+
+  const markApiKeysConfigured = useCallback(() => {
+    patchState((current) => {
+      if (current.steps.apiKeysConfigured) {
+        return current;
+      }
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          apiKeysConfigured: true,
+        },
+      };
+    });
+  }, [patchState]);
+
+  const markVersionPublished = useCallback(() => {
+    patchState((current) => {
+      if (current.steps.versionPublished) {
+        return current;
+      }
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          versionPublished: true,
+        },
+      };
+    });
+  }, [patchState]);
+
   const markTestCallCompleted = useCallback(() => {
     patchState((current) => {
       if (current.steps.testCallCompleted) {
@@ -250,12 +391,18 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       target.click();
       return;
     }
-    if (pathname !== '/agents' && currentStep.id !== 'testCall') {
-      router.push('/agents');
-    } else if (currentStep.id === 'testCall') {
+    if (['testCall', 'agentPrompt', 'apiKeys', 'publishVersion', 'agentBlueprints', 'apiKeysMode'].includes(currentStep.id)) {
+      if (pathname.startsWith('/agents/') && pathname !== '/agents/new') {
+        // Already on an agent page, target just might be hidden or scrolling.
+      } else if (firstAgentId) {
+        router.push(`/agents/${firstAgentId}`);
+      } else {
+        router.push('/agents');
+      }
+    } else if (pathname !== '/agents') {
       router.push('/agents');
     }
-  }, [currentStep, pathname, router]);
+  }, [currentStep, pathname, router, firstAgentId]);
 
   useEffect(() => {
     if (normalizedState.status !== 'active' || loadingOrgs || orgs.length === 0) {
@@ -271,20 +418,43 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onAgentCreated = () => markAgentCreated();
+    const onBlueprintsViewed = () => markBlueprintsViewed();
+    const onPromptConfigured = () => markPromptConfigured();
+    const onApiKeysModeViewed = () => markApiKeysModeViewed();
+    const onApiKeysConfigured = () => markApiKeysConfigured();
+    const onVersionPublished = () => markVersionPublished();
     const onTestCompleted = () => markTestCallCompleted();
+    const onAgentsLoaded = (e: Event) => {
+      const customEvent = e as CustomEvent<{ firstAgentId: string | null }>;
+      setFirstAgentId(customEvent.detail.firstAgentId);
+    };
+    
     window.addEventListener(ONBOARDING_EVENT_AGENT_CREATED, onAgentCreated);
+    window.addEventListener(ONBOARDING_EVENT_BLUEPRINTS_VIEWED, onBlueprintsViewed);
+    window.addEventListener(ONBOARDING_EVENT_PROMPT_CONFIGURED, onPromptConfigured);
+    window.addEventListener(ONBOARDING_EVENT_API_KEYS_MODE_VIEWED, onApiKeysModeViewed);
+    window.addEventListener(ONBOARDING_EVENT_API_KEYS_CONFIGURED, onApiKeysConfigured);
+    window.addEventListener(ONBOARDING_EVENT_VERSION_PUBLISHED, onVersionPublished);
     window.addEventListener(
       ONBOARDING_EVENT_TEST_COMPLETED,
       onTestCompleted,
     );
+    window.addEventListener(ONBOARDING_EVENT_AGENTS_LOADED, onAgentsLoaded);
+    
     return () => {
       window.removeEventListener(ONBOARDING_EVENT_AGENT_CREATED, onAgentCreated);
+      window.removeEventListener(ONBOARDING_EVENT_BLUEPRINTS_VIEWED, onBlueprintsViewed);
+      window.removeEventListener(ONBOARDING_EVENT_PROMPT_CONFIGURED, onPromptConfigured);
+      window.removeEventListener(ONBOARDING_EVENT_API_KEYS_MODE_VIEWED, onApiKeysModeViewed);
+      window.removeEventListener(ONBOARDING_EVENT_API_KEYS_CONFIGURED, onApiKeysConfigured);
+      window.removeEventListener(ONBOARDING_EVENT_VERSION_PUBLISHED, onVersionPublished);
       window.removeEventListener(
         ONBOARDING_EVENT_TEST_COMPLETED,
         onTestCompleted,
       );
+      window.removeEventListener(ONBOARDING_EVENT_AGENTS_LOADED, onAgentsLoaded);
     };
-  }, [markAgentCreated, markTestCallCompleted]);
+  }, [markAgentCreated, markBlueprintsViewed, markPromptConfigured, markApiKeysModeViewed, markApiKeysConfigured, markVersionPublished, markTestCallCompleted]);
 
   useEffect(() => {
     if (normalizedState.status !== 'active') {
@@ -293,6 +463,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const allComplete =
       organizationCreated &&
       normalizedState.steps.agentCreated &&
+      normalizedState.steps.blueprintsViewed &&
+      normalizedState.steps.promptConfigured &&
+      normalizedState.steps.apiKeysModeViewed &&
+      normalizedState.steps.apiKeysConfigured &&
+      normalizedState.steps.versionPublished &&
       normalizedState.steps.testCallCompleted;
     if (!allComplete) {
       return undefined;
@@ -309,6 +484,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   }, [
     normalizedState.status,
     normalizedState.steps.agentCreated,
+    normalizedState.steps.blueprintsViewed,
+    normalizedState.steps.promptConfigured,
+    normalizedState.steps.apiKeysModeViewed,
+    normalizedState.steps.apiKeysConfigured,
+    normalizedState.steps.versionPublished,
     normalizedState.steps.testCallCompleted,
     organizationCreated,
     patchState,
@@ -370,6 +550,14 @@ export function dispatchOnboardingTestInteractionCompleted() {
   window.dispatchEvent(new CustomEvent(ONBOARDING_EVENT_TEST_COMPLETED));
 }
 
+export function dispatchOnboardingAgentsLoaded(firstAgentId: string | null) {
+  window.dispatchEvent(
+    new CustomEvent(ONBOARDING_EVENT_AGENTS_LOADED, {
+      detail: { firstAgentId },
+    })
+  );
+}
+
 function normalizeState(
   value: StoredOnboardingState | undefined,
 ): StoredOnboardingState {
@@ -386,6 +574,11 @@ function normalizeState(
     steps: {
       organizationCreated: Boolean(value.steps?.organizationCreated),
       agentCreated: Boolean(value.steps?.agentCreated),
+      blueprintsViewed: Boolean(value.steps?.blueprintsViewed),
+      promptConfigured: Boolean(value.steps?.promptConfigured),
+      apiKeysModeViewed: Boolean(value.steps?.apiKeysModeViewed),
+      apiKeysConfigured: Boolean(value.steps?.apiKeysConfigured),
+      versionPublished: Boolean(value.steps?.versionPublished),
       testCallCompleted: Boolean(value.steps?.testCallCompleted),
     },
   };
