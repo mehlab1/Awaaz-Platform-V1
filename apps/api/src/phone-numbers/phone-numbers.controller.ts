@@ -8,6 +8,13 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiHeader,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import type { Request } from 'express';
 
@@ -24,23 +31,38 @@ function organizationIdFromRequest(req: Request): string {
   return organizationId;
 }
 
+@ApiTags('Phone Numbers')
+@ApiBearerAuth()
+@ApiHeader({
+  name: 'x-organization-id',
+  required: true,
+  description: 'Organization ID used to scope tenant requests.',
+})
+@ApiResponse({ status: 401, description: 'Missing or invalid bearer token.' })
+@ApiResponse({
+  status: 403,
+  description: 'Missing organization access or insufficient role.',
+})
 @Controller('api/v1/phone-numbers')
 export class PhoneNumbersController {
   constructor(private readonly phoneNumbers: PhoneNumbersService) {}
 
   @Get()
+  @ApiOperation({ summary: 'List phone numbers' })
   @Roles(Role.VIEWER)
   list(@Req() req: Request) {
     return this.phoneNumbers.list(organizationIdFromRequest(req));
   }
 
   @Post()
+  @ApiOperation({ summary: 'Register a phone number' })
   @Roles(Role.ADMIN)
   register(@Req() req: Request, @Body() dto: RegisterPhoneNumberDto) {
     return this.phoneNumbers.register(organizationIdFromRequest(req), dto);
   }
 
   @Patch(':id')
+  @ApiOperation({ summary: 'Update a phone number' })
   @Roles(Role.ADMIN)
   update(
     @Req() req: Request,
@@ -56,6 +78,7 @@ export class PhoneNumbersController {
   }
 
   @Post(':id/sync-dispatch-rule')
+  @ApiOperation({ summary: 'Sync a phone number dispatch rule' })
   @Roles(Role.ADMIN)
   syncDispatchRule(@Req() req: Request, @Param('id') id: string) {
     return this.phoneNumbers.syncDispatchRule(

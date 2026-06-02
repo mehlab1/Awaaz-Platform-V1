@@ -1,5 +1,6 @@
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 import { AppModule } from './app.module';
 
@@ -37,6 +38,24 @@ async function bootstrap() {
       'x-worker-secret',
     ],
     credentials: true,
+  });
+
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('Awaaz API')
+    .setDescription('Awaaz Platform API Documentation')
+    .setVersion('2.0')
+    .addBearerAuth({
+      type: 'http',
+      scheme: 'bearer',
+      bearerFormat: 'JWT',
+      description: 'Clerk JWT bearer token',
+    })
+    .build();
+  const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('api/docs', app, swaggerDocument, {
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
   });
 
   const port = process.env.PORT ?? '3001';

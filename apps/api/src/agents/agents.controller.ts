@@ -11,6 +11,13 @@ import {
   Query,
   Req,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiHeader,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Role } from '@prisma/client';
 
@@ -40,17 +47,31 @@ function parsePositiveLimit(value: string | undefined): number | undefined {
   return Math.min(parsed, 100);
 }
 
+@ApiTags('Agents')
+@ApiBearerAuth()
+@ApiHeader({
+  name: 'x-organization-id',
+  required: true,
+  description: 'Organization ID used to scope tenant requests.',
+})
+@ApiResponse({ status: 401, description: 'Missing or invalid bearer token.' })
+@ApiResponse({
+  status: 403,
+  description: 'Missing organization access or insufficient role.',
+})
 @Controller('api/v1/agents')
 export class AgentsController {
   constructor(private readonly agents: AgentsService) {}
 
   @Get()
+  @ApiOperation({ summary: 'List agents' })
   @Roles(Role.VIEWER)
   list(@Req() req: Request) {
     return this.agents.list(organizationIdFromRequest(req));
   }
 
   @Post()
+  @ApiOperation({ summary: 'Create an agent' })
   @Roles(Role.BUILDER)
   create(@Req() req: Request, @Body() dto: CreateAgentDto) {
     return this.agents.create(
@@ -61,6 +82,7 @@ export class AgentsController {
   }
 
   @Post(':id/test-call')
+  @ApiOperation({ summary: 'Start a browser test call for an agent' })
   @Roles(Role.BUILDER)
   browserTestCall(@Req() req: Request, @Param('id') id: string) {
     return this.agents.createBrowserTestCall(
@@ -70,6 +92,7 @@ export class AgentsController {
   }
 
   @Post(':id/test-call/:callId/end')
+  @ApiOperation({ summary: 'End a browser test call' })
   @Roles(Role.BUILDER)
   endBrowserTestCall(
     @Req() req: Request,
@@ -84,12 +107,14 @@ export class AgentsController {
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Get agent details' })
   @Roles(Role.VIEWER)
   get(@Req() req: Request, @Param('id') id: string) {
     return this.agents.get(organizationIdFromRequest(req), id);
   }
 
   @Patch(':id')
+  @ApiOperation({ summary: 'Update an agent' })
   @Roles(Role.BUILDER)
   update(
     @Req() req: Request,
@@ -105,12 +130,14 @@ export class AgentsController {
   }
 
   @Delete(':id')
+  @ApiOperation({ summary: 'Delete an agent' })
   @Roles(Role.ADMIN)
   delete(@Req() req: Request, @Param('id') id: string) {
     return this.agents.delete(organizationIdFromRequest(req), id);
   }
 
   @Get(':id/versions')
+  @ApiOperation({ summary: 'List agent versions' })
   @Roles(Role.VIEWER)
   listVersions(
     @Req() req: Request,
@@ -125,6 +152,7 @@ export class AgentsController {
   }
 
   @Post(':id/versions')
+  @ApiOperation({ summary: 'Create an agent version' })
   @Roles(Role.BUILDER)
   createVersion(
     @Req() req: Request,
@@ -140,6 +168,7 @@ export class AgentsController {
   }
 
   @Patch(':id/versions/:versionId')
+  @ApiOperation({ summary: 'Update an agent version' })
   @Roles(Role.BUILDER)
   updateVersion(
     @Req() req: Request,
@@ -157,6 +186,7 @@ export class AgentsController {
   }
 
   @Post(':id/versions/:versionId/publish')
+  @ApiOperation({ summary: 'Publish an agent version' })
   @Roles(Role.BUILDER)
   publishVersion(
     @Req() req: Request,
@@ -172,6 +202,7 @@ export class AgentsController {
   }
 
   @Post(':id/versions/:versionId/restore')
+  @ApiOperation({ summary: 'Restore an agent version' })
   @Roles(Role.BUILDER)
   restoreVersion(
     @Req() req: Request,

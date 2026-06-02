@@ -6,11 +6,14 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 
 import { LiveKitWebhooksService } from './livekit-webhooks.service';
 import { WebhooksService } from './webhooks.service';
 
+@ApiTags('Webhooks')
+@ApiResponse({ status: 400, description: 'Missing or invalid webhook body.' })
 @Controller('webhooks')
 export class WebhooksController {
   constructor(
@@ -19,6 +22,7 @@ export class WebhooksController {
   ) {}
 
   @Post('clerk')
+  @ApiOperation({ summary: 'Receive Clerk webhook events' })
   async clerk(@Req() req: RawBodyRequest<Request>) {
     const raw = req.rawBody;
     if (!raw) {
@@ -28,6 +32,7 @@ export class WebhooksController {
   }
 
   @Post('livekit')
+  @ApiOperation({ summary: 'Receive LiveKit webhook events' })
   async livekit(@Req() req: RawBodyRequest<Request>) {
     const raw = req.rawBody;
     if (!raw) {

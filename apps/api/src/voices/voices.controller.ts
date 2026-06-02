@@ -10,6 +10,13 @@ import {
   StreamableFile,
   ForbiddenException,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiHeader,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import type { Request, Response } from 'express';
 
@@ -27,11 +34,24 @@ function organizationIdFromRequest(req: Request): string {
   return organizationId;
 }
 
+@ApiTags('Voices')
+@ApiBearerAuth()
+@ApiHeader({
+  name: 'x-organization-id',
+  required: true,
+  description: 'Organization ID used to scope tenant requests.',
+})
+@ApiResponse({ status: 401, description: 'Missing or invalid bearer token.' })
+@ApiResponse({
+  status: 403,
+  description: 'Missing organization access or insufficient role.',
+})
 @Controller('api/v1/voices')
 export class VoicesController {
   constructor(private readonly voices: VoicesService) {}
 
   @Get()
+  @ApiOperation({ summary: 'List available voices' })
   @Roles(Role.VIEWER)
   list(@Req() req: Request, @Query() query: ListVoicesQueryDto) {
     return this.voices.list({
@@ -41,6 +61,7 @@ export class VoicesController {
   }
 
   @Post('sync')
+  @ApiOperation({ summary: 'Sync provider voices' })
   @Roles(Role.ADMIN)
   sync(@Req() req: Request, @Query() query: ListVoicesQueryDto) {
     return this.voices.sync({
@@ -51,6 +72,7 @@ export class VoicesController {
 
   @Post('preview')
   @HttpCode(200)
+  @ApiOperation({ summary: 'Generate a voice preview' })
   @Roles(Role.VIEWER)
   async preview(
     @Req() req: Request,

@@ -9,6 +9,13 @@ import {
   Put,
   Req,
 } from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiHeader,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import type { Request } from 'express';
 
@@ -24,28 +31,55 @@ function organizationIdFromRequest(req: Request): string {
   return organizationId;
 }
 
+@ApiTags('Providers')
+@ApiBearerAuth()
+@ApiHeader({
+  name: 'x-organization-id',
+  required: true,
+  description: 'Organization ID used to scope tenant requests.',
+})
+@ApiResponse({ status: 401, description: 'Missing or invalid bearer token.' })
+@ApiResponse({
+  status: 403,
+  description: 'Missing organization access or insufficient role.',
+})
 @Controller('api/v1/plugins')
 export class PluginsCatalogController {
   constructor(private readonly plugins: PluginsService) {}
 
   @Get('catalog')
+  @ApiOperation({ summary: 'List provider catalog' })
   @Roles(Role.VIEWER)
   catalog(@Req() req: Request) {
     return this.plugins.catalog(organizationIdFromRequest(req));
   }
 }
 
+@ApiTags('Providers')
+@ApiBearerAuth()
+@ApiHeader({
+  name: 'x-organization-id',
+  required: true,
+  description: 'Organization ID used to scope tenant requests.',
+})
+@ApiResponse({ status: 401, description: 'Missing or invalid bearer token.' })
+@ApiResponse({
+  status: 403,
+  description: 'Missing organization access or insufficient role.',
+})
 @Controller('api/v1/plugin-credentials')
 export class PluginCredentialsController {
   constructor(private readonly plugins: PluginsService) {}
 
   @Get()
+  @ApiOperation({ summary: 'List provider credentials' })
   @Roles(Role.ADMIN)
   list(@Req() req: Request) {
     return this.plugins.listCredentials(organizationIdFromRequest(req));
   }
 
   @Put(':providerId')
+  @ApiOperation({ summary: 'Create or update provider credentials' })
   @Roles(Role.ADMIN)
   upsert(
     @Req() req: Request,
@@ -61,6 +95,7 @@ export class PluginCredentialsController {
   }
 
   @Post(':providerId/validate')
+  @ApiOperation({ summary: 'Validate provider credentials' })
   @Roles(Role.ADMIN)
   validate(@Req() req: Request, @Param('providerId') providerId: string) {
     return this.plugins.validateCredential(
@@ -71,6 +106,7 @@ export class PluginCredentialsController {
   }
 
   @Delete(':providerId')
+  @ApiOperation({ summary: 'Delete provider credentials' })
   @Roles(Role.ADMIN)
   delete(@Req() req: Request, @Param('providerId') providerId: string) {
     return this.plugins.deleteCredential(
