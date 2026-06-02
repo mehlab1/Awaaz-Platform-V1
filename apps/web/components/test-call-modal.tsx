@@ -28,6 +28,7 @@ import {
 import {
   AlertCircle,
   AudioLines,
+  Bot,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -36,9 +37,12 @@ import {
   Loader2,
   Mic,
   MicOff,
+  MessageSquareText,
+  Radio,
   Phone,
   PhoneOff,
   RefreshCw,
+  UserRound,
   Volume2,
   Wifi,
   X,
@@ -71,6 +75,8 @@ const CLIENT_BARGE_IN_DUCK_END_VOLUME = 0.025;
 const CLIENT_BARGE_IN_DUCK_RELEASE_MS = 250;
 const CLIENT_BARGE_IN_AGENT_VOLUME_FLOOR = 0.012;
 const NO_AGENT_TIMEOUT_MS = 20_000;
+const CONTROL_TOPIC = 'awaaz.call.control';
+const TRANSCRIPT_TOPIC = 'awaaz.call.transcript';
 
 function logTestCallDebug(event: string, detail?: Record<string, unknown>) {
   console.info('[awaaz:test-call]', event, detail ?? {});
@@ -205,6 +211,32 @@ interface BrowserTestRuntimeSummary {
   tts?: BrowserTestRuntimeProvider | null;
   llm?: BrowserTestRuntimeProvider | null;
   stt?: BrowserTestRuntimeProvider | null;
+}
+
+type LiveTranscriptSpeaker = 'user' | 'agent' | 'system';
+type LiveTranscriptStatus = 'interim' | 'final' | 'interrupted';
+
+interface LiveTranscriptEntry {
+  id: string;
+  speaker: LiveTranscriptSpeaker;
+  status: LiveTranscriptStatus;
+  text: string;
+  timestamp: string;
+  receivedAt: number;
+  turnId: number | null;
+  responseId: number | null;
+  source: string | null;
+  interrupted: boolean;
+  latencyMs: number | null;
+  participantIdentity: string | null;
+}
+
+interface LiveTranscriptEvent {
+  event: string;
+  speaker: LiveTranscriptSpeaker | null;
+  timestamp: string;
+  receivedAt: number;
+  turnId: number | null;
 }
 
 type BrowserSessionPhase =
@@ -349,6 +381,110 @@ function readSessionDto(body: unknown): BrowserTestSession {
     throw new Error('Unexpected test-call response.');
   }
   return { callId, serverUrl, participantToken, roomName, runtime: readRuntimeSummary(o.runtime) };
+}
+
+function readOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function readOptionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function normalizeTranscriptSpeaker(value: unknown): LiveTranscriptSpeaker {
+  return value === 'agent' || value === 'system' ? value : 'user';
+}
+
+function normalizeTranscriptStatus(value: unknown): LiveTranscriptStatus {
+  if (value === 'interrupted') {
+    return 'interrupted';
+  }
+  return value === 'interim' ? 'interim' : 'final';
+}
+
+function participantIdentity(participant: unknown): string | null {
+  const p = participant as { identity?: unknown } | null;
+  return typeof p?.identity === 'string' && p.identity.trim()
+    ? p.identity
+    : null;
+}
+
+function parseLiveTranscriptMessage(
+  message: Record<string, unknown>,
+  participant: unknown,
+): { entry: LiveTranscriptEntry; event: null } | { entry: null; event: LiveTranscriptEvent } | null {
+  const receivedAt = Date.now();
+  const timestamp = readOptionalString(message.timestamp) ?? new Date(receivedAt).toISOString();
+  const participantId = participantIdentity(participant);
+
+  if (message.type === 'transcript_event') {
+    const event = readOptionalString(message.event);
+    if (!event) {
+      return null;
+    }
+    return {
+      entry: null,
+      event: {
+        event,
+        speaker:
+          message.speaker === 'user' || message.speaker === 'agent' || message.speaker === 'system'
+            ? message.speaker
+            : null,
+        timestamp,
+        receivedAt,
+        turnId: readOptionalNumber(message.turnId),
+      },
+    };
+  }
+
+  if (message.type !== 'transcript_entry') {
+    return null;
+  }
+
+  const text = readOptionalString(message.text);
+  if (!text) {
+    return null;
+  }
+
+  const speaker = normalizeTranscriptSpeaker(message.speaker);
+  const turnId = readOptionalNumber(message.turnId);
+  const responseId = readOptionalNumber(message.responseId);
+  const fallbackId = `${speaker}:${responseId ?? turnId ?? receivedAt}`;
+  return {
+    entry: {
+      id: readOptionalString(message.id) ?? fallbackId,
+      speaker,
+      status: normalizeTranscriptStatus(message.status),
+      text,
+      timestamp,
+      receivedAt,
+      turnId,
+      responseId,
+      source: readOptionalString(message.source),
+      interrupted: Boolean(message.interrupted),
+      latencyMs: readOptionalNumber(message.latencyMs),
+      participantIdentity: participantId,
+    },
+    event: null,
+  };
+}
+
+function upsertLiveTranscriptEntry(
+  entries: LiveTranscriptEntry[],
+  incoming: LiveTranscriptEntry,
+): LiveTranscriptEntry[] {
+  const next = [...entries];
+  const existingIndex = next.findIndex((entry) => entry.id === incoming.id);
+  if (existingIndex >= 0) {
+    next[existingIndex] = {
+      ...next[existingIndex],
+      ...incoming,
+      receivedAt: incoming.receivedAt,
+    };
+  } else {
+    next.push(incoming);
+  }
+  return next.slice(-80);
 }
 
 function phaseLabel(p: BrowserTestPhaseBadge): string {
@@ -579,6 +715,185 @@ function SessionDebugDrawer({
         <RuntimeProviderDebugRows label="STT" provider={session?.runtime?.stt} />
       </dl>
     </section>
+  );
+}
+
+function formatTranscriptTime(value: string): string {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    return '';
+  }
+  return new Date(parsed).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function transcriptEventLabel(event: LiveTranscriptEvent | null): string | null {
+  if (!event) {
+    return null;
+  }
+  const labels: Record<string, string> = {
+    user_speech_start: 'User speech started',
+    user_speech_end: 'User speech ended',
+    agent_speech_start: 'Agent response started',
+    agent_speech_end: 'Agent response ended',
+  };
+  return labels[event.event] ?? event.event.replaceAll('_', ' ');
+}
+
+function transcriptSpeakerMeta(speaker: LiveTranscriptSpeaker): {
+  label: string;
+  Icon: LucideIcon;
+  className: string;
+  badgeClassName: string;
+} {
+  if (speaker === 'agent') {
+    return {
+      label: 'Agent',
+      Icon: Bot,
+      className: 'border-emerald-500/20 bg-emerald-500/5',
+      badgeClassName: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    };
+  }
+  if (speaker === 'system') {
+    return {
+      label: 'System',
+      Icon: Info,
+      className: 'border-border/70 bg-muted/30',
+      badgeClassName: 'bg-muted text-muted-foreground',
+    };
+  }
+  return {
+    label: 'You',
+    Icon: UserRound,
+    className: 'border-primary/20 bg-primary/5',
+    badgeClassName: 'bg-primary/10 text-primary',
+  };
+}
+
+function LiveTranscriptPanel({
+  entries,
+  lastEvent,
+  isRoomConnected,
+}: {
+  entries: LiveTranscriptEntry[];
+  lastEvent: LiveTranscriptEvent | null;
+  isRoomConnected: boolean;
+}) {
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const transcriptChars = entries.reduce((total, entry) => total + entry.text.length, 0);
+  const lastEventLabel = transcriptEventLabel(lastEvent);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' });
+  }, [entries, lastEvent]);
+
+  return (
+    <aside
+      aria-label="Live transcript"
+      className="flex min-h-[18rem] min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/85 shadow-sm"
+    >
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border/50 bg-card/35 px-3 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <MessageSquareText className="h-4 w-4 text-muted-foreground" aria-hidden />
+            <h3 className="truncate text-sm font-semibold">Live transcript</h3>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {entries.length > 0
+              ? `${entries.length} turn${entries.length === 1 ? '' : 's'} · ${transcriptChars} chars`
+              : isRoomConnected
+                ? 'Waiting for speech events'
+                : 'Starts after room connect'}
+          </p>
+        </div>
+        <Badge
+          variant={isRoomConnected ? 'outline' : 'secondary'}
+          className="shrink-0 px-2 py-0.5 text-[10px]"
+        >
+          <Radio
+            className={cn('h-3 w-3 mr-1', isRoomConnected ? 'text-emerald-500' : 'text-muted-foreground')}
+            aria-hidden
+          />
+          {isRoomConnected ? 'Live' : 'Waiting'}
+        </Badge>
+      </div>
+
+      {lastEventLabel ? (
+        <div className="shrink-0 border-b border-border/40 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+          {lastEventLabel}
+        </div>
+      ) : null}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3" aria-live="polite">
+        {entries.length === 0 ? (
+          <div className="grid min-h-full place-items-center text-center">
+            <div className="max-w-xs">
+              <div className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-muted text-muted-foreground">
+                <MessageSquareText className="h-5 w-5" aria-hidden />
+              </div>
+              <p className="mt-3 text-sm font-medium">
+                {isRoomConnected ? 'No transcript yet' : 'Transcript not connected yet'}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                {isRoomConnected
+                  ? 'Speak into the microphone. Interim STT and agent turns appear here when the worker publishes them.'
+                  : 'The panel will listen for transcript events once the LiveKit room opens.'}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {entries.map((entry) => {
+              const meta = transcriptSpeakerMeta(entry.speaker);
+              const StatusIcon = meta.Icon;
+              return (
+                <article
+                  key={entry.id}
+                  className={cn('rounded-lg border px-3 py-2 text-left', meta.className)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className={cn('grid h-6 w-6 shrink-0 place-items-center rounded-full', meta.badgeClassName)}>
+                        <StatusIcon className="h-3.5 w-3.5" aria-hidden />
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-semibold">{meta.label}</p>
+                        <p className="truncate text-[10px] text-muted-foreground">
+                          {formatTranscriptTime(entry.timestamp)}
+                          {entry.latencyMs !== null ? ` · ${entry.latencyMs}ms` : ''}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge
+                      variant={entry.status === 'interrupted' ? 'destructive' : 'outline'}
+                      className="shrink-0 px-2 py-0.5 text-[10px]"
+                    >
+                      {entry.status === 'interim'
+                        ? 'Interim'
+                        : entry.status === 'interrupted'
+                          ? 'Interrupted'
+                          : 'Final'}
+                    </Badge>
+                  </div>
+                  <p
+                    className={cn(
+                      'mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed',
+                      entry.status === 'interim' ? 'text-muted-foreground italic' : 'text-foreground',
+                    )}
+                  >
+                    {entry.text}
+                  </p>
+                </article>
+              );
+            })}
+            <div ref={endRef} />
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -843,6 +1158,9 @@ function BrowserTestRoomChrome({
   const [muteBusy, setMuteBusy] = useState(false);
   const [agentAudioDucked, setAgentAudioDucked] = useState(false);
   const [agentWaitTimedOut, setAgentWaitTimedOut] = useState(false);
+  const [transcriptEntries, setTranscriptEntries] = useState<LiveTranscriptEntry[]>([]);
+  const [lastTranscriptEvent, setLastTranscriptEvent] =
+    useState<LiveTranscriptEvent | null>(null);
   const autoMicAttemptRef = useRef(0);
   const readinessLoggedRef = useRef(false);
   const userMutedRef = useRef(false);
@@ -1197,17 +1515,37 @@ function BrowserTestRoomChrome({
         logTestCallDebug('room_disconnected', { reason });
       }),
       addEventLogger(room, RoomEvent.DataReceived, (payload, participant, kind, topic) => {
-        void participant;
         void kind;
         const message = decodeControlPayload(payload);
-        if (topic === 'awaaz.call.control' && message?.type === 'end_call') {
+        if (topic === TRANSCRIPT_TOPIC && message) {
+          const parsed = parseLiveTranscriptMessage(message, participant);
+          if (parsed?.entry) {
+            setTranscriptEntries((current) =>
+              upsertLiveTranscriptEntry(current, parsed.entry),
+            );
+            logTestCallDebug('live_transcript_entry_received', {
+              id: parsed.entry.id,
+              speaker: parsed.entry.speaker,
+              status: parsed.entry.status,
+              chars: parsed.entry.text.length,
+            });
+          } else if (parsed?.event) {
+            setLastTranscriptEvent(parsed.event);
+            logTestCallDebug('live_transcript_event_received', {
+              event: parsed.event.event,
+              speaker: parsed.event.speaker,
+            });
+          }
+          return;
+        }
+        if (topic === CONTROL_TOPIC && message?.type === 'end_call') {
           logTestCallDebug('call_end_frontend_synced', {
             source: 'livekit_data',
             reason: message.reason,
           });
           onRemoteEndRequested();
         }
-        if (topic === 'awaaz.call.control' && message?.type === 'session_state') {
+        if (topic === CONTROL_TOPIC && message?.type === 'session_state') {
           const phase = typeof message.phase === 'string' ? message.phase : '';
           const notice = typeof message.message === 'string' ? message.message : undefined;
           if (
@@ -1432,87 +1770,95 @@ function BrowserTestRoomChrome({
             <ConnectionProgress steps={connectionSteps} />
           </div>
 
-          <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
-            <div className="flex w-full max-w-lg flex-col items-center gap-4 sm:gap-5">
-              <VoiceOrb
-                mode={mode}
-                isMuted={!isMicrophoneEnabled}
-                isBusy={muteBusy}
-                localVolume={localVolume}
-                agentVolume={agentVolume}
-                onToggleMute={toggleMute}
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
+            <div className="mx-auto grid min-h-full w-full max-w-5xl gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]">
+              <div className="flex min-w-0 flex-col items-center justify-center gap-4 sm:gap-5">
+                <VoiceOrb
+                  mode={mode}
+                  isMuted={!isMicrophoneEnabled}
+                  isBusy={muteBusy}
+                  localVolume={localVolume}
+                  agentVolume={agentVolume}
+                  onToggleMute={toggleMute}
+                />
+
+                <AudioLevelBars
+                  active={isAudioActive}
+                  volume={mode === 'speaking' ? agentVolume : localVolume}
+                  mode={mode}
+                />
+
+                {isReconnecting ? (
+                  <div className="flex w-full max-w-lg items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+                    <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                    <div className="space-y-1 text-left">
+                      <p className="font-medium">Connection is recovering</p>
+                      <p className="text-xs leading-relaxed opacity-80">
+                        Keep this window open while the browser reconnects. If it does not
+                        recover, end this session and start a fresh test.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {agentWaitTimedOut ? (
+                  <div className="flex w-full max-w-lg items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    <div className="space-y-1 text-left">
+                      <p className="font-medium">Agent has not joined yet</p>
+                      <p className="text-xs leading-relaxed">
+                        The browser room is open, but no worker agent participant was
+                        detected after {Math.round(NO_AGENT_TIMEOUT_MS / 1000)} seconds.
+                        Use End session, then Start again after checking the worker.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {lastMicrophoneError ? (
+                  <div className="flex w-full max-w-lg items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    <div className="space-y-1 text-left">
+                      <p className="font-medium">
+                        {microphonePermissionLikelyBlocked
+                          ? 'Microphone access is blocked'
+                          : 'Microphone is not available'}
+                      </p>
+                      <p className="text-xs leading-relaxed">
+                        {microphonePermissionLikelyBlocked
+                          ? 'Allow microphone access for this site in your browser settings, then click Unmute.'
+                          : 'Check that a microphone is connected and not being used exclusively by another app, then click Unmute.'}
+                      </p>
+                      <p className="break-words font-mono text-[10px] opacity-80">
+                        Browser message: {lastMicrophoneError.message}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+                {shouldShowMutedGuidance ? (
+                  <div className="flex w-full max-w-lg items-start gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
+                    <MicOff className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                    <div className="space-y-1 text-left">
+                      <p className="font-medium text-foreground">Microphone is not sending audio</p>
+                      <p className="text-xs leading-relaxed">
+                        Allow microphone access when prompted. If the prompt already passed,
+                        click Unmute to publish your microphone.
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+                {lifecycleNotice ? (
+                  <p className="max-w-full rounded-full border bg-muted/50 px-3 py-1 text-center text-xs text-muted-foreground sm:text-sm">
+                    {lifecycleNotice}
+                  </p>
+                ) : null}
+              </div>
+
+              <LiveTranscriptPanel
+                entries={transcriptEntries}
+                lastEvent={lastTranscriptEvent}
+                isRoomConnected={isRoomConnected}
               />
-
-              <AudioLevelBars
-                active={isAudioActive}
-                volume={mode === 'speaking' ? agentVolume : localVolume}
-                mode={mode}
-              />
-
-              {isReconnecting ? (
-                <div className="flex w-full items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
-                  <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden />
-                  <div className="space-y-1 text-left">
-                    <p className="font-medium">Connection is recovering</p>
-                    <p className="text-xs leading-relaxed opacity-80">
-                      Keep this window open while the browser reconnects. If it does not
-                      recover, end this session and start a fresh test.
-                    </p>
-                  </div>
-                </div>
-              ) : null}
-
-              {agentWaitTimedOut ? (
-                <div className="flex w-full items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                  <div className="space-y-1 text-left">
-                    <p className="font-medium">Agent has not joined yet</p>
-                    <p className="text-xs leading-relaxed">
-                      The browser room is open, but no worker agent participant was
-                      detected after {Math.round(NO_AGENT_TIMEOUT_MS / 1000)} seconds.
-                      Use End session, then Start again after checking the worker.
-                    </p>
-                  </div>
-                </div>
-              ) : null}
-
-              {lastMicrophoneError ? (
-                <div className="flex w-full items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                  <div className="space-y-1 text-left">
-                    <p className="font-medium">
-                      {microphonePermissionLikelyBlocked
-                        ? 'Microphone access is blocked'
-                        : 'Microphone is not available'}
-                    </p>
-                    <p className="text-xs leading-relaxed">
-                      {microphonePermissionLikelyBlocked
-                        ? 'Allow microphone access for this site in your browser settings, then click Unmute.'
-                        : 'Check that a microphone is connected and not being used exclusively by another app, then click Unmute.'}
-                    </p>
-                    <p className="break-words font-mono text-[10px] opacity-80">
-                      Browser message: {lastMicrophoneError.message}
-                    </p>
-                  </div>
-                </div>
-              ) : null}
-              {shouldShowMutedGuidance ? (
-                <div className="flex w-full items-start gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
-                  <MicOff className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                  <div className="space-y-1 text-left">
-                    <p className="font-medium text-foreground">Microphone is not sending audio</p>
-                    <p className="text-xs leading-relaxed">
-                      Allow microphone access when prompted. If the prompt already passed,
-                      click Unmute to publish your microphone.
-                    </p>
-                  </div>
-                </div>
-              ) : null}
-              {lifecycleNotice ? (
-                <p className="max-w-full rounded-full border bg-muted/50 px-3 py-1 text-center text-xs text-muted-foreground sm:text-sm">
-                  {lifecycleNotice}
-                </p>
-              ) : null}
             </div>
           </div>
 

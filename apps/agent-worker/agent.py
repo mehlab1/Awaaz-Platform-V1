@@ -30,6 +30,7 @@ MAX_DURATION_MESSAGE = (
     "We've reached the maximum session time, so I'll end the call now. Thank you."
 )
 CONTROL_TOPIC = "awaaz.call.control"
+TRANSCRIPT_TOPIC = "awaaz.call.transcript"
 # Keep the native LiveKit playout queue small so interruption drains room audio quickly.
 # Default to 100ms so barge-in has less queued speech to drain. Override with
 # LIVEKIT_AUDIO_SOURCE_QUEUE_SIZE_MS if a deployment needs more buffer headroom.
@@ -710,6 +711,7 @@ class AwaazAgent:
         tts_engine = build_tts(config, tts_selection)
         timing = PipelineTiming()
         lifecycle = CallLifecycle(ctx, call_id)
+        transcript_publisher = LiveTranscriptPublisher(ctx.room, call_id)
         timing.set_lifecycle(lifecycle)
         assistant = create_assistant(config, tts_engine, AwaazTools(lifecycle), timing)
         lifecycle.set_assistant(assistant)
@@ -730,6 +732,7 @@ class AwaazAgent:
             call_id,
             timing,
             lifecycle,
+            transcript_publisher,
             string_list(config, "endCallPhrases"),
         )
         lifecycle.set_speech_events(speech_events)
@@ -759,7 +762,7 @@ class AwaazAgent:
             participant_kind(participant),
         )
         assistant.start(ctx.room, participant)
-        register_timing_events(assistant, timing, lifecycle)
+        register_timing_events(assistant, timing, lifecycle, transcript_publisher)
         lifecycle.start_policies()
 
         first_message = string_value(config, "firstMessage")
@@ -921,6 +924,85 @@ class SpeechEventSink:
         error = task.exception()
         if error is not None:
             logger.warning("Failed to emit speech event", exc_info=error)
+
+
+class LiveTranscriptPublisher:
+    def __init__(self, room: object, call_id: str | None) -> None:
+        self._room = room
+        self._call_id = call_id
+
+    def emit_entry(
+        self,
+        *,
+        entry_id: str,
+        speaker: str,
+        status: str,
+        text: str,
+        turn_id: int | None = None,
+        response_id: int | None = None,
+        source: str | None = None,
+        interrupted: bool = False,
+        latency_ms: int | None = None,
+    ) -> None:
+        normalized_text = text.strip()
+        if not normalized_text:
+            return
+        self._publish(
+            {
+                "type": "transcript_entry",
+                "id": entry_id,
+                "speaker": speaker,
+                "status": status,
+                "text": normalized_text,
+                "callId": self._call_id,
+                "turnId": turn_id,
+                "responseId": response_id,
+                "source": source,
+                "interrupted": interrupted,
+                "latencyMs": latency_ms,
+                "timestamp": utc_now_iso(),
+            }
+        )
+
+    def emit_event(
+        self,
+        *,
+        event: str,
+        speaker: str | None = None,
+        turn_id: int | None = None,
+    ) -> None:
+        self._publish(
+            {
+                "type": "transcript_event",
+                "event": event,
+                "speaker": speaker,
+                "callId": self._call_id,
+                "turnId": turn_id,
+                "timestamp": utc_now_iso(),
+            }
+        )
+
+    def _publish(self, payload: dict[str, object]) -> None:
+        participant = getattr(self._room, "local_participant", None)
+        publish_data = getattr(participant, "publish_data", None)
+        if not callable(publish_data):
+            return
+
+        async def publish() -> None:
+            try:
+                await publish_data(
+                    json.dumps(payload),
+                    reliable=True,
+                    topic=TRANSCRIPT_TOPIC,
+                )
+            except Exception:
+                logger.debug(
+                    "live_transcript_publish_failed type=%s",
+                    payload.get("type"),
+                    exc_info=True,
+                )
+
+        asyncio.create_task(publish())
 
 
 @dataclass
@@ -1543,13 +1625,36 @@ def register_timing_events(
     assistant: VoiceAssistant,
     timing: PipelineTiming,
     lifecycle: CallLifecycle,
+    transcript_publisher: LiveTranscriptPublisher,
 ) -> None:
-    assistant.on("user_started_speaking", lambda: timing.mark_user_started())
-    assistant.on("user_stopped_speaking", lambda: timing.mark_user_stopped())
+    def on_user_started() -> None:
+        timing.mark_user_started()
+        transcript_publisher.emit_event(
+            event="user_speech_start",
+            speaker="user",
+            turn_id=timing.turn_id,
+        )
+
+    def on_user_stopped() -> None:
+        timing.mark_user_stopped()
+        transcript_publisher.emit_event(
+            event="user_speech_end",
+            speaker="user",
+            turn_id=timing.turn_id,
+        )
+
+    assistant.on("user_started_speaking", on_user_started)
+    assistant.on("user_stopped_speaking", on_user_stopped)
 
     def on_agent_started() -> None:
         timing.mark_playback_started()
         lifecycle.mark_playback_started()
+        response = timing.active_response
+        transcript_publisher.emit_event(
+            event="agent_speech_start",
+            speaker="agent",
+            turn_id=response.turn_id if response else None,
+        )
 
     def on_agent_stopped(interrupted: bool = False) -> None:
         active_speech = getattr(assistant, "_playing_speech", None)
@@ -1558,6 +1663,12 @@ def register_timing_events(
         )
         timing.mark_playback_stopped(interrupted_value)
         lifecycle.mark_playback_stopped(interrupted_value)
+        response = timing.last_response or timing.active_response
+        transcript_publisher.emit_event(
+            event="agent_speech_end",
+            speaker="agent",
+            turn_id=response.turn_id if response else None,
+        )
 
     assistant.on("agent_started_speaking", on_agent_started)
     assistant.on(
@@ -1572,20 +1683,39 @@ def register_timing_events(
     logger.info("voice_timing_attached_to_human_input")
 
     last_interim_log_at = 0.0
+    last_interim_publish_at = 0.0
 
     def on_final_transcript(event: object) -> None:
         alternatives = getattr(event, "alternatives", [])
         text = alternatives[0].text if alternatives else ""
         timing.mark_final_transcript(text)
+        transcript_publisher.emit_entry(
+            entry_id=f"user:{timing.turn_id}",
+            speaker="user",
+            status="final",
+            text=text,
+            turn_id=timing.turn_id,
+            source="stt_final",
+        )
 
     def on_interim_transcript(event: object) -> None:
-        nonlocal last_interim_log_at
+        nonlocal last_interim_log_at, last_interim_publish_at
         now = time.monotonic()
+        alternatives = getattr(event, "alternatives", [])
+        text = alternatives[0].text if alternatives else ""
+        if text and now - last_interim_publish_at >= 0.25:
+            last_interim_publish_at = now
+            transcript_publisher.emit_entry(
+                entry_id=f"user:{timing.turn_id}",
+                speaker="user",
+                status="interim",
+                text=text,
+                turn_id=timing.turn_id,
+                source="stt_interim",
+            )
         if now - last_interim_log_at < 1.0:
             return
         last_interim_log_at = now
-        alternatives = getattr(event, "alternatives", [])
-        text = alternatives[0].text if alternatives else ""
         if text:
             logger.info(
                 "voice_stt_interim turn=%s chars=%s text=%r",
@@ -1874,6 +2004,7 @@ def register_events(
     call_id: str | None,
     timing: PipelineTiming,
     lifecycle: CallLifecycle,
+    transcript_publisher: LiveTranscriptPublisher,
     end_call_phrases: list[str],
 ) -> SpeechEventSink:
     sink = SpeechEventSink(api, call_id)
@@ -1893,6 +2024,14 @@ def register_events(
                 timing.barge_in_reason,
                 len(text),
             )
+        transcript_publisher.emit_entry(
+            entry_id=f"user:{timing.turn_id}",
+            speaker="user",
+            status="final",
+            text=text,
+            turn_id=timing.turn_id,
+            source="user_speech_committed",
+        )
         sink.emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
         if is_closing_utterance(text, end_call_phrases):
             logger.info(
@@ -1913,11 +2052,25 @@ def register_events(
             return
         latency_ms = timing.response_latency_ms()
         metrics = timing.agent_response_metrics()
+        response_id = (
+            metrics.get("responseId") if isinstance(metrics.get("responseId"), int) else None
+        )
+        turn_id = metrics.get("turnId") if isinstance(metrics.get("turnId"), int) else None
         logger.info(
             "voice_agent_response_metrics turn=%s latency_ms=%s metrics=%s",
             timing.turn_id,
             latency_ms,
             metrics,
+        )
+        transcript_publisher.emit_entry(
+            entry_id=f"agent:{response_id or int(time.monotonic() * 1000)}",
+            speaker="agent",
+            status="final",
+            text=message_text(message),
+            turn_id=turn_id,
+            response_id=response_id,
+            source="agent_speech_committed",
+            latency_ms=latency_ms,
         )
         sink.emit(
             "AGENT_SPEECH",
@@ -1938,6 +2091,10 @@ def register_events(
             return
         latency_ms = timing.response_latency_ms()
         metrics = timing.agent_response_metrics()
+        response_id = (
+            metrics.get("responseId") if isinstance(metrics.get("responseId"), int) else None
+        )
+        turn_id = metrics.get("turnId") if isinstance(metrics.get("turnId"), int) else None
         logger.warning(
             "voice_agent_speech_interrupted turn=%s chars=%s latency_ms=%s metrics=%s",
             timing.turn_id,
@@ -1948,6 +2105,17 @@ def register_events(
         metadata: dict[str, object] = {"interrupted": True}
         if metrics:
             metadata["metrics"] = metrics
+        transcript_publisher.emit_entry(
+            entry_id=f"agent:{response_id or int(time.monotonic() * 1000)}",
+            speaker="agent",
+            status="interrupted",
+            text=message_text(message),
+            turn_id=turn_id,
+            response_id=response_id,
+            source="agent_speech_interrupted",
+            interrupted=True,
+            latency_ms=latency_ms,
+        )
         sink.emit(
             "AGENT_SPEECH",
             message,
