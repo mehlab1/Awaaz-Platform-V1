@@ -28,6 +28,11 @@ import {
 import {
   AlertCircle,
   AudioLines,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Info,
   Loader2,
   Mic,
   MicOff,
@@ -65,6 +70,7 @@ const CLIENT_BARGE_IN_DUCK_START_VOLUME = 0.05;
 const CLIENT_BARGE_IN_DUCK_END_VOLUME = 0.025;
 const CLIENT_BARGE_IN_DUCK_RELEASE_MS = 250;
 const CLIENT_BARGE_IN_AGENT_VOLUME_FLOOR = 0.012;
+const NO_AGENT_TIMEOUT_MS = 20_000;
 
 function logTestCallDebug(event: string, detail?: Record<string, unknown>) {
   console.info('[awaaz:test-call]', event, detail ?? {});
@@ -361,6 +367,89 @@ function credentialModeLabel(mode: CredentialMode): string {
   return mode === 'BYOK' ? 'BYOK' : 'Finova Managed';
 }
 
+function formatSessionDuration(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatDebugTime(value: number | null): string {
+  return value === null ? 'Not available' : new Date(value).toLocaleTimeString();
+}
+
+type ConnectionStepStatus = 'complete' | 'current' | 'waiting' | 'issue';
+
+interface ConnectionStep {
+  label: string;
+  description: string;
+  status: ConnectionStepStatus;
+}
+
+function ConnectionProgress({ steps }: { steps: ConnectionStep[] }) {
+  const statusMeta: Record<
+    ConnectionStepStatus,
+    { label: string; className: string; dotClassName: string }
+  > = {
+    complete: {
+      label: 'Done',
+      className: 'border-emerald-500/20 bg-emerald-500/5 text-emerald-800 dark:text-emerald-300',
+      dotClassName: 'bg-emerald-500',
+    },
+    current: {
+      label: 'Now',
+      className: 'border-primary/25 bg-primary/5 text-primary',
+      dotClassName: 'bg-primary',
+    },
+    waiting: {
+      label: 'Waiting',
+      className: 'border-border/60 bg-muted/25 text-muted-foreground',
+      dotClassName: 'bg-muted-foreground/35',
+    },
+    issue: {
+      label: 'Needs attention',
+      className: 'border-destructive/25 bg-destructive/5 text-destructive',
+      dotClassName: 'bg-destructive',
+    },
+  };
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-4">
+      {steps.map((step) => {
+        const meta = statusMeta[step.status];
+        return (
+          <div
+            key={step.label}
+            aria-current={step.status === 'current' ? 'step' : undefined}
+            className={cn('rounded-lg border px-3 py-2 text-left', meta.className)}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold">{step.label}</span>
+              {step.status === 'complete' ? (
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              ) : step.status === 'current' ? (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+              ) : step.status === 'issue' ? (
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              ) : (
+                <span className={cn('h-2 w-2 shrink-0 rounded-full', meta.dotClassName)} aria-hidden />
+              )}
+            </div>
+            <p className="mt-1 line-clamp-2 text-[10px] leading-snug opacity-80">
+              {step.description}
+            </p>
+            <span className="sr-only">{meta.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function RuntimeCredentialStrip({
   runtime,
 }: {
@@ -397,6 +486,99 @@ function RuntimeCredentialStrip({
         </span>
       ) : null}
     </div>
+  );
+}
+
+function DebugRow({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+      <dt className="text-[10px] font-medium uppercase text-muted-foreground">{label}</dt>
+      <dd className="mt-1 truncate font-mono text-[11px] text-foreground" title={value ?? undefined}>
+        {value?.trim() ? value : 'Not available'}
+      </dd>
+    </div>
+  );
+}
+
+function RuntimeProviderDebugRows({
+  label,
+  provider,
+}: {
+  label: string;
+  provider: BrowserTestRuntimeProvider | null | undefined;
+}) {
+  if (!provider) {
+    return (
+      <DebugRow
+        label={`${label} runtime`}
+        value="Not returned by test-call response"
+      />
+    );
+  }
+
+  return (
+    <>
+      <DebugRow label={`${label} provider`} value={provider.providerId} />
+      <DebugRow label={`${label} model`} value={provider.model ?? null} />
+      {provider.voiceId ? (
+        <DebugRow label={`${label} voice`} value={provider.voiceId} />
+      ) : null}
+      <DebugRow
+        label={`${label} credential`}
+        value={credentialModeLabel(provider.credentialMode)}
+      />
+    </>
+  );
+}
+
+function SessionDebugDrawer({
+  agentId,
+  agentName,
+  session,
+  sessionPhase,
+  badgePhase,
+  durationLabel,
+  connectedAtMs,
+  endedAtMs,
+  errorMessage,
+}: {
+  agentId: string;
+  agentName: string;
+  session: BrowserTestSession | null;
+  sessionPhase: BrowserSessionPhase | null;
+  badgePhase: BrowserTestPhaseBadge;
+  durationLabel: string;
+  connectedAtMs: number | null;
+  endedAtMs: number | null;
+  errorMessage: string | null;
+}) {
+  return (
+    <section className="max-h-[min(16rem,45dvh)] shrink-0 overflow-y-auto border-t border-border/50 bg-muted/15 px-4 py-3 sm:px-5">
+      <div className="flex items-start gap-2 text-xs text-muted-foreground">
+        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+        <p>
+          Debug details use the existing browser session response. Tokens and provider
+          secrets are intentionally not shown here.
+        </p>
+      </div>
+      <dl className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        <DebugRow label="Agent" value={agentName} />
+        <DebugRow label="Agent ID" value={agentId} />
+        <DebugRow label="UI phase" value={phaseLabel(badgePhase)} />
+        <DebugRow label="Session phase" value={sessionPhase ?? 'Preparing'} />
+        <DebugRow label="Duration" value={durationLabel} />
+        <DebugRow label="Connected at" value={formatDebugTime(connectedAtMs)} />
+        <DebugRow label="Ended at" value={formatDebugTime(endedAtMs)} />
+        <DebugRow label="Call ID" value={session?.callId} />
+        <DebugRow label="Room name" value={session?.roomName} />
+        <DebugRow label="Live version" value={session?.runtime?.versionNumber ? `V${session.runtime.versionNumber}` : null} />
+        <DebugRow label="Server URL" value={session?.serverUrl} />
+        <DebugRow label="Launch error" value={errorMessage} />
+        <RuntimeProviderDebugRows label="TTS" provider={session?.runtime?.tts} />
+        <RuntimeProviderDebugRows label="LLM" provider={session?.runtime?.llm} />
+        <RuntimeProviderDebugRows label="STT" provider={session?.runtime?.stt} />
+      </dl>
+    </section>
   );
 }
 
@@ -623,6 +805,7 @@ function EndCallToolbar({
 interface RoomChromeProps {
   showEndButton: boolean;
   isEnding: boolean;
+  elapsedLabel: string;
   lifecycleNotice: string | null;
   onSessionActive: () => void;
   onSessionMode: (mode: VoiceUiMode) => void;
@@ -634,6 +817,7 @@ interface RoomChromeProps {
 function BrowserTestRoomChrome({
   showEndButton,
   isEnding,
+  elapsedLabel,
   lifecycleNotice,
   onSessionActive,
   onSessionMode,
@@ -658,6 +842,7 @@ function BrowserTestRoomChrome({
   
   const [muteBusy, setMuteBusy] = useState(false);
   const [agentAudioDucked, setAgentAudioDucked] = useState(false);
+  const [agentWaitTimedOut, setAgentWaitTimedOut] = useState(false);
   const autoMicAttemptRef = useRef(0);
   const readinessLoggedRef = useRef(false);
   const userMutedRef = useRef(false);
@@ -700,9 +885,12 @@ function BrowserTestRoomChrome({
   const isRoomConnected =
     connectionState === ConnectionState.Connected ||
     room.state === ConnectionState.Connected;
+  const isReconnecting =
+    String(connectionState).toLowerCase() === 'reconnecting' ||
+    String(room.state).toLowerCase() === 'reconnecting';
   const localVolume = useTrackVolume(localAudioTrack);
   const agentVolume = useTrackVolume(activeAgentAudioTrack);
-  const mode = deriveVoiceMode({
+  const derivedMode = deriveVoiceMode({
     agentState,
     agentVolume,
     hasAgentParticipant: Boolean(detectedAgent),
@@ -710,12 +898,90 @@ function BrowserTestRoomChrome({
     isMicrophonePublished,
     isRoomConnected,
   });
+  const mode = agentWaitTimedOut ? 'failed' : derivedMode;
   const isAudioActive = mode === 'listening' || mode === 'speaking';
   const agentDisplayName =
     detectedAgent?.name || detectedAgent?.identity || 'Local agent';
   const agentAudioRenderVolume = agentAudioDucked
     ? CLIENT_BARGE_IN_DUCK_VOLUME
     : 1;
+  const microphoneReady = isMicrophoneEnabled && isMicrophonePublished;
+  const shouldShowMutedGuidance =
+    isRoomConnected &&
+    !microphoneReady &&
+    !lastMicrophoneError &&
+    !userMutedRef.current;
+  const microphoneErrorMessage = lastMicrophoneError?.message ?? '';
+  const microphonePermissionLikelyBlocked =
+    /permission|denied|notallowed|not allowed|blocked/i.test(
+      microphoneErrorMessage,
+    );
+  const activeAgentAudioTrackReady = Boolean(activeAgentAudioTrack);
+  const connectionSteps = useMemo<ConnectionStep[]>(
+    () => [
+      {
+        label: 'Room',
+        description: isReconnecting
+          ? 'Reconnecting to LiveKit.'
+          : isRoomConnected
+            ? 'Browser joined the room.'
+            : 'Joining the browser room.',
+        status: isRoomConnected ? 'complete' : isReconnecting ? 'issue' : 'current',
+      },
+      {
+        label: 'Mic',
+        description: lastMicrophoneError
+          ? 'Browser microphone needs attention.'
+          : microphoneReady
+            ? 'Microphone is publishing audio.'
+            : 'Waiting for microphone access.',
+        status: lastMicrophoneError
+          ? 'issue'
+          : microphoneReady
+            ? 'complete'
+            : isRoomConnected
+              ? 'current'
+              : 'waiting',
+      },
+      {
+        label: 'Agent',
+        description: agentWaitTimedOut
+          ? 'No agent participant joined yet.'
+          : detectedAgent
+            ? 'Agent participant joined.'
+            : 'Waiting for the worker agent.',
+        status: agentWaitTimedOut
+          ? 'issue'
+          : detectedAgent
+            ? 'complete'
+            : isRoomConnected
+              ? 'current'
+              : 'waiting',
+      },
+      {
+        label: 'Audio',
+        description: activeAgentAudioTrackReady
+          ? 'Subscribed to agent audio.'
+          : detectedAgent
+            ? 'Waiting for the agent audio track.'
+            : 'Audio appears after the agent joins.',
+        status: activeAgentAudioTrackReady
+          ? 'complete'
+          : detectedAgent
+            ? 'current'
+            : 'waiting',
+      },
+    ],
+    [
+      activeAgentAudioTrackReady,
+      agentWaitTimedOut,
+      detectedAgent,
+      isReconnecting,
+      isRoomConnected,
+      lastMicrophoneError,
+      microphoneReady,
+    ],
+  );
 
   
 
@@ -740,6 +1006,24 @@ function BrowserTestRoomChrome({
     },
     [agentVolume, localVolume],
   );
+
+  useEffect(() => {
+    if (!isRoomConnected || detectedAgent) {
+      setAgentWaitTimedOut(false);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setAgentWaitTimedOut(true);
+      logTestCallDebug('agent_join_timeout', {
+        timeoutMs: NO_AGENT_TIMEOUT_MS,
+        connectionState,
+        roomState: room.state,
+      });
+    }, NO_AGENT_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [connectionState, detectedAgent, isRoomConnected, room.state]);
 
   useEffect(() => {
     const now = performance.now();
@@ -1108,28 +1392,44 @@ function BrowserTestRoomChrome({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="px-2 py-0.5 text-[10px]">
+                <Clock className="h-3 w-3 mr-1" aria-hidden />
+                {elapsedLabel}
+              </Badge>
+              {isReconnecting ? (
+                <Badge variant="destructive" className="px-2 py-0.5 text-[10px]">
+                  <RefreshCw className="h-3 w-3 mr-1 animate-spin" aria-hidden />
+                  Reconnecting
+                </Badge>
+              ) : null}
               <Badge variant={detectedAgent ? 'default' : 'secondary'} className="px-2 py-0.5 text-[10px]">
                 <Wifi className="h-3 w-3 mr-1" aria-hidden />
-                {detectedAgent ? 'Agent joined' : 'Waiting'}
+                {agentWaitTimedOut
+                  ? 'Agent delayed'
+                  : detectedAgent
+                    ? 'Agent joined'
+                    : 'Waiting'}
               </Badge>
               <Badge
                 className="px-2 py-0.5 text-[10px]"
                 variant={
-                  isMicrophoneEnabled && isMicrophonePublished
+                  microphoneReady
                     ? 'outline'
                     : 'destructive'
                 }
               >
-                {isMicrophoneEnabled && isMicrophonePublished ? (
+                {microphoneReady ? (
                   <Mic className="h-3 w-3 mr-1" aria-hidden />
                 ) : (
                   <MicOff className="h-3 w-3 mr-1" aria-hidden />
                 )}
-                {isMicrophoneEnabled && isMicrophonePublished
-                  ? 'Mic on'
-                  : 'Muted'}
+                {microphoneReady ? 'Mic on' : 'Mic not ready'}
               </Badge>
             </div>
+          </div>
+
+          <div className="shrink-0 border-b border-border/40 bg-muted/10 px-3 py-3 sm:px-4">
+            <ConnectionProgress steps={connectionSteps} />
           </div>
 
           <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto px-4 py-4 sm:px-6 sm:py-6">
@@ -1149,10 +1449,63 @@ function BrowserTestRoomChrome({
                 mode={mode}
               />
 
+              {isReconnecting ? (
+                <div className="flex w-full items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+                  <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                  <div className="space-y-1 text-left">
+                    <p className="font-medium">Connection is recovering</p>
+                    <p className="text-xs leading-relaxed opacity-80">
+                      Keep this window open while the browser reconnects. If it does not
+                      recover, end this session and start a fresh test.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
+              {agentWaitTimedOut ? (
+                <div className="flex w-full items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  <div className="space-y-1 text-left">
+                    <p className="font-medium">Agent has not joined yet</p>
+                    <p className="text-xs leading-relaxed">
+                      The browser room is open, but no worker agent participant was
+                      detected after {Math.round(NO_AGENT_TIMEOUT_MS / 1000)} seconds.
+                      Use End session, then Start again after checking the worker.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
               {lastMicrophoneError ? (
                 <div className="flex w-full items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-                  <p>{lastMicrophoneError.message}</p>
+                  <div className="space-y-1 text-left">
+                    <p className="font-medium">
+                      {microphonePermissionLikelyBlocked
+                        ? 'Microphone access is blocked'
+                        : 'Microphone is not available'}
+                    </p>
+                    <p className="text-xs leading-relaxed">
+                      {microphonePermissionLikelyBlocked
+                        ? 'Allow microphone access for this site in your browser settings, then click Unmute.'
+                        : 'Check that a microphone is connected and not being used exclusively by another app, then click Unmute.'}
+                    </p>
+                    <p className="break-words font-mono text-[10px] opacity-80">
+                      Browser message: {lastMicrophoneError.message}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+              {shouldShowMutedGuidance ? (
+                <div className="flex w-full items-start gap-2 rounded-lg border border-border/70 bg-muted/35 px-3 py-2 text-sm text-muted-foreground">
+                  <MicOff className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                  <div className="space-y-1 text-left">
+                    <p className="font-medium text-foreground">Microphone is not sending audio</p>
+                    <p className="text-xs leading-relaxed">
+                      Allow microphone access when prompted. If the prompt already passed,
+                      click Unmute to publish your microphone.
+                    </p>
+                  </div>
                 </div>
               ) : null}
               {lifecycleNotice ? (
@@ -1186,6 +1539,11 @@ function BrowserTestRoomChrome({
                 onEndSession={onEndSession}
               />
             ) : null}
+            {showEndButton ? (
+              <p className="basis-full text-center text-[11px] text-muted-foreground">
+                Close only dismisses this window. End session sends the stop request.
+              </p>
+            ) : null}
           </div>
         </section>
       </div>
@@ -1200,6 +1558,10 @@ export function TestCallModal(props: TestCallModalProps) {
   const [fetchFailed, setFetchFailed] = useState(false);
   const [session, setSession] = useState<BrowserTestSession | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [sessionConnectedAtMs, setSessionConnectedAtMs] = useState<number | null>(null);
+  const [sessionEndedAtMs, setSessionEndedAtMs] = useState<number | null>(null);
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const testInteractionCompletedRef = useRef(false);
 
   /** Mirrored session state from backend end requests + LiveKit room events. */
@@ -1208,6 +1570,8 @@ export function TestCallModal(props: TestCallModalProps) {
   const [lifecycleNotice, setLifecycleNotice] = useState<string | null>(null);
 
   const markRtcActive = useCallback(() => {
+    setSessionConnectedAtMs((current) => current ?? Date.now());
+    setSessionEndedAtMs(null);
     setSessionPhase((phase) =>
       phase === 'ENDING' || phase === 'DISCONNECTED' || phase === 'IDLE'
         ? phase
@@ -1274,6 +1638,9 @@ export function TestCallModal(props: TestCallModalProps) {
       setFetchFailed(false);
       setSessionPhase(null);
       setLifecycleNotice(null);
+      setSessionConnectedAtMs(null);
+      setSessionEndedAtMs(null);
+      setDebugOpen(false);
       testInteractionCompletedRef.current = false;
       return undefined;
     }
@@ -1284,6 +1651,8 @@ export function TestCallModal(props: TestCallModalProps) {
     setFetchFailed(false);
     setSessionPhase(null);
     setLifecycleNotice(null);
+    setSessionConnectedAtMs(null);
+    setSessionEndedAtMs(null);
 
     void (async () => {
       try {
@@ -1329,6 +1698,16 @@ export function TestCallModal(props: TestCallModalProps) {
       aborted = true;
     };
   }, [open, agentId, apiCall, reloadKey]);
+
+  useEffect(() => {
+    if (!open || !session || sessionPhase === 'DISCONNECTED' || sessionPhase === null) {
+      setClockNowMs(Date.now());
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => setClockNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [open, session, sessionPhase]);
 
   useEffect(() => {
     if (
@@ -1390,6 +1769,7 @@ export function TestCallModal(props: TestCallModalProps) {
   useEffect(() => {
     if (sessionPhase === 'DISCONNECTED') {
       setLifecycleNotice(null);
+      setSessionEndedAtMs((current) => current ?? Date.now());
       try {
         window.dispatchEvent(new CustomEvent('awaaz:call-ended'));
       } catch {
@@ -1405,14 +1785,71 @@ export function TestCallModal(props: TestCallModalProps) {
         ? 'secondary'
       : badgePhase === 'fetch_error'
         ? 'destructive'
-        : 'secondary';
+      : 'secondary';
+
+  const elapsedSeconds =
+    sessionConnectedAtMs === null
+      ? 0
+      : Math.floor(((sessionEndedAtMs ?? clockNowMs) - sessionConnectedAtMs) / 1000);
+  const durationLabel = formatSessionDuration(elapsedSeconds);
+  const launchSteps: ConnectionStep[] = [
+    {
+      label: 'Session',
+      description: fetchFailed
+        ? 'The browser test session was not created.'
+        : session
+          ? 'Session token was created.'
+          : 'Requesting a browser test session.',
+      status: fetchFailed ? 'issue' : session ? 'complete' : 'current',
+    },
+    {
+      label: 'Room',
+      description: sessionConnectedAtMs
+        ? 'Browser joined the LiveKit room.'
+        : session
+          ? 'Opening the LiveKit room.'
+          : 'Waiting for session details.',
+      status: sessionConnectedAtMs ? 'complete' : session ? 'current' : 'waiting',
+    },
+    {
+      label: 'Mic',
+      description: 'Browser microphone permission happens after room connect.',
+      status: 'waiting',
+    },
+    {
+      label: 'Agent',
+      description: 'Worker agent joins the room after dispatch.',
+      status: 'waiting',
+    },
+  ];
+  const startNewSession = (): void => {
+    setSessionConnectedAtMs(null);
+    setSessionEndedAtMs(null);
+    setLifecycleNotice(null);
+    setReloadKey((k) => k + 1);
+  };
 
   if (!open) {
     return null;
   }
 
-  const closeModal = (): void => onOpenChange(false);
+  const closeModal = (): void => {
+    logTestCallDebug('modal_close_requested', {
+      callId: session?.callId,
+      roomName: session?.roomName,
+      sessionPhase,
+      sendsEndRequest: false,
+    });
+    onOpenChange(false);
+  };
   const headline = phaseLabel(badgePhase);
+  const headerDescription =
+    lifecycleNotice ??
+    (sessionPhase === 'ENDING'
+      ? 'Ending session...'
+      : session && sessionPhase !== 'DISCONNECTED'
+        ? 'Close dismisses this window. Use End session to stop the test call.'
+        : 'Run a local voice check with browser audio.');
 
   return (
     <div
@@ -1434,44 +1871,76 @@ export function TestCallModal(props: TestCallModalProps) {
                   <span data-testid="test-call-phase">{headline}</span>
                 </Badge>
               ) : null}
+              {session ? (
+                <Badge variant="outline" className="text-[10px] px-2 py-0.5">
+                  <Clock className="h-3 w-3 mr-1" aria-hidden />
+                  {durationLabel}
+                </Badge>
+              ) : null}
             </div>
             <h2 className="mt-2 truncate text-base font-semibold tracking-tight sm:text-lg">
               Test Agent: {agentName}
             </h2>
             <p className="mt-0.5 max-w-2xl text-[11px] leading-relaxed text-muted-foreground sm:text-xs">
-              {lifecycleNotice ??
-                (sessionPhase === 'ENDING'
-                  ? 'Ending session...'
-                  : 'Run a local voice check with browser audio.')}
+              {headerDescription}
             </p>
             <RuntimeCredentialStrip runtime={session?.runtime ?? null} />
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label="Close modal"
-            onClick={closeModal}
-            className="-mr-2 h-8 w-8 shrink-0 rounded-full transition-colors hover:bg-muted/50 hover:text-foreground sm:mr-0"
-          >
-            <X className="h-4 w-4" />
-          </Button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-expanded={debugOpen}
+              onClick={() => setDebugOpen((open) => !open)}
+              className="h-8 gap-1.5 rounded-full px-3 text-xs"
+            >
+              Debug
+              {debugOpen ? (
+                <ChevronUp className="h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+              )}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Close modal without sending an end-session request"
+              title="Close modal without sending an end-session request"
+              onClick={closeModal}
+              className="-mr-2 h-8 w-8 shrink-0 rounded-full transition-colors hover:bg-muted/50 hover:text-foreground sm:mr-0"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </header>
 
         {fetchFailed ? (
           <div className="grid min-h-0 flex-1 place-items-center bg-card/30 px-4 sm:px-6">
-            <div className="w-full max-w-md rounded-xl border border-border/80 bg-card p-5 text-center shadow-lg sm:p-6">
+            <div className="w-full max-w-lg rounded-xl border border-border/80 bg-card p-5 text-center shadow-lg sm:p-6">
               <div className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-destructive/10 text-destructive">
                 <AlertCircle className="h-5 w-5" aria-hidden />
               </div>
               <h3 className="mt-4 text-base font-semibold sm:text-lg">
                 Voice preview is unavailable
               </h3>
-              <p className="mt-2 text-destructive text-sm">{errorMessage}</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                The test-call session could not be prepared. Check the agent setup,
+                selected providers, and provider credentials before retrying.
+              </p>
+              {errorMessage ? (
+                <p className="mt-3 break-words rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-left font-mono text-[11px] text-destructive">
+                  {errorMessage}
+                </p>
+              ) : null}
+              <div className="mt-5">
+                <ConnectionProgress steps={launchSteps} />
+              </div>
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => setReloadKey((k) => k + 1)}
+                onClick={startNewSession}
                 className="mt-5 h-9 gap-2 rounded-full px-4 text-sm"
               >
                 <RefreshCw className="h-4 w-4" aria-hidden />
@@ -1509,6 +1978,7 @@ export function TestCallModal(props: TestCallModalProps) {
             <BrowserTestRoomChrome
               showEndButton={sessionPhase !== 'CONNECTING'}
               isEnding={sessionPhase === 'ENDING'}
+              elapsedLabel={durationLabel}
               lifecycleNotice={lifecycleNotice}
               onSessionActive={markRtcActive}
               onSessionMode={markSessionMode}
@@ -1525,14 +1995,27 @@ export function TestCallModal(props: TestCallModalProps) {
               </div>
               <h3 className="mt-4 text-base font-semibold sm:text-lg">Session ended</h3>
               <p className="mt-2 text-muted-foreground text-sm">
-                Test calls remain available in Calls history with a Test badge.
+                This browser session has stopped. Test calls remain available in
+                Calls history with a Test badge.
               </p>
+              <div className="mt-4 grid gap-2 rounded-lg border border-border/70 bg-muted/25 p-3 text-left text-xs text-muted-foreground sm:grid-cols-2">
+                <div>
+                  <span className="font-medium text-foreground">Duration</span>
+                  <p className="mt-0.5 font-mono">{durationLabel}</p>
+                </div>
+                <div>
+                  <span className="font-medium text-foreground">Call ID</span>
+                  <p className="mt-0.5 truncate font-mono" title={session.callId}>
+                    {session.callId}
+                  </p>
+                </div>
+              </div>
               <div className="mt-5 flex flex-wrap justify-center gap-3">
                 <Button
                   type="button"
                   variant="secondary"
                   className="h-9 gap-2 rounded-full px-4 text-sm"
-                  onClick={() => setReloadKey((k) => k + 1)}
+                  onClick={startNewSession}
                 >
                   <RefreshCw className="h-4 w-4" aria-hidden />
                   Start again
@@ -1546,22 +2029,45 @@ export function TestCallModal(props: TestCallModalProps) {
                   Close
                 </Button>
               </div>
+              <p className="mt-4 text-xs text-muted-foreground">
+                Start again creates a new test session. Close only dismisses this modal.
+              </p>
             </div>
           </div>
         ) : (
           <div className="grid min-h-0 flex-1 place-items-center bg-card/30 px-4 sm:px-6">
-            <div className="max-w-sm rounded-xl border border-border/85 bg-card p-5 text-center shadow-lg sm:p-6">
+            <div className="w-full max-w-lg rounded-xl border border-border/85 bg-card p-5 text-center shadow-lg sm:p-6">
               <Loader2 className="mx-auto h-9 w-9 animate-spin text-muted-foreground" />
-              <p className="mt-4 text-muted-foreground text-sm">
-                Preparing your voice session...
+              <h3 className="mt-4 text-base font-semibold">Preparing voice session</h3>
+              <p className="mt-2 text-muted-foreground text-sm">
+                Creating a browser test-call session for this agent. The room will ask
+                for microphone access after the session is ready.
               </p>
+              <div className="mt-5">
+                <ConnectionProgress steps={launchSteps} />
+              </div>
             </div>
           </div>
         )}
 
+        {debugOpen ? (
+          <SessionDebugDrawer
+            agentId={agentId}
+            agentName={agentName}
+            session={session}
+            sessionPhase={sessionPhase}
+            badgePhase={badgePhase}
+            durationLabel={durationLabel}
+            connectedAtMs={sessionConnectedAtMs}
+            endedAtMs={sessionEndedAtMs}
+            errorMessage={errorMessage}
+          />
+        ) : null}
+
         {session !== null && sessionPhase === 'CONNECTING' && !fetchFailed ? (
           <footer className="shrink-0 border-t border-border bg-muted/20 px-4 py-2.5 text-center text-xs text-muted-foreground sm:px-8">
-            Allow microphone access when the browser asks.
+            Preparing browser audio. Allow microphone access when the browser asks;
+            closing the modal does not send the End session request.
           </footer>
         ) : null}
       </div>
