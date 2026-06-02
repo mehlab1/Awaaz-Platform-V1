@@ -264,6 +264,18 @@ export class InternalService {
     };
     const roomName = dto.liveKitRoomName?.trim();
     const canonicalCallId = dto.callId?.trim();
+    const recordCallStarted = async <T extends { id: string; startedAt: Date | null }>(
+      call: T,
+      reconciliation: string,
+    ): Promise<T> => {
+      await this.ensureLifecycleEvent(call.id, EventType.CALL_STARTED, {
+        text: 'Call started',
+        startedAt: call.startedAt ?? startedAt,
+        metadata: this.callStartedMetadata(dto, reconciliation, roomName),
+      });
+      return call;
+    };
+
     if (canonicalCallId) {
       const existing = await this.prisma.call.findUnique({
         where: { id: canonicalCallId },
@@ -282,7 +294,7 @@ export class InternalService {
         this.logger.log(
           `call_identity_reconciled call_id=${existing.id} liveKitRoomId=${dto.liveKitRoomId} roomName=${roomName ?? '(none)'}`,
         );
-        return reconciled;
+        return recordCallStarted(reconciled, 'canonical_call_id');
       }
       this.logger.warn(
         `call_identity_existing_missing call_id=${canonicalCallId}; falling back to room reconciliation`,
@@ -302,7 +314,7 @@ export class InternalService {
         this.logger.log(
           `call_identity_existing call_id=${existingBySid.id} liveKitRoomId=${dto.liveKitRoomId}`,
         );
-        return reconciled;
+        return recordCallStarted(reconciled, 'livekit_sid');
       }
 
       const placeholder = await this.prisma.call.findFirst({
@@ -326,7 +338,7 @@ export class InternalService {
         this.logger.log(
           `call_identity_reconciled call_id=${placeholder.id} liveKitRoomId=${dto.liveKitRoomId} roomName=${roomName}`,
         );
-        return reconciled;
+        return recordCallStarted(reconciled, 'placeholder_room_name');
       }
     }
 
@@ -344,7 +356,7 @@ export class InternalService {
     this.logger.log(
       `call_identity_created call_id=${created.id} liveKitRoomId=${dto.liveKitRoomId}`,
     );
-    return created;
+    return recordCallStarted(created, 'created');
   }
 
   async endCall(callId: string, dto: EndCallDto): Promise<{ ok: true }> {
@@ -397,6 +409,16 @@ export class InternalService {
       },
     });
     const endReason = this.canonicalEndReason(dto.reason) ?? this.metadataString(updatedCall.metadata, 'endReason');
+    await this.ensureLifecycleEvent(callId, EventType.CALL_ENDED, {
+      text: 'Call ended',
+      startedAt: call.startedAt ?? undefined,
+      endedAt,
+      durationMs:
+        call.startedAt === null
+          ? undefined
+          : Math.max(0, endedAt.getTime() - call.startedAt.getTime()),
+      metadata: this.callEndedMetadata(updatedCall.metadata, call.liveKitRoomId, endReason),
+    });
     this.logger.log(
       `call_end_backend_completed call_id=${callId} reason=${endReason ?? '(unspecified)'}`,
     );
@@ -430,29 +452,80 @@ export class InternalService {
       throw new NotFoundException('Call not found');
     }
 
-    await this.prisma.callEvent.create({
-      data: {
-        callId,
-        eventType: dto.eventType,
-        content: dto.text,
-        speaker: dto.speaker ?? this.speakerForEvent(dto.eventType),
-        startedAt: dto.startedAt ? new Date(dto.startedAt) : undefined,
-        endedAt: dto.endedAt ? new Date(dto.endedAt) : undefined,
-        durationMs: dto.durationMs,
-        latencyMs: dto.latencyMs,
-        tokenCount: dto.tokenCount,
-        metadata: this.toJson(dto.metadata),
-      },
+    await this.persistCallEvent(callId, dto.eventType, {
+      text: dto.text,
+      speaker: dto.speaker ?? this.speakerForEvent(dto.eventType),
+      startedAt: dto.startedAt ? new Date(dto.startedAt) : undefined,
+      endedAt: dto.endedAt ? new Date(dto.endedAt) : undefined,
+      durationMs: dto.durationMs,
+      latencyMs: dto.latencyMs,
+      tokenCount: dto.tokenCount,
+      metadata: dto.metadata,
     });
     this.logger.log(
       `Persisted call event ${dto.eventType} for ${callId}: ` +
         `chars=${dto.text?.length ?? 0}, latencyMs=${dto.latencyMs ?? 'null'}, ` +
         `status=${call.status}, browserPreview=${this.isBrowserPreviewCall(call)}`,
     );
-    if (call.status === CallStatus.COMPLETED && this.isBrowserPreviewCall(call)) {
+    if (
+      call.status === CallStatus.COMPLETED &&
+      this.isBrowserPreviewCall(call) &&
+      this.isTranscriptSpeechEvent(dto.eventType)
+    ) {
       await this.assembleTranscriptFallback(call.id, call.liveKitRoomId);
     }
     return { ok: true };
+  }
+
+  private async persistCallEvent(
+    callId: string,
+    eventType: EventType,
+    event: {
+      text?: string;
+      speaker?: string;
+      startedAt?: Date;
+      endedAt?: Date;
+      durationMs?: number;
+      latencyMs?: number;
+      tokenCount?: number;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    await this.prisma.callEvent.create({
+      data: {
+        callId,
+        eventType,
+        content: event.text,
+        speaker: event.speaker,
+        startedAt: event.startedAt,
+        endedAt: event.endedAt,
+        durationMs: event.durationMs,
+        latencyMs: event.latencyMs,
+        tokenCount: event.tokenCount,
+        metadata: this.toJson(event.metadata),
+      },
+    });
+  }
+
+  private async ensureLifecycleEvent(
+    callId: string,
+    eventType: EventType,
+    event: {
+      text: string;
+      startedAt?: Date;
+      endedAt?: Date;
+      durationMs?: number;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<void> {
+    const existing = await this.prisma.callEvent.findFirst({
+      where: { callId, eventType },
+      select: { id: true },
+    });
+    if (existing) {
+      return;
+    }
+    await this.persistCallEvent(callId, eventType, event);
   }
 
   heartbeat(): { ok: true; timestamp: string } {
@@ -467,6 +540,46 @@ export class InternalService {
       return 'agent';
     }
     return undefined;
+  }
+
+  private isTranscriptSpeechEvent(eventType: EventType): boolean {
+    return eventType === EventType.USER_SPEECH || eventType === EventType.AGENT_SPEECH;
+  }
+
+  private callStartedMetadata(
+    dto: StartCallDto,
+    reconciliation: string,
+    roomName: string | undefined,
+  ): Record<string, unknown> {
+    return this.compactJsonObject({
+      timelineEvent: 'call_started',
+      source: 'internal.startCall',
+      reconciliation,
+      organizationId: dto.organizationId,
+      agentId: dto.agentId,
+      direction: dto.direction,
+      fromNumber: dto.fromNumber,
+      toNumber: dto.toNumber,
+      liveKitRoomId: dto.liveKitRoomId,
+      liveKitRoomName: roomName,
+      callMetadata: dto.metadata,
+    });
+  }
+
+  private callEndedMetadata(
+    callMetadata: Prisma.JsonValue | null,
+    liveKitRoomId: string | null,
+    endReason: string | undefined,
+  ): Record<string, unknown> {
+    return this.compactJsonObject({
+      timelineEvent: 'call_ended',
+      source: 'internal.endCall',
+      liveKitRoomId,
+      endReason,
+      endedBy: this.metadataString(callMetadata, 'endedBy'),
+      lifecycle: this.metadataObject(callMetadata, 'lifecycle'),
+      callMetadata,
+    });
   }
 
   private durationSeconds(startedAt: Date | null, endedAt: Date): number | undefined {
@@ -551,6 +664,12 @@ export class InternalService {
     return value === undefined ? undefined : (value as Prisma.InputJsonObject);
   }
 
+  private compactJsonObject(input: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.entries(input).filter(([, value]) => value !== undefined && value !== null),
+    );
+  }
+
   private mergeMetadata(
     existing: Prisma.JsonValue | null,
     update: Record<string, unknown> | undefined,
@@ -624,6 +743,19 @@ export class InternalService {
       return undefined;
     }
     return this.stringValue((metadata as Record<string, unknown>)[key]);
+  }
+
+  private metadataObject(
+    metadata: Prisma.JsonValue | null,
+    key: string,
+  ): Record<string, unknown> | undefined {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      return undefined;
+    }
+    const value = (metadata as Record<string, unknown>)[key];
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   }
 
   private canonicalEndReason(reason: string | undefined): string | undefined {

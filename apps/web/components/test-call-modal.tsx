@@ -26,6 +26,7 @@ import {
   useVoiceAssistant,
 } from '@livekit/components-react';
 import {
+  Activity,
   AlertCircle,
   AudioLines,
   Bot,
@@ -33,6 +34,8 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  ExternalLink,
+  Gauge,
   Info,
   Loader2,
   Mic,
@@ -59,7 +62,7 @@ import {
 } from 'livekit-client';
 
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { dispatchOnboardingTestInteractionCompleted } from '@/components/onboarding/onboarding-provider';
 import { cn } from '@/lib/utils';
 
@@ -228,6 +231,7 @@ interface LiveTranscriptEntry {
   source: string | null;
   interrupted: boolean;
   latencyMs: number | null;
+  metrics: LiveTranscriptMetrics;
   participantIdentity: string | null;
 }
 
@@ -237,6 +241,39 @@ interface LiveTranscriptEvent {
   timestamp: string;
   receivedAt: number;
   turnId: number | null;
+}
+
+interface LiveTranscriptMetrics {
+  firstAudioLatencyMs: number | null;
+  playbackDurationMs: number | null;
+  totalResponseMs: number | null;
+  totalTurnMs: number | null;
+  sttLatencyMs: number | null;
+  llmFirstTokenLatencyMs: number | null;
+  ttsFirstAudioLatencyMs: number | null;
+  interruptionToSilenceMs: number | null;
+}
+
+interface LiveDataChannelEvent {
+  id: string;
+  topic: string;
+  kind: 'status' | 'transcript' | 'control';
+  label: string;
+  detail: string | null;
+  timestamp: string;
+  receivedAt: number;
+  phase: string | null;
+}
+
+interface PostCallSummary {
+  totalTurns: number;
+  userTurns: number;
+  agentTurns: number;
+  interruptedTurns: number;
+  transcriptChars: number;
+  dataChannelEvents: number;
+  avgAgentLatencyMs: number | null;
+  lastAgentLatencyMs: number | null;
 }
 
 type BrowserSessionPhase =
@@ -391,6 +428,12 @@ function readOptionalNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function readOptionalRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function normalizeTranscriptSpeaker(value: unknown): LiveTranscriptSpeaker {
   return value === 'agent' || value === 'system' ? value : 'user';
 }
@@ -407,6 +450,20 @@ function participantIdentity(participant: unknown): string | null {
   return typeof p?.identity === 'string' && p.identity.trim()
     ? p.identity
     : null;
+}
+
+function readLiveTranscriptMetrics(value: unknown): LiveTranscriptMetrics {
+  const record = readOptionalRecord(value);
+  return {
+    firstAudioLatencyMs: readOptionalNumber(record?.firstAudioLatencyMs),
+    playbackDurationMs: readOptionalNumber(record?.playbackDurationMs),
+    totalResponseMs: readOptionalNumber(record?.totalResponseMs),
+    totalTurnMs: readOptionalNumber(record?.totalTurnMs),
+    sttLatencyMs: readOptionalNumber(record?.sttLatencyMs),
+    llmFirstTokenLatencyMs: readOptionalNumber(record?.llmFirstTokenLatencyMs),
+    ttsFirstAudioLatencyMs: readOptionalNumber(record?.ttsFirstAudioLatencyMs),
+    interruptionToSilenceMs: readOptionalNumber(record?.interruptionToSilenceMs),
+  };
 }
 
 function parseLiveTranscriptMessage(
@@ -463,6 +520,7 @@ function parseLiveTranscriptMessage(
       source: readOptionalString(message.source),
       interrupted: Boolean(message.interrupted),
       latencyMs: readOptionalNumber(message.latencyMs),
+      metrics: readLiveTranscriptMetrics(message.metrics),
       participantIdentity: participantId,
     },
     event: null,
@@ -485,6 +543,41 @@ function upsertLiveTranscriptEntry(
     next.push(incoming);
   }
   return next.slice(-80);
+}
+
+function compactDurationMs(value: number | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}s`;
+  }
+  return `${Math.round(value)}ms`;
+}
+
+function summarizeLiveTranscript(
+  entries: LiveTranscriptEntry[],
+  dataChannelEvents: LiveDataChannelEvent[],
+): PostCallSummary {
+  const finalEntries = entries.filter((entry) => entry.status !== 'interim');
+  const agentLatencies = finalEntries
+    .filter((entry) => entry.speaker === 'agent')
+    .map((entry) => entry.latencyMs ?? entry.metrics.firstAudioLatencyMs)
+    .filter((value): value is number => value !== null);
+  const avgAgentLatencyMs =
+    agentLatencies.length === 0
+      ? null
+      : Math.round(agentLatencies.reduce((sum, value) => sum + value, 0) / agentLatencies.length);
+  return {
+    totalTurns: finalEntries.length,
+    userTurns: finalEntries.filter((entry) => entry.speaker === 'user').length,
+    agentTurns: finalEntries.filter((entry) => entry.speaker === 'agent').length,
+    interruptedTurns: finalEntries.filter((entry) => entry.interrupted || entry.status === 'interrupted').length,
+    transcriptChars: finalEntries.reduce((sum, entry) => sum + entry.text.length, 0),
+    dataChannelEvents: dataChannelEvents.length,
+    avgAgentLatencyMs,
+    lastAgentLatencyMs: agentLatencies.at(-1) ?? null,
+  };
 }
 
 function phaseLabel(p: BrowserTestPhaseBadge): string {
@@ -677,6 +770,7 @@ function SessionDebugDrawer({
   connectedAtMs,
   endedAtMs,
   errorMessage,
+  summary,
 }: {
   agentId: string;
   agentName: string;
@@ -687,6 +781,7 @@ function SessionDebugDrawer({
   connectedAtMs: number | null;
   endedAtMs: number | null;
   errorMessage: string | null;
+  summary: PostCallSummary;
 }) {
   return (
     <section className="max-h-[min(16rem,45dvh)] shrink-0 overflow-y-auto border-t border-border/50 bg-muted/15 px-4 py-3 sm:px-5">
@@ -707,6 +802,10 @@ function SessionDebugDrawer({
         <DebugRow label="Ended at" value={formatDebugTime(endedAtMs)} />
         <DebugRow label="Call ID" value={session?.callId} />
         <DebugRow label="Room name" value={session?.roomName} />
+        <DebugRow label="Transcript turns" value={String(summary.totalTurns)} />
+        <DebugRow label="Data channel events" value={String(summary.dataChannelEvents)} />
+        <DebugRow label="Avg agent latency" value={compactDurationMs(summary.avgAgentLatencyMs)} />
+        <DebugRow label="Last agent latency" value={compactDurationMs(summary.lastAgentLatencyMs)} />
         <DebugRow label="Live version" value={session?.runtime?.versionNumber ? `V${session.runtime.versionNumber}` : null} />
         <DebugRow label="Server URL" value={session?.serverUrl} />
         <DebugRow label="Launch error" value={errorMessage} />
@@ -773,6 +872,25 @@ function transcriptSpeakerMeta(speaker: LiveTranscriptSpeaker): {
   };
 }
 
+function LatencyBadge({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | null;
+}) {
+  const formatted = compactDurationMs(value);
+  if (!formatted) {
+    return null;
+  }
+  return (
+    <Badge variant="outline" className="gap-1 px-2 py-0.5 text-[10px]">
+      <Gauge className="h-3 w-3" aria-hidden />
+      {label}: {formatted}
+    </Badge>
+  );
+}
+
 function LiveTranscriptPanel({
   entries,
   lastEvent,
@@ -785,6 +903,12 @@ function LiveTranscriptPanel({
   const endRef = useRef<HTMLDivElement | null>(null);
   const transcriptChars = entries.reduce((total, entry) => total + entry.text.length, 0);
   const lastEventLabel = transcriptEventLabel(lastEvent);
+  const latestAgentEntry =
+    [...entries]
+      .reverse()
+      .find((entry) => entry.speaker === 'agent' && entry.status !== 'interim') ?? null;
+  const latestFirstAudioMs =
+    latestAgentEntry?.latencyMs ?? latestAgentEntry?.metrics.firstAudioLatencyMs ?? null;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
@@ -820,6 +944,15 @@ function LiveTranscriptPanel({
           {isRoomConnected ? 'Live' : 'Waiting'}
         </Badge>
       </div>
+
+      {latestAgentEntry ? (
+        <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-border/40 bg-muted/10 px-3 py-2">
+          <LatencyBadge label="First audio" value={latestFirstAudioMs} />
+          <LatencyBadge label="Total turn" value={latestAgentEntry.metrics.totalTurnMs} />
+          <LatencyBadge label="LLM token" value={latestAgentEntry.metrics.llmFirstTokenLatencyMs} />
+          <LatencyBadge label="TTS audio" value={latestAgentEntry.metrics.ttsFirstAudioLatencyMs} />
+        </div>
+      ) : null}
 
       {lastEventLabel ? (
         <div className="shrink-0 border-b border-border/40 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
@@ -886,6 +1019,24 @@ function LiveTranscriptPanel({
                   >
                     {entry.text}
                   </p>
+                  {entry.speaker === 'agent' ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <LatencyBadge
+                        label="First audio"
+                        value={entry.latencyMs ?? entry.metrics.firstAudioLatencyMs}
+                      />
+                      <LatencyBadge label="Playback" value={entry.metrics.playbackDurationMs} />
+                      <LatencyBadge label="Total" value={entry.metrics.totalResponseMs} />
+                      <LatencyBadge
+                        label="Interrupt"
+                        value={entry.metrics.interruptionToSilenceMs}
+                      />
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <LatencyBadge label="STT" value={entry.metrics.sttLatencyMs} />
+                    </div>
+                  )}
                 </article>
               );
             })}
@@ -894,6 +1045,124 @@ function LiveTranscriptPanel({
         )}
       </div>
     </aside>
+  );
+}
+
+function LiveDataChannelPanel({
+  events,
+}: {
+  events: LiveDataChannelEvent[];
+}) {
+  const visibleEvents = events.slice(-12).reverse();
+  return (
+    <aside
+      aria-label="Live data channel events"
+      className="flex min-h-[10rem] min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/85 shadow-sm"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/50 bg-card/35 px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <Activity className="h-4 w-4 text-muted-foreground" aria-hidden />
+          <h3 className="truncate text-sm font-semibold">Data channel</h3>
+        </div>
+        <Badge variant="outline" className="px-2 py-0.5 text-[10px]">
+          {events.length} event{events.length === 1 ? '' : 's'}
+        </Badge>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        {visibleEvents.length === 0 ? (
+          <div className="grid min-h-full place-items-center text-center">
+            <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
+              Transcript and status data-channel events will appear here as they arrive.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {visibleEvents.map((event) => (
+              <div
+                key={event.id}
+                className="rounded-md border border-border/60 bg-muted/20 px-2.5 py-2 text-left"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="min-w-0 truncate text-xs font-medium">{event.label}</p>
+                  <Badge
+                    variant={event.kind === 'status' ? 'secondary' : 'outline'}
+                    className="shrink-0 px-1.5 py-0 text-[9px]"
+                  >
+                    {event.kind}
+                  </Badge>
+                </div>
+                {event.detail ? (
+                  <p className="mt-1 line-clamp-2 break-words text-[10px] text-muted-foreground">
+                    {event.detail}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function CallDetailLink({
+  callId,
+  variant = 'outline',
+}: {
+  callId: string | null | undefined;
+  variant?: 'default' | 'outline' | 'secondary';
+}) {
+  if (!callId) {
+    return null;
+  }
+  return (
+    <a
+      href={`/calls/${encodeURIComponent(callId)}`}
+      target="_blank"
+      rel="noreferrer"
+      className={cn(buttonVariants({ variant, size: 'sm' }), 'gap-1.5 rounded-full')}
+    >
+      <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+      Call detail
+    </a>
+  );
+}
+
+function PostCallSummaryPanel({
+  summary,
+  durationLabel,
+}: {
+  summary: PostCallSummary;
+  durationLabel: string;
+}) {
+  const cells = [
+    { label: 'Duration', value: durationLabel },
+    { label: 'Turns', value: String(summary.totalTurns) },
+    { label: 'User / Agent', value: `${summary.userTurns} / ${summary.agentTurns}` },
+    { label: 'Interrupted', value: String(summary.interruptedTurns) },
+    { label: 'Characters', value: String(summary.transcriptChars) },
+    { label: 'Data events', value: String(summary.dataChannelEvents) },
+    {
+      label: 'Avg latency',
+      value: compactDurationMs(summary.avgAgentLatencyMs) ?? 'Not available',
+    },
+    {
+      label: 'Last latency',
+      value: compactDurationMs(summary.lastAgentLatencyMs) ?? 'Not available',
+    },
+  ];
+
+  return (
+    <div className="mt-4 grid gap-2 rounded-lg border border-border/70 bg-muted/25 p-3 text-left text-xs text-muted-foreground sm:grid-cols-2">
+      {cells.map((cell) => (
+        <div key={cell.label}>
+          <span className="font-medium text-foreground">{cell.label}</span>
+          <p className="mt-0.5 truncate font-mono" title={cell.value}>
+            {cell.value}
+          </p>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1122,9 +1391,15 @@ interface RoomChromeProps {
   isEnding: boolean;
   elapsedLabel: string;
   lifecycleNotice: string | null;
+  transcriptEntries: LiveTranscriptEntry[];
+  lastTranscriptEvent: LiveTranscriptEvent | null;
+  dataChannelEvents: LiveDataChannelEvent[];
   onSessionActive: () => void;
   onSessionMode: (mode: VoiceUiMode) => void;
   onLifecycleState: (phase: BrowserSessionPhase, message?: string) => void;
+  onTranscriptEntry: (entry: LiveTranscriptEntry) => void;
+  onTranscriptEvent: (event: LiveTranscriptEvent) => void;
+  onDataChannelEvent: (event: LiveDataChannelEvent) => void;
   onRemoteEndRequested: () => void;
   onEndSession: () => Promise<void>;
 }
@@ -1134,9 +1409,15 @@ function BrowserTestRoomChrome({
   isEnding,
   elapsedLabel,
   lifecycleNotice,
+  transcriptEntries,
+  lastTranscriptEvent,
+  dataChannelEvents,
   onSessionActive,
   onSessionMode,
   onLifecycleState,
+  onTranscriptEntry,
+  onTranscriptEvent,
+  onDataChannelEvent,
   onRemoteEndRequested,
   onEndSession,
 }: RoomChromeProps) {
@@ -1158,9 +1439,6 @@ function BrowserTestRoomChrome({
   const [muteBusy, setMuteBusy] = useState(false);
   const [agentAudioDucked, setAgentAudioDucked] = useState(false);
   const [agentWaitTimedOut, setAgentWaitTimedOut] = useState(false);
-  const [transcriptEntries, setTranscriptEntries] = useState<LiveTranscriptEntry[]>([]);
-  const [lastTranscriptEvent, setLastTranscriptEvent] =
-    useState<LiveTranscriptEvent | null>(null);
   const autoMicAttemptRef = useRef(0);
   const readinessLoggedRef = useRef(false);
   const userMutedRef = useRef(false);
@@ -1517,12 +1795,21 @@ function BrowserTestRoomChrome({
       addEventLogger(room, RoomEvent.DataReceived, (payload, participant, kind, topic) => {
         void kind;
         const message = decodeControlPayload(payload);
+        const receivedAt = Date.now();
         if (topic === TRANSCRIPT_TOPIC && message) {
           const parsed = parseLiveTranscriptMessage(message, participant);
           if (parsed?.entry) {
-            setTranscriptEntries((current) =>
-              upsertLiveTranscriptEntry(current, parsed.entry),
-            );
+            onTranscriptEntry(parsed.entry);
+            onDataChannelEvent({
+              id: `${receivedAt}:transcript:${parsed.entry.id}`,
+              topic: TRANSCRIPT_TOPIC,
+              kind: 'transcript',
+              label: `${parsed.entry.speaker === 'agent' ? 'Agent' : 'User'} transcript ${parsed.entry.status}`,
+              detail: `${parsed.entry.text.length} chars${parsed.entry.latencyMs !== null ? `, ${parsed.entry.latencyMs}ms` : ''}`,
+              timestamp: parsed.entry.timestamp,
+              receivedAt,
+              phase: null,
+            });
             logTestCallDebug('live_transcript_entry_received', {
               id: parsed.entry.id,
               speaker: parsed.entry.speaker,
@@ -1530,7 +1817,17 @@ function BrowserTestRoomChrome({
               chars: parsed.entry.text.length,
             });
           } else if (parsed?.event) {
-            setLastTranscriptEvent(parsed.event);
+            onTranscriptEvent(parsed.event);
+            onDataChannelEvent({
+              id: `${receivedAt}:transcript-event:${parsed.event.event}:${parsed.event.turnId ?? 'none'}`,
+              topic: TRANSCRIPT_TOPIC,
+              kind: 'transcript',
+              label: transcriptEventLabel(parsed.event) ?? parsed.event.event,
+              detail: parsed.event.turnId === null ? null : `Turn ${parsed.event.turnId}`,
+              timestamp: parsed.event.timestamp,
+              receivedAt,
+              phase: null,
+            });
             logTestCallDebug('live_transcript_event_received', {
               event: parsed.event.event,
               speaker: parsed.event.speaker,
@@ -1539,6 +1836,16 @@ function BrowserTestRoomChrome({
           return;
         }
         if (topic === CONTROL_TOPIC && message?.type === 'end_call') {
+          onDataChannelEvent({
+            id: `${receivedAt}:control:end_call`,
+            topic: CONTROL_TOPIC,
+            kind: 'control',
+            label: 'End call requested',
+            detail: typeof message.reason === 'string' ? message.reason : null,
+            timestamp: new Date(receivedAt).toISOString(),
+            receivedAt,
+            phase: 'ENDING',
+          });
           logTestCallDebug('call_end_frontend_synced', {
             source: 'livekit_data',
             reason: message.reason,
@@ -1558,6 +1865,16 @@ function BrowserTestRoomChrome({
               phase,
               message: notice,
               reason: message.reason,
+            });
+            onDataChannelEvent({
+              id: `${receivedAt}:status:${phase}:${message.reason ?? 'none'}`,
+              topic: CONTROL_TOPIC,
+              kind: 'status',
+              label: `Status: ${phase}`,
+              detail: notice ?? (typeof message.reason === 'string' ? message.reason : null),
+              timestamp: new Date(receivedAt).toISOString(),
+              receivedAt,
+              phase,
             });
             onLifecycleState(phase, notice);
           }
@@ -1626,7 +1943,15 @@ function BrowserTestRoomChrome({
     ];
 
     return () => cleanups.forEach((cleanup) => cleanup());
-  }, [localParticipant, onLifecycleState, onRemoteEndRequested, room]);
+  }, [
+    localParticipant,
+    onDataChannelEvent,
+    onLifecycleState,
+    onRemoteEndRequested,
+    onTranscriptEntry,
+    onTranscriptEvent,
+    room,
+  ]);
 
   useEffect(() => {
     if (isRoomConnected && isMicrophonePublished) {
@@ -1854,11 +2179,14 @@ function BrowserTestRoomChrome({
                 ) : null}
               </div>
 
-              <LiveTranscriptPanel
-                entries={transcriptEntries}
-                lastEvent={lastTranscriptEvent}
-                isRoomConnected={isRoomConnected}
-              />
+              <div className="flex min-h-0 min-w-0 flex-col gap-3">
+                <LiveTranscriptPanel
+                  entries={transcriptEntries}
+                  lastEvent={lastTranscriptEvent}
+                  isRoomConnected={isRoomConnected}
+                />
+                <LiveDataChannelPanel events={dataChannelEvents} />
+              </div>
             </div>
           </div>
 
@@ -1908,6 +2236,10 @@ export function TestCallModal(props: TestCallModalProps) {
   const [sessionConnectedAtMs, setSessionConnectedAtMs] = useState<number | null>(null);
   const [sessionEndedAtMs, setSessionEndedAtMs] = useState<number | null>(null);
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const [liveTranscriptEntries, setLiveTranscriptEntries] = useState<LiveTranscriptEntry[]>([]);
+  const [lastLiveTranscriptEvent, setLastLiveTranscriptEvent] =
+    useState<LiveTranscriptEvent | null>(null);
+  const [dataChannelEvents, setDataChannelEvents] = useState<LiveDataChannelEvent[]>([]);
   const testInteractionCompletedRef = useRef(false);
 
   /** Mirrored session state from backend end requests + LiveKit room events. */
@@ -1987,6 +2319,9 @@ export function TestCallModal(props: TestCallModalProps) {
       setSessionConnectedAtMs(null);
       setSessionEndedAtMs(null);
       setDebugOpen(false);
+      setLiveTranscriptEntries([]);
+      setLastLiveTranscriptEvent(null);
+      setDataChannelEvents([]);
       testInteractionCompletedRef.current = false;
       return undefined;
     }
@@ -1999,6 +2334,9 @@ export function TestCallModal(props: TestCallModalProps) {
     setLifecycleNotice(null);
     setSessionConnectedAtMs(null);
     setSessionEndedAtMs(null);
+    setLiveTranscriptEntries([]);
+    setLastLiveTranscriptEvent(null);
+    setDataChannelEvents([]);
 
     void (async () => {
       try {
@@ -2088,6 +2426,18 @@ export function TestCallModal(props: TestCallModalProps) {
     });
   }, [agentId, apiCall, session]);
 
+  const recordTranscriptEntry = useCallback((entry: LiveTranscriptEntry): void => {
+    setLiveTranscriptEntries((current) => upsertLiveTranscriptEntry(current, entry));
+  }, []);
+
+  const recordTranscriptEvent = useCallback((event: LiveTranscriptEvent): void => {
+    setLastLiveTranscriptEvent(event);
+  }, []);
+
+  const recordDataChannelEvent = useCallback((event: LiveDataChannelEvent): void => {
+    setDataChannelEvents((current) => [...current, event].slice(-80));
+  }, []);
+
   const badgePhase = useMemo((): BrowserTestPhaseBadge => {
     if (fetchFailed) {
       return 'fetch_error';
@@ -2138,6 +2488,7 @@ export function TestCallModal(props: TestCallModalProps) {
       ? 0
       : Math.floor(((sessionEndedAtMs ?? clockNowMs) - sessionConnectedAtMs) / 1000);
   const durationLabel = formatSessionDuration(elapsedSeconds);
+  const postCallSummary = summarizeLiveTranscript(liveTranscriptEntries, dataChannelEvents);
   const launchSteps: ConnectionStep[] = [
     {
       label: 'Session',
@@ -2172,6 +2523,9 @@ export function TestCallModal(props: TestCallModalProps) {
     setSessionConnectedAtMs(null);
     setSessionEndedAtMs(null);
     setLifecycleNotice(null);
+    setLiveTranscriptEntries([]);
+    setLastLiveTranscriptEvent(null);
+    setDataChannelEvents([]);
     setReloadKey((k) => k + 1);
   };
 
@@ -2233,6 +2587,7 @@ export function TestCallModal(props: TestCallModalProps) {
             <RuntimeCredentialStrip runtime={session?.runtime ?? null} />
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            <CallDetailLink callId={session?.callId} />
             <Button
               type="button"
               variant="outline"
@@ -2326,9 +2681,15 @@ export function TestCallModal(props: TestCallModalProps) {
               isEnding={sessionPhase === 'ENDING'}
               elapsedLabel={durationLabel}
               lifecycleNotice={lifecycleNotice}
+              transcriptEntries={liveTranscriptEntries}
+              lastTranscriptEvent={lastLiveTranscriptEvent}
+              dataChannelEvents={dataChannelEvents}
               onSessionActive={markRtcActive}
               onSessionMode={markSessionMode}
               onLifecycleState={markLifecycleState}
+              onTranscriptEntry={recordTranscriptEntry}
+              onTranscriptEvent={recordTranscriptEvent}
+              onDataChannelEvent={recordDataChannelEvent}
               onRemoteEndRequested={markRemoteEndRequested}
               onEndSession={requestEndSession}
             />
@@ -2344,19 +2705,18 @@ export function TestCallModal(props: TestCallModalProps) {
                 This browser session has stopped. Test calls remain available in
                 Calls history with a Test badge.
               </p>
-              <div className="mt-4 grid gap-2 rounded-lg border border-border/70 bg-muted/25 p-3 text-left text-xs text-muted-foreground sm:grid-cols-2">
-                <div>
-                  <span className="font-medium text-foreground">Duration</span>
-                  <p className="mt-0.5 font-mono">{durationLabel}</p>
-                </div>
-                <div>
-                  <span className="font-medium text-foreground">Call ID</span>
-                  <p className="mt-0.5 truncate font-mono" title={session.callId}>
-                    {session.callId}
-                  </p>
-                </div>
+              <PostCallSummaryPanel
+                summary={postCallSummary}
+                durationLabel={durationLabel}
+              />
+              <div className="mt-3 rounded-lg border border-border/70 bg-background/70 p-3 text-left text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Call ID</span>
+                <p className="mt-0.5 truncate font-mono" title={session.callId}>
+                  {session.callId}
+                </p>
               </div>
               <div className="mt-5 flex flex-wrap justify-center gap-3">
+                <CallDetailLink callId={session.callId} variant="default" />
                 <Button
                   type="button"
                   variant="secondary"
@@ -2407,6 +2767,7 @@ export function TestCallModal(props: TestCallModalProps) {
             connectedAtMs={sessionConnectedAtMs}
             endedAtMs={sessionEndedAtMs}
             errorMessage={errorMessage}
+            summary={postCallSummary}
           />
         ) : null}
 

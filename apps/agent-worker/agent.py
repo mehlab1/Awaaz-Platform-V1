@@ -337,10 +337,20 @@ class CallLifecycle:
     def mark_reconnecting(self) -> None:
         self._reconnecting = True
         self.mark_activity("room_reconnecting")
+        self._publish_session_state(
+            "LIVE",
+            "Room connection is recovering.",
+            reason="room_reconnecting",
+        )
 
     def mark_reconnected(self) -> None:
         self._reconnecting = False
         self.mark_activity("room_reconnected")
+        self._publish_session_state(
+            "LIVE",
+            "Room connection recovered.",
+            reason="room_reconnected",
+        )
 
     def mark_playback_started(self) -> None:
         self._playback_active = True
@@ -488,6 +498,13 @@ class CallLifecycle:
         if self._stt_pending:
             return "stt_pending"
         return "idle"
+
+    def publish_ready(self) -> None:
+        self._publish_session_state(
+            "LIVE",
+            "Agent joined and is ready.",
+            reason="agent_ready",
+        )
 
     def _is_busy(self) -> bool:
         if self._stt_pending and self._stt_pending_since is not None:
@@ -736,6 +753,7 @@ class AwaazAgent:
             string_list(config, "endCallPhrases"),
         )
         lifecycle.set_speech_events(speech_events)
+        timing.set_event_sink(speech_events)
 
         async def shutdown() -> None:
             logger.info("worker_shutdown_callback_started call_id=%s", call_id)
@@ -762,12 +780,35 @@ class AwaazAgent:
             participant_kind(participant),
         )
         assistant.start(ctx.room, participant)
-        register_timing_events(assistant, timing, lifecycle, transcript_publisher)
+        register_timing_events(
+            assistant,
+            timing,
+            lifecycle,
+            transcript_publisher,
+            speech_events,
+        )
         lifecycle.start_policies()
+        lifecycle.publish_ready()
 
         first_message = string_value(config, "firstMessage")
         if first_message:
-            await assistant.say(first_message, allow_interruptions=True)
+            try:
+                await assistant.say(first_message, allow_interruptions=True)
+            except Exception as error:
+                logger.error(
+                    "initial_agent_message_failed call_id=%s",
+                    call_id,
+                    exc_info=True,
+                )
+                speech_events.emit_error(
+                    code="initial_agent_message_failed",
+                    message=str(error),
+                    metadata={
+                        "timelineEvent": "error",
+                        "stage": "initial_agent_message",
+                    },
+                )
+                raise
 
 
 def create_assistant(
@@ -863,36 +904,81 @@ class SpeechEventSink:
         latency_ms: int | None = None,
         timing_payload: dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
+        token_count: int | None = None,
+    ) -> None:
+        text = message_text(message).strip()
+        if not text:
+            return
+        self.emit_raw(
+            event_type,
+            text=text,
+            latency_ms=latency_ms,
+            token_count=token_count,
+            timing_payload=timing_payload,
+            metadata=metadata,
+        )
+
+    def emit_raw(
+        self,
+        event_type: str,
+        *,
+        text: str | None = None,
+        speaker: str | None = None,
+        latency_ms: int | None = None,
+        token_count: int | None = None,
+        timing_payload: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         if not self._call_id:
             return
 
-        text = message_text(message).strip()
-        if not text:
-            return
-
+        normalized_text = text.strip() if isinstance(text, str) else ""
         payload: dict[str, object] = {
             "eventType": event_type,
-            "text": text,
         }
+        if normalized_text:
+            payload["text"] = normalized_text
+        if speaker:
+            payload["speaker"] = speaker
         if timing_payload:
             payload.update(timing_payload)
         if latency_ms is not None:
             payload["latencyMs"] = latency_ms
+        if token_count is not None:
+            payload["tokenCount"] = token_count
         if metadata:
             payload["metadata"] = metadata
 
         task = asyncio.create_task(self._api.emit_event(self._call_id, payload))
         self._tasks.add(task)
         logger.info(
-            "speech_event_emit_queued type=%s chars=%s latency_ms=%s metadata=%s pending=%s",
+            "call_event_emit_queued type=%s chars=%s latency_ms=%s metadata=%s pending=%s",
             event_type,
-            len(text),
+            len(normalized_text),
             latency_ms,
             metadata or {},
             len(self._tasks),
         )
         task.add_done_callback(self._on_emit_done)
+
+    def emit_error(
+        self,
+        *,
+        code: str,
+        message: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        event_metadata = {
+            "timelineEvent": "error",
+            "errorCode": code,
+            **(metadata or {}),
+        }
+        self.emit_raw(
+            "ERROR",
+            text=message,
+            speaker="system",
+            metadata=event_metadata,
+        )
 
     async def flush(self, timeout_seconds: float = 8.0) -> None:
         await asyncio.sleep(0)
@@ -943,6 +1029,7 @@ class LiveTranscriptPublisher:
         source: str | None = None,
         interrupted: bool = False,
         latency_ms: int | None = None,
+        metrics: dict[str, object] | None = None,
     ) -> None:
         normalized_text = text.strip()
         if not normalized_text:
@@ -960,6 +1047,7 @@ class LiveTranscriptPublisher:
                 "source": source,
                 "interrupted": interrupted,
                 "latencyMs": latency_ms,
+                "metrics": metrics or {},
                 "timestamp": utc_now_iso(),
             }
         )
@@ -1034,6 +1122,7 @@ class ResponseTiming:
     llm_finished_at_iso: str | None = None
     tts_text_started_at: float | None = None
     tts_text_started_at_iso: str | None = None
+    tts_text_finished_at: float | None = None
     tts_text_finished_at_iso: str | None = None
     playback_started_at: float | None = None
     playback_started_at_iso: str | None = None
@@ -1053,21 +1142,49 @@ class PipelineTiming:
         self.active_response: ResponseTiming | None = None
         self.last_response: ResponseTiming | None = None
         self.barge_in_requested_at: float | None = None
+        self.barge_in_requested_at_iso: str | None = None
         self.barge_in_reason: str | None = None
         self.interruption_requested_at: float | None = None
+        self.interruption_requested_at_iso: str | None = None
         self.audio_queue_flushed_at: float | None = None
+        self.audio_queue_flushed_at_iso: str | None = None
         self.audio_queue_flushed_before_ms: int | None = None
         self.audio_queue_flushed_after_ms: int | None = None
         self._lifecycle: CallLifecycle | None = None
+        self._event_sink: SpeechEventSink | None = None
         self.llm_provider_id = "unknown"
         self.llm_model_id = "unknown"
 
     def set_lifecycle(self, lifecycle: CallLifecycle) -> None:
         self._lifecycle = lifecycle
 
+    def set_event_sink(self, event_sink: SpeechEventSink) -> None:
+        self._event_sink = event_sink
+
     def set_llm_runtime(self, provider_id: str, model_id: str) -> None:
         self.llm_provider_id = provider_id
         self.llm_model_id = model_id
+
+    def emit_error(
+        self,
+        *,
+        code: str,
+        message: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        if self._event_sink is None:
+            return
+        self._event_sink.emit_error(
+            code=code,
+            message=message,
+            metadata={
+                "turnId": self.turn_id,
+                "responseId": self.active_response.response_id
+                if self.active_response is not None
+                else None,
+                **(metadata or {}),
+            },
+        )
 
     def mark_user_started(self) -> None:
         self.turn_id += 1
@@ -1147,6 +1264,16 @@ class PipelineTiming:
                 self.llm_provider_id,
                 self.llm_model_id,
                 exc_info=True,
+            )
+            self.emit_error(
+                code="llm_start_failed",
+                message="LLM stream failed to start",
+                metadata={
+                    "llmProviderId": self.llm_provider_id,
+                    "llmModel": self.llm_model_id,
+                    "turnId": response.turn_id,
+                    "responseId": response.response_id,
+                },
             )
             self.mark_llm_finished(response)
             raise
@@ -1229,6 +1356,7 @@ class PipelineTiming:
     def mark_tts_text_finished(self, response: ResponseTiming, chars: int) -> None:
         if response.tts_text_finished_at_iso is not None:
             return
+        response.tts_text_finished_at = time.monotonic()
         response.tts_text_finished_at_iso = utc_now_iso()
         if self._lifecycle is not None:
             self._lifecycle.mark_tts_finished()
@@ -1291,7 +1419,10 @@ class PipelineTiming:
 
     def mark_barge_in_requested(self, reason: str) -> None:
         self.barge_in_requested_at = time.monotonic()
+        self.barge_in_requested_at_iso = utc_now_iso()
         self.barge_in_reason = reason
+        self.interruption_requested_at = self.barge_in_requested_at
+        self.interruption_requested_at_iso = self.barge_in_requested_at_iso
         if self._lifecycle is not None:
             self._lifecycle.mark_barge_in(reason)
 
@@ -1313,24 +1444,188 @@ class PipelineTiming:
             return None
         return elapsed_ms(response.response_reference_at(), response.playback_stopped_at)
 
+    def total_turn_ms(self, response: ResponseTiming | None) -> int | None:
+        if response is None:
+            return None
+        return elapsed_ms(response.user_started_at, response.playback_stopped_at)
+
     def agent_response_metrics(self) -> dict[str, object]:
         response = self._event_response()
         metrics: dict[str, object] = {}
-        first_audio_latency_ms = self.first_audio_latency_ms(response)
-        playback_duration_ms = self.playback_duration_ms(response)
-        total_response_ms = self.total_response_ms(response)
-        if first_audio_latency_ms is not None:
-            metrics["firstAudioLatencyMs"] = first_audio_latency_ms
-        if playback_duration_ms is not None:
-            metrics["playbackDurationMs"] = playback_duration_ms
-        if total_response_ms is not None:
-            metrics["totalResponseMs"] = total_response_ms
+        self._put_metric(
+            metrics,
+            "speechDurationMs",
+            elapsed_ms(
+                response.user_started_at if response else None,
+                response.user_stopped_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "sttLatencyMs",
+            elapsed_ms(
+                response.user_stopped_at if response else None,
+                response.final_transcript_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "llmStartAfterFinalTranscriptMs",
+            elapsed_ms(
+                response.final_transcript_at if response else None,
+                response.llm_started_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "llmStartAfterUserStopMs",
+            elapsed_ms(
+                response.user_stopped_at if response else None,
+                response.llm_started_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "llmFirstTokenLatencyMs",
+            elapsed_ms(
+                response.llm_started_at if response else None,
+                response.first_llm_token_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "llmTotalMs",
+            elapsed_ms(
+                response.llm_started_at if response else None,
+                response.llm_finished_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "ttsFirstTextLatencyMs",
+            elapsed_ms(
+                response.llm_started_at if response else None,
+                response.tts_text_started_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "ttsTextTotalMs",
+            elapsed_ms(
+                response.tts_text_started_at if response else None,
+                response.tts_text_finished_at if response else None,
+            ),
+        )
+        self._put_metric(
+            metrics,
+            "ttsFirstAudioLatencyMs",
+            elapsed_ms(
+                response.tts_text_started_at if response else None,
+                response.playback_started_at if response else None,
+            ),
+        )
+        self._put_metric(metrics, "firstAudioLatencyMs", self.first_audio_latency_ms(response))
+        self._put_metric(metrics, "playbackDurationMs", self.playback_duration_ms(response))
+        self._put_metric(metrics, "totalResponseMs", self.total_response_ms(response))
+        self._put_metric(metrics, "totalTurnMs", self.total_turn_ms(response))
+        self._put_metric(
+            metrics,
+            "interruptionToSilenceMs",
+            elapsed_ms(self.barge_in_requested_at, response.playback_stopped_at if response else None)
+            if response and response.interrupted
+            else None,
+        )
         if response is not None:
             metrics["turnId"] = response.turn_id
             metrics["responseId"] = response.response_id
+            metrics["interrupted"] = response.interrupted
+            if response.user_started_at_iso:
+                metrics["userStartedAt"] = response.user_started_at_iso
+            if response.user_stopped_at_iso:
+                metrics["userStoppedAt"] = response.user_stopped_at_iso
+            if response.final_transcript_at_iso:
+                metrics["finalTranscriptAt"] = response.final_transcript_at_iso
+            if response.llm_started_at_iso:
+                metrics["llmStartedAt"] = response.llm_started_at_iso
+            if response.first_llm_token_at_iso:
+                metrics["firstLlmTokenAt"] = response.first_llm_token_at_iso
+            if response.llm_finished_at_iso:
+                metrics["llmFinishedAt"] = response.llm_finished_at_iso
+            if response.tts_text_started_at_iso:
+                metrics["ttsTextStartedAt"] = response.tts_text_started_at_iso
+            if response.tts_text_finished_at_iso:
+                metrics["ttsTextFinishedAt"] = response.tts_text_finished_at_iso
+            if response.playback_started_at_iso:
+                metrics["playbackStartedAt"] = response.playback_started_at_iso
+            if response.playback_stopped_at_iso:
+                metrics["playbackStoppedAt"] = response.playback_stopped_at_iso
         metrics["llmProviderId"] = self.llm_provider_id
         metrics["llmModel"] = self.llm_model_id
+        if self.barge_in_reason:
+            metrics["bargeInReason"] = self.barge_in_reason
+        if self.barge_in_requested_at_iso:
+            metrics["bargeInRequestedAt"] = self.barge_in_requested_at_iso
+        if self.audio_queue_flushed_at_iso:
+            metrics["audioQueueFlushedAt"] = self.audio_queue_flushed_at_iso
+        self._put_metric(metrics, "audioQueueFlushedBeforeMs", self.audio_queue_flushed_before_ms)
+        self._put_metric(metrics, "audioQueueFlushedAfterMs", self.audio_queue_flushed_after_ms)
         return metrics
+
+    def user_turn_metrics(self) -> dict[str, object]:
+        turn = self.current_user
+        metrics: dict[str, object] = {}
+        if turn is None:
+            return metrics
+        metrics["turnId"] = turn.turn_id
+        metrics["userStartedAt"] = turn.started_at_iso
+        if turn.stopped_at_iso:
+            metrics["userStoppedAt"] = turn.stopped_at_iso
+        if turn.final_transcript_at_iso:
+            metrics["finalTranscriptAt"] = turn.final_transcript_at_iso
+        self._put_metric(metrics, "speechDurationMs", elapsed_ms(turn.started_at, turn.stopped_at))
+        self._put_metric(metrics, "sttLatencyMs", elapsed_ms(turn.stopped_at, turn.final_transcript_at))
+        self._put_metric(
+            metrics,
+            "sttTotalFromSpeechStartMs",
+            elapsed_ms(turn.started_at, turn.final_transcript_at),
+        )
+        return metrics
+
+    def interruption_metrics(
+        self,
+        *,
+        reason: str,
+        text: str,
+        words: int,
+        speech_duration: float,
+        interrupted: bool,
+        bypass_word_gate: bool,
+    ) -> dict[str, object]:
+        response = self._event_response()
+        metrics: dict[str, object] = {
+            "reason": reason,
+            "turnId": self.turn_id,
+            "words": words,
+            "speechMs": round(speech_duration * 1000),
+            "bypassWordGate": bypass_word_gate,
+            "interrupted": interrupted,
+            "textChars": len(text),
+        }
+        if response is not None:
+            metrics["responseId"] = response.response_id
+            metrics["agentPlaybackStartedAt"] = response.playback_started_at_iso
+        if self.interruption_requested_at_iso:
+            metrics["interruptionRequestedAt"] = self.interruption_requested_at_iso
+        if self.audio_queue_flushed_at_iso:
+            metrics["audioQueueFlushedAt"] = self.audio_queue_flushed_at_iso
+        self._put_metric(
+            metrics,
+            "interruptionToQueueFlushMs",
+            elapsed_ms(self.interruption_requested_at, self.audio_queue_flushed_at),
+        )
+        self._put_metric(metrics, "audioQueueFlushedBeforeMs", self.audio_queue_flushed_before_ms)
+        self._put_metric(metrics, "audioQueueFlushedAfterMs", self.audio_queue_flushed_after_ms)
+        return {key: value for key, value in metrics.items() if value is not None}
 
     def user_speech_payload(self) -> dict[str, object]:
         turn = self.current_user
@@ -1416,6 +1711,15 @@ class PipelineTiming:
             payload["durationMs"] = duration_ms
         return payload
 
+    def _put_metric(
+        self,
+        metrics: dict[str, object],
+        key: str,
+        value: int | None,
+    ) -> None:
+        if value is not None:
+            metrics[key] = value
+
 
 class TimedLLMStream(LLMStream):
     def __init__(
@@ -1461,6 +1765,16 @@ class TimedLLMStream(LLMStream):
                 self._timing.llm_provider_id,
                 self._timing.llm_model_id,
                 exc_info=True,
+            )
+            self._timing.emit_error(
+                code="llm_stream_failed",
+                message="LLM stream failed while generating a response",
+                metadata={
+                    "llmProviderId": self._timing.llm_provider_id,
+                    "llmModel": self._timing.llm_model_id,
+                    "turnId": self._response.turn_id,
+                    "responseId": self._response.response_id,
+                },
             )
             self._mark_finished_once()
             raise
@@ -1626,6 +1940,7 @@ def register_timing_events(
     timing: PipelineTiming,
     lifecycle: CallLifecycle,
     transcript_publisher: LiveTranscriptPublisher,
+    event_sink: SpeechEventSink,
 ) -> None:
     def on_user_started() -> None:
         timing.mark_user_started()
@@ -1696,6 +2011,7 @@ def register_timing_events(
             text=text,
             turn_id=timing.turn_id,
             source="stt_final",
+            metrics=timing.user_turn_metrics(),
         )
 
     def on_interim_transcript(event: object) -> None:
@@ -1726,13 +2042,14 @@ def register_timing_events(
 
     human_input.on("final_transcript", on_final_transcript)
     human_input.on("interim_transcript", on_interim_transcript)
-    register_barge_in_events(assistant, human_input, timing)
+    register_barge_in_events(assistant, human_input, timing, event_sink)
 
 
 def register_barge_in_events(
     assistant: VoiceAssistant,
     human_input: object,
     timing: PipelineTiming,
+    event_sink: SpeechEventSink,
 ) -> None:
     opts = getattr(assistant, "_opts", None)
     interrupt_seconds = float(getattr(opts, "int_speech_duration", 0.35) or 0.35)
@@ -1795,6 +2112,7 @@ def register_barge_in_events(
             queued_after = None
 
         timing.audio_queue_flushed_at = time.monotonic()
+        timing.audio_queue_flushed_at_iso = utc_now_iso()
         timing.audio_queue_flushed_before_ms = None if queued_before is None else round(queued_before * 1000)
         timing.audio_queue_flushed_after_ms = None if queued_after is None else round(queued_after * 1000)
 
@@ -1884,7 +2202,6 @@ def register_barge_in_events(
             setattr(assistant, "_transcribed_interim_text", text)
 
         timing.mark_barge_in_requested(reason)
-        timing.interruption_requested_at = timing.barge_in_requested_at
         logger.warning(
             "interruption_requested reason=%s turn=%s speech_ms=%s words=%s bypass_word_gate=%s",
             reason,
@@ -1916,6 +2233,34 @@ def register_barge_in_events(
 
         if interrupted:
             clear_audio_queue(reason)
+
+        interruption_metrics = timing.interruption_metrics(
+            reason=reason,
+            text=text,
+            words=words,
+            speech_duration=speech_duration,
+            interrupted=interrupted,
+            bypass_word_gate=bypass_word_gate,
+        )
+        interruption_payload: dict[str, object] = {}
+        if timing.interruption_requested_at_iso:
+            interruption_payload["startedAt"] = timing.interruption_requested_at_iso
+        interruption_latency = interruption_metrics.get("interruptionToQueueFlushMs")
+        event_sink.emit_raw(
+            "INTERRUPTION",
+            text=text,
+            speaker="user",
+            timing_payload=interruption_payload,
+            latency_ms=(
+                interruption_latency
+                if isinstance(interruption_latency, int)
+                else None
+            ),
+            metadata={
+                "timelineEvent": "interruption_requested",
+                "metrics": interruption_metrics,
+            },
+        )
 
         logger.warning(
             "barge_in_agent_speech_interrupt_result interrupted=%s reason=%s turn=%s",
@@ -2031,8 +2376,32 @@ def register_events(
             text=text,
             turn_id=timing.turn_id,
             source="user_speech_committed",
+            metrics=user_metrics,
         )
-        sink.emit("USER_SPEECH", message, timing_payload=timing.user_speech_payload())
+        user_metrics = timing.user_turn_metrics()
+        sink.emit(
+            "USER_SPEECH",
+            message,
+            timing_payload=timing.user_speech_payload(),
+            metadata={
+                "timelineEvent": "user_speech_final",
+                "metrics": user_metrics,
+                "textChars": len(text),
+                "estimatedTokens": estimate_token_count(text),
+            },
+            token_count=estimate_token_count(text),
+        )
+        sink.emit_raw(
+            "TURN_METRICS",
+            speaker="user",
+            timing_payload=timing.user_speech_payload(),
+            metadata={
+                "timelineEvent": "user_turn_metrics",
+                "metrics": user_metrics,
+                "textChars": len(text),
+                "estimatedTokens": estimate_token_count(text),
+            },
+        )
         if is_closing_utterance(text, end_call_phrases):
             logger.info(
                 "goodbye_intent_detected turn=%s chars=%s text=%r",
@@ -2052,6 +2421,8 @@ def register_events(
             return
         latency_ms = timing.response_latency_ms()
         metrics = timing.agent_response_metrics()
+        text = message_text(message)
+        token_count = estimate_token_count(text)
         response_id = (
             metrics.get("responseId") if isinstance(metrics.get("responseId"), int) else None
         )
@@ -2066,18 +2437,38 @@ def register_events(
             entry_id=f"agent:{response_id or int(time.monotonic() * 1000)}",
             speaker="agent",
             status="final",
-            text=message_text(message),
+            text=text,
             turn_id=turn_id,
             response_id=response_id,
             source="agent_speech_committed",
             latency_ms=latency_ms,
+            metrics=metrics,
         )
         sink.emit(
             "AGENT_SPEECH",
             message,
             latency_ms,
             timing.agent_speech_payload(),
-            {"metrics": metrics} if metrics else None,
+            {
+                "timelineEvent": "agent_speech_final",
+                "metrics": metrics,
+                "textChars": len(text),
+                "estimatedTokens": token_count,
+            },
+            token_count=token_count,
+        )
+        sink.emit_raw(
+            "TURN_METRICS",
+            speaker="agent",
+            latency_ms=latency_ms,
+            token_count=token_count,
+            timing_payload=timing.agent_speech_payload(),
+            metadata={
+                "timelineEvent": "agent_turn_metrics",
+                "metrics": metrics,
+                "textChars": len(text),
+                "estimatedTokens": token_count,
+            },
         )
         timing.consume_agent_response()
 
@@ -2091,6 +2482,8 @@ def register_events(
             return
         latency_ms = timing.response_latency_ms()
         metrics = timing.agent_response_metrics()
+        text = message_text(message)
+        token_count = estimate_token_count(text)
         response_id = (
             metrics.get("responseId") if isinstance(metrics.get("responseId"), int) else None
         )
@@ -2102,19 +2495,23 @@ def register_events(
             latency_ms,
             metrics,
         )
-        metadata: dict[str, object] = {"interrupted": True}
+        metadata: dict[str, object] = {
+            "timelineEvent": "agent_speech_interrupted",
+            "interrupted": True,
+        }
         if metrics:
             metadata["metrics"] = metrics
         transcript_publisher.emit_entry(
             entry_id=f"agent:{response_id or int(time.monotonic() * 1000)}",
             speaker="agent",
             status="interrupted",
-            text=message_text(message),
+            text=text,
             turn_id=turn_id,
             response_id=response_id,
             source="agent_speech_interrupted",
             interrupted=True,
             latency_ms=latency_ms,
+            metrics=metrics,
         )
         sink.emit(
             "AGENT_SPEECH",
@@ -2122,6 +2519,21 @@ def register_events(
             latency_ms,
             timing.agent_speech_payload(),
             metadata,
+            token_count=token_count,
+        )
+        sink.emit_raw(
+            "TURN_METRICS",
+            speaker="agent",
+            latency_ms=latency_ms,
+            token_count=token_count,
+            timing_payload=timing.agent_speech_payload(),
+            metadata={
+                "timelineEvent": "agent_turn_metrics",
+                "metrics": metrics,
+                "textChars": len(text),
+                "estimatedTokens": token_count,
+                "interrupted": True,
+            },
         )
         timing.consume_agent_response()
 
@@ -2238,6 +2650,13 @@ def message_text(message: llm.ChatMessage) -> str:
     if isinstance(content, list):
         return " ".join(item for item in content if isinstance(item, str))
     return ""
+
+
+def estimate_token_count(text: str) -> int:
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    return max(1, (len(stripped) + 3) // 4)
 
 
 QUESTION_INTENT_RE = re.compile(

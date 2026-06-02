@@ -46,6 +46,8 @@ enum EventType {
   CALL_ENDED
   TRANSFER_INITIATED
   ERROR
+  TURN_METRICS
+  INTERRUPTION
 }
 
 enum AuditAction {
