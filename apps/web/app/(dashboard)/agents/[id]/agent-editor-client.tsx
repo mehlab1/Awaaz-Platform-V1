@@ -3999,6 +3999,7 @@ function PipelineProviderCard({
   onKeyDraftChange,
   onSaveKey,
   credentialBusy,
+  onboardingTarget,
 }: {
   title: string;
   providerValue: string;
@@ -4036,7 +4037,7 @@ function PipelineProviderCard({
     <section className="overflow-hidden rounded-lg border border-border/50 bg-background/70">
       <button
         type="button"
-        data-onboarding-target={onboardingTarget}
+        data-onboarding-target={onboardingTarget ?? undefined}
         className="flex w-full items-center gap-3 px-3 py-3 text-left transition hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-expanded={open}
         aria-controls={panelId}
