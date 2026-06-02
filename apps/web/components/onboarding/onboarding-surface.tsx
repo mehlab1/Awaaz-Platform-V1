@@ -162,7 +162,7 @@ function WelcomePanel({
               className="max-w-lg text-base sm:text-lg text-muted-foreground leading-relaxed mb-10"
               style={{ animation: 'onboarding-step-enter 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both' }}
             >
-              We'll guide you through creating a workspace, adding your first voice agent, and running a live browser test call in minutes.
+              We&apos;ll guide you through creating a workspace, adding your first voice agent, and running a live browser test call in minutes.
             </p>
 
             <div className="grid w-full gap-4 sm:grid-cols-3 mb-10">

@@ -1,4 +1,5 @@
 {
+
   "name": "awaaz",
   "private": true,
   "engines": {
@@ -10,7 +11,8 @@
     "dev:api:no-redis": "pnpm --filter @awaaz/api start:dev:no-redis",
     "build:api": "pnpm --filter @awaaz/api build",
     "dev:web": "pnpm --filter web dev",
-    "build:web": "pnpm --filter web build"
+    "build:web": "pnpm --filter web build",
+    "build": "pnpm run build:web"
   },
   "devDependencies": {}
 }
