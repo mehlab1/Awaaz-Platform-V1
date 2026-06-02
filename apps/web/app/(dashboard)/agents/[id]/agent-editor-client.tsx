@@ -2464,6 +2464,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               size="sm"
               className="h-8 text-xs px-4 rounded-lg shadow-sm"
               disabled={!canTest}
+              data-onboarding-target="test-agent"
               title={testCallBlockedReason ?? 'Run a browser preview.'}
               onMouseEnter={preloadTestCallModal}
               onFocus={preloadTestCallModal}

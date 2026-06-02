@@ -83,6 +83,7 @@ export function CreateAgentDialog({
         <Button
           type="button"
           disabled={!canCreate || isBusy}
+          data-onboarding-target="create-agent"
           onClick={() => setOpen(true)}
         >
           <Plus />

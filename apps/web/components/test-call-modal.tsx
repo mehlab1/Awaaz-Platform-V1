@@ -51,6 +51,7 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { dispatchOnboardingTestInteractionCompleted } from '@/components/onboarding/onboarding-provider';
 import { cn } from '@/lib/utils';
 
 const browserAudioCaptureOptions: AudioCaptureOptions = {
@@ -1199,6 +1200,7 @@ export function TestCallModal(props: TestCallModalProps) {
   const [fetchFailed, setFetchFailed] = useState(false);
   const [session, setSession] = useState<BrowserTestSession | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const testInteractionCompletedRef = useRef(false);
 
   /** Mirrored session state from backend end requests + LiveKit room events. */
   const [sessionPhase, setSessionPhase] =
@@ -1272,6 +1274,7 @@ export function TestCallModal(props: TestCallModalProps) {
       setFetchFailed(false);
       setSessionPhase(null);
       setLifecycleNotice(null);
+      testInteractionCompletedRef.current = false;
       return undefined;
     }
 
@@ -1326,6 +1329,17 @@ export function TestCallModal(props: TestCallModalProps) {
       aborted = true;
     };
   }, [open, agentId, apiCall, reloadKey]);
+
+  useEffect(() => {
+    if (
+      testInteractionCompletedRef.current ||
+      (sessionPhase !== 'SPEAKING' && sessionPhase !== 'LISTENING')
+    ) {
+      return;
+    }
+    testInteractionCompletedRef.current = true;
+    dispatchOnboardingTestInteractionCompleted();
+  }, [sessionPhase]);
 
   const requestEndSession = useCallback(async (): Promise<void> => {
     if (!session) {

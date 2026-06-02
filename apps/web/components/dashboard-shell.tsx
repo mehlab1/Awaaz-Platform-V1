@@ -33,6 +33,8 @@ import {
 } from 'lucide-react';
 import useLocalStorageState from 'use-local-storage-state';
 
+import { OnboardingProvider } from '@/components/onboarding/onboarding-provider';
+import { OnboardingSurface } from '@/components/onboarding/onboarding-surface';
 import { OrgProvider } from '@/components/org-context';
 import { OrgSwitcher } from '@/components/org-switcher';
 import { Badge } from '@/components/ui/badge';
@@ -263,7 +265,8 @@ export function DashboardShell({
 
   return (
     <OrgProvider>
-      <div className="min-h-screen bg-background md:h-screen md:overflow-hidden">
+      <OnboardingProvider>
+        <div className="min-h-screen bg-background md:h-screen md:overflow-hidden">
         <aside
           className={cn(
             'fixed inset-y-0 left-0 z-40 hidden h-screen flex-col border-r border-border/40 bg-card/[0.45] backdrop-blur-md transition-[width] duration-[220ms] ease-out will-change-[width] md:flex',
@@ -328,7 +331,9 @@ export function DashboardShell({
         >
           {children}
         </main>
-      </div>
+        <OnboardingSurface />
+        </div>
+      </OnboardingProvider>
     </OrgProvider>
   );
 }

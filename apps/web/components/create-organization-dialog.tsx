@@ -80,6 +80,7 @@ export function CreateOrganizationDialog({
           type="button"
           size={buttonSize}
           className={buttonClassName}
+          data-onboarding-target="create-organization"
           onClick={() => setOpen(true)}
         >
           <PlusCircle className="size-4" />
@@ -91,6 +92,7 @@ export function CreateOrganizationDialog({
           variant="outline"
           size={buttonSize}
           className={cn('gap-1.5', buttonClassName)}
+          data-onboarding-target="create-organization"
           onClick={() => setOpen(true)}
         >
           <PlusCircle className="size-4" />

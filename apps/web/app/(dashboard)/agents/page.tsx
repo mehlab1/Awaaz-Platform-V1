@@ -28,6 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { CreateOrganizationDialog } from '@/components/create-organization-dialog';
+import { dispatchOnboardingAgentCreated } from '@/components/onboarding/onboarding-provider';
 import { useOrgContext } from '@/components/org-context';
 import { cn } from '@/lib/utils';
 import {
@@ -171,6 +172,7 @@ export default function AgentsPage() {
         throw new Error(await responseMessage(agentRes));
       }
       const agent = (await agentRes.json()) as CreatedAgent;
+      dispatchOnboardingAgentCreated();
 
       router.push(`/agents/${agent.id}`);
     } finally {
