@@ -16,6 +16,8 @@ from pipeline.tts import (
     DEFAULT_FIRST_CHUNK_CHARS,
     DEFAULT_IDLE_FLUSH_SECONDS,
     PCM_BYTES_PER_SAMPLE,
+    TtsMetricCallback,
+    emit_tts_metric,
     env_float,
     env_int,
     take_ready_text,
@@ -45,6 +47,7 @@ class CartesiaTTS(tts.TTS):
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
         idle_flush_seconds: float = DEFAULT_IDLE_FLUSH_SECONDS,
         max_buffer_delay_ms: int = DEFAULT_MAX_BUFFER_DELAY_MS,
+        metrics_callback: TtsMetricCallback | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("Cartesia API key is required")
@@ -71,6 +74,7 @@ class CartesiaTTS(tts.TTS):
             "CARTESIA_TTS_MAX_BUFFER_DELAY_MS",
             max_buffer_delay_ms,
         )
+        self._metrics_callback = metrics_callback
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._ws_lock = asyncio.Lock()
         self._send_lock = asyncio.Lock()
@@ -162,14 +166,29 @@ class CartesiaChunkedStream(tts.ChunkedStream):
                     if msg_type == "chunk":
                         data_b64 = message.get("data")
                         if isinstance(data_b64, str):
+                            audio_chunk = base64.b64decode(data_b64)
                             if first_audio:
                                 first_audio = False
+                                first_audio_ms = round((time.monotonic() - started_at) * 1000)
                                 logger.info(
                                     "cartesia_tts_first_audio_ms=%s context_id=%s",
-                                    round((time.monotonic() - started_at) * 1000),
+                                    first_audio_ms,
                                     context_id,
                                 )
-                            emitter.push(base64.b64decode(data_b64))
+                                emit_tts_metric(
+                                    self._parent._metrics_callback,
+                                    "tts_first_audio",
+                                    provider="cartesia",
+                                    chars=len(self._text),
+                                    firstAudioMs=first_audio_ms,
+                                )
+                            emit_tts_metric(
+                                self._parent._metrics_callback,
+                                "tts_audio_packet",
+                                provider="cartesia",
+                                bytes=len(audio_chunk),
+                            )
+                            emitter.push(audio_chunk)
                     elif msg_type in {"done", "flush_done"}:
                         emitter.flush()
                         done_event.set()
@@ -223,6 +242,7 @@ class CartesiaSynthesizeStream(tts.SynthesizeStream):
         self._done_event = asyncio.Event()
         self._receive_task: asyncio.Task[None] | None = None
         self._generation_epoch = 0
+        self._text_chunk_count = 0
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -324,6 +344,17 @@ class CartesiaSynthesizeStream(tts.SynthesizeStream):
     async def _push_transcript(self, text: str, *, continue_input: bool) -> None:
         if self._cancelled or not text.strip():
             return
+        is_first = self._text_chunk_count == 0
+        self._text_chunk_count += 1
+        emit_tts_metric(
+            self._parent._metrics_callback,
+            "tts_text_chunk",
+            provider="cartesia",
+            chars=len(text),
+            isFirst=is_first,
+            continueInput=continue_input,
+            targetChars=self._parent._first_chunk_chars if is_first else self._parent._chunk_chars,
+        )
         await self._parent.send_payload(
             build_generation_payload(
                 self._parent,
@@ -420,11 +451,24 @@ class CartesiaSynthesizeStream(tts.SynthesizeStream):
                         continue
                     if first_audio:
                         first_audio = False
+                        first_audio_ms = round((time.monotonic() - started_at) * 1000)
                         logger.info(
                             "cartesia_tts_first_audio_ms=%s context_id=%s",
-                            round((time.monotonic() - started_at) * 1000),
+                            first_audio_ms,
                             self._context_id,
                         )
+                        emit_tts_metric(
+                            self._parent._metrics_callback,
+                            "tts_first_audio",
+                            provider="cartesia",
+                            firstAudioMs=first_audio_ms,
+                        )
+                    emit_tts_metric(
+                        self._parent._metrics_callback,
+                        "tts_audio_packet",
+                        provider="cartesia",
+                        bytes=len(chunk),
+                    )
                     emitter.push(chunk)
                 elif msg_type in {"done", "flush_done"}:
                     emitter.flush()
@@ -497,6 +541,14 @@ class _CartesiaAudioEmitter:
             self._parent.sample_rate,
             self._parent.num_channels,
             samples_per_channel,
+        )
+        emit_tts_metric(
+            self._parent._metrics_callback,
+            "tts_audio_frame",
+            provider="cartesia",
+            bytes=len(audio),
+            frames=1,
+            generatedAudioMs=round((samples_per_channel / self._parent.sample_rate) * 1000),
         )
         self._stream._event_ch.send_nowait(
             tts.SynthesizedAudio(

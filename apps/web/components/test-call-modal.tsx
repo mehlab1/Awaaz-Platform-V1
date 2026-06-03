@@ -243,6 +243,40 @@ interface LiveTranscriptEvent {
   turnId: number | null;
 }
 
+interface LiveTokenUsage {
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  estimatedOutputTokens: number | null;
+  source: string | null;
+}
+
+interface LiveTtsChunkMetrics {
+  textChunkCount: number | null;
+  textChunkChars: number | null;
+  firstChunkChars: number | null;
+  maxChunkChars: number | null;
+  audioPacketCount: number | null;
+  audioChunkCount: number | null;
+  audioFrameCount: number | null;
+  audioBytes: number | null;
+  generatedAudioMs: number | null;
+  providerFirstAudioMs: number | null;
+  cancelledChunkCount: number | null;
+  chunkCharSizes: number[];
+  providerId: string | null;
+  modelId: string | null;
+  voiceId: string | null;
+}
+
+interface LiveStageWaterfallItem {
+  stage: string;
+  label: string;
+  durationMs: number;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
 interface LiveTranscriptMetrics {
   firstAudioLatencyMs: number | null;
   playbackDurationMs: number | null;
@@ -250,8 +284,13 @@ interface LiveTranscriptMetrics {
   totalTurnMs: number | null;
   sttLatencyMs: number | null;
   llmFirstTokenLatencyMs: number | null;
+  llmTotalMs: number | null;
+  ttsTextTotalMs: number | null;
   ttsFirstAudioLatencyMs: number | null;
   interruptionToSilenceMs: number | null;
+  tokenUsage: LiveTokenUsage | null;
+  ttsChunks: LiveTtsChunkMetrics | null;
+  stageWaterfall: LiveStageWaterfallItem[];
 }
 
 interface LiveDataChannelEvent {
@@ -274,6 +313,12 @@ interface PostCallSummary {
   dataChannelEvents: number;
   avgAgentLatencyMs: number | null;
   lastAgentLatencyMs: number | null;
+  totalLlmTokens: number | null;
+  tokenUsageSource: string | null;
+  totalTtsTextChunks: number;
+  totalTtsAudioFrames: number;
+  avgTtsChunkChars: number | null;
+  latestWaterfall: LiveStageWaterfallItem[];
 }
 
 type BrowserSessionPhase =
@@ -434,6 +479,90 @@ function readOptionalRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function readNumberArray(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map(readOptionalNumber)
+    .filter((item): item is number => item !== null)
+    .slice(0, 24);
+}
+
+function readTokenUsage(value: unknown): LiveTokenUsage | null {
+  const record = readOptionalRecord(value);
+  if (!record) {
+    return null;
+  }
+  const usage: LiveTokenUsage = {
+    promptTokens: readOptionalNumber(record.promptTokens),
+    completionTokens: readOptionalNumber(record.completionTokens),
+    totalTokens: readOptionalNumber(record.totalTokens),
+    estimatedOutputTokens: readOptionalNumber(record.estimatedOutputTokens),
+    source: readOptionalString(record.source),
+  };
+  return usage.promptTokens !== null ||
+    usage.completionTokens !== null ||
+    usage.totalTokens !== null ||
+    usage.estimatedOutputTokens !== null ||
+    usage.source !== null
+    ? usage
+    : null;
+}
+
+function readTtsChunkMetrics(value: unknown): LiveTtsChunkMetrics | null {
+  const record = readOptionalRecord(value);
+  if (!record) {
+    return null;
+  }
+  const metrics: LiveTtsChunkMetrics = {
+    textChunkCount: readOptionalNumber(record.textChunkCount),
+    textChunkChars: readOptionalNumber(record.textChunkChars),
+    firstChunkChars: readOptionalNumber(record.firstChunkChars),
+    maxChunkChars: readOptionalNumber(record.maxChunkChars),
+    audioPacketCount: readOptionalNumber(record.audioPacketCount),
+    audioChunkCount: readOptionalNumber(record.audioChunkCount),
+    audioFrameCount: readOptionalNumber(record.audioFrameCount),
+    audioBytes: readOptionalNumber(record.audioBytes),
+    generatedAudioMs: readOptionalNumber(record.generatedAudioMs),
+    providerFirstAudioMs: readOptionalNumber(record.providerFirstAudioMs),
+    cancelledChunkCount: readOptionalNumber(record.cancelledChunkCount),
+    chunkCharSizes: readNumberArray(record.chunkCharSizes),
+    providerId: readOptionalString(record.providerId),
+    modelId: readOptionalString(record.modelId),
+    voiceId: readOptionalString(record.voiceId),
+  };
+  return Object.entries(metrics).some(([key, value]) =>
+    key === 'chunkCharSizes' ? metrics.chunkCharSizes.length > 0 : value !== null,
+  )
+    ? metrics
+    : null;
+}
+
+function readStageWaterfall(value: unknown): LiveStageWaterfallItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item): LiveStageWaterfallItem | null => {
+      const record = readOptionalRecord(item);
+      const durationMs = readOptionalNumber(record?.durationMs);
+      const stage = readOptionalString(record?.stage);
+      if (!record || durationMs === null || !stage) {
+        return null;
+      }
+      return {
+        stage,
+        label: readOptionalString(record.label) ?? stage.replaceAll('_', ' '),
+        durationMs,
+        startedAt: readOptionalString(record.startedAt),
+        endedAt: readOptionalString(record.endedAt),
+      };
+    })
+    .filter((item): item is LiveStageWaterfallItem => item !== null)
+    .slice(0, 12);
+}
+
 function normalizeTranscriptSpeaker(value: unknown): LiveTranscriptSpeaker {
   return value === 'agent' || value === 'system' ? value : 'user';
 }
@@ -461,8 +590,13 @@ function readLiveTranscriptMetrics(value: unknown): LiveTranscriptMetrics {
     totalTurnMs: readOptionalNumber(record?.totalTurnMs),
     sttLatencyMs: readOptionalNumber(record?.sttLatencyMs),
     llmFirstTokenLatencyMs: readOptionalNumber(record?.llmFirstTokenLatencyMs),
+    llmTotalMs: readOptionalNumber(record?.llmTotalMs),
+    ttsTextTotalMs: readOptionalNumber(record?.ttsTextTotalMs),
     ttsFirstAudioLatencyMs: readOptionalNumber(record?.ttsFirstAudioLatencyMs),
     interruptionToSilenceMs: readOptionalNumber(record?.interruptionToSilenceMs),
+    tokenUsage: readTokenUsage(record?.llmTokenUsage ?? record?.tokenUsage),
+    ttsChunks: readTtsChunkMetrics(record?.ttsChunks),
+    stageWaterfall: readStageWaterfall(record?.stageWaterfall),
   };
 }
 
@@ -555,6 +689,24 @@ function compactDurationMs(value: number | null): string | null {
   return `${Math.round(value)}ms`;
 }
 
+function compactCount(value: number | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  return value.toLocaleString();
+}
+
+function tokenUsageLabel(usage: LiveTokenUsage | null): string | null {
+  if (!usage) {
+    return null;
+  }
+  const total = usage.totalTokens ?? usage.estimatedOutputTokens;
+  if (total === null) {
+    return usage.source;
+  }
+  return `${total.toLocaleString()} ${usage.source === 'estimated' ? 'est.' : 'tokens'}`;
+}
+
 function summarizeLiveTranscript(
   entries: LiveTranscriptEntry[],
   dataChannelEvents: LiveDataChannelEvent[],
@@ -568,6 +720,31 @@ function summarizeLiveTranscript(
     agentLatencies.length === 0
       ? null
       : Math.round(agentLatencies.reduce((sum, value) => sum + value, 0) / agentLatencies.length);
+  const tokenUsages = finalEntries
+    .filter((entry) => entry.speaker === 'agent')
+    .map((entry) => entry.metrics.tokenUsage)
+    .filter((usage): usage is LiveTokenUsage => usage !== null);
+  const providerTokenUsages = tokenUsages.filter(
+    (usage) => usage.source !== 'estimated' && usage.totalTokens !== null,
+  );
+  const totalLlmTokens =
+    tokenUsages.length === 0
+      ? null
+      : tokenUsages.reduce(
+          (sum, usage) =>
+            sum + (usage.totalTokens ?? usage.estimatedOutputTokens ?? 0),
+          0,
+        );
+  const ttsMetrics = finalEntries
+    .filter((entry) => entry.speaker === 'agent')
+    .map((entry) => entry.metrics.ttsChunks)
+    .filter((metrics): metrics is LiveTtsChunkMetrics => metrics !== null);
+  const chunkSizes = ttsMetrics.flatMap((metrics) => metrics.chunkCharSizes);
+  const latestWaterfall =
+    [...finalEntries]
+      .reverse()
+      .find((entry) => entry.metrics.stageWaterfall.length > 0)
+      ?.metrics.stageWaterfall ?? [];
   return {
     totalTurns: finalEntries.length,
     userTurns: finalEntries.filter((entry) => entry.speaker === 'user').length,
@@ -577,6 +754,26 @@ function summarizeLiveTranscript(
     dataChannelEvents: dataChannelEvents.length,
     avgAgentLatencyMs,
     lastAgentLatencyMs: agentLatencies.at(-1) ?? null,
+    totalLlmTokens,
+    tokenUsageSource:
+      providerTokenUsages.length > 0
+        ? 'provider'
+        : tokenUsages.length > 0
+          ? 'estimated'
+          : null,
+    totalTtsTextChunks: ttsMetrics.reduce(
+      (sum, metrics) => sum + (metrics.textChunkCount ?? 0),
+      0,
+    ),
+    totalTtsAudioFrames: ttsMetrics.reduce(
+      (sum, metrics) => sum + (metrics.audioFrameCount ?? 0),
+      0,
+    ),
+    avgTtsChunkChars:
+      chunkSizes.length === 0
+        ? null
+        : Math.round(chunkSizes.reduce((sum, value) => sum + value, 0) / chunkSizes.length),
+    latestWaterfall,
   };
 }
 
@@ -788,7 +985,7 @@ function SessionDebugDrawer({
       <div className="flex items-start gap-2 text-xs text-muted-foreground">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
         <p>
-          Debug details use the existing browser session response. Tokens and provider
+          Debug details use existing runtime and live data-channel payloads. Provider
           secrets are intentionally not shown here.
         </p>
       </div>
@@ -806,6 +1003,11 @@ function SessionDebugDrawer({
         <DebugRow label="Data channel events" value={String(summary.dataChannelEvents)} />
         <DebugRow label="Avg agent latency" value={compactDurationMs(summary.avgAgentLatencyMs)} />
         <DebugRow label="Last agent latency" value={compactDurationMs(summary.lastAgentLatencyMs)} />
+        <DebugRow label="LLM tokens" value={compactCount(summary.totalLlmTokens)} />
+        <DebugRow label="Token source" value={summary.tokenUsageSource} />
+        <DebugRow label="TTS text chunks" value={String(summary.totalTtsTextChunks)} />
+        <DebugRow label="TTS audio frames" value={String(summary.totalTtsAudioFrames)} />
+        <DebugRow label="Avg TTS chunk" value={summary.avgTtsChunkChars === null ? null : `${summary.avgTtsChunkChars} chars`} />
         <DebugRow label="Live version" value={session?.runtime?.versionNumber ? `V${session.runtime.versionNumber}` : null} />
         <DebugRow label="Server URL" value={session?.serverUrl} />
         <DebugRow label="Launch error" value={errorMessage} />
@@ -813,6 +1015,16 @@ function SessionDebugDrawer({
         <RuntimeProviderDebugRows label="LLM" provider={session?.runtime?.llm} />
         <RuntimeProviderDebugRows label="STT" provider={session?.runtime?.stt} />
       </dl>
+      {summary.latestWaterfall.length > 0 ? (
+        <div className="mt-3 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+          <p className="text-[10px] font-medium uppercase text-muted-foreground">
+            Latest stage waterfall
+          </p>
+          <div className="mt-2">
+            <StageWaterfallStrip stages={summary.latestWaterfall} limit={9} />
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -891,6 +1103,54 @@ function LatencyBadge({
   );
 }
 
+function DebugMetricBadge({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | null;
+}) {
+  if (!value) {
+    return null;
+  }
+  return (
+    <Badge variant="outline" className="gap-1 px-2 py-0.5 text-[10px]">
+      <Gauge className="h-3 w-3" aria-hidden />
+      {label}: {value}
+    </Badge>
+  );
+}
+
+function StageWaterfallStrip({
+  stages,
+  limit = 6,
+}: {
+  stages: LiveStageWaterfallItem[];
+  limit?: number;
+}) {
+  const visibleStages = stages
+    .filter((stage) => stage.stage !== 'total_turn')
+    .slice(0, limit);
+  if (visibleStages.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {visibleStages.map((stage) => (
+        <Badge
+          key={`${stage.stage}:${stage.durationMs}`}
+          variant="secondary"
+          className="px-2 py-0.5 text-[10px] font-normal"
+          title={`${stage.label}: ${stage.durationMs}ms`}
+        >
+          {stage.label}: {compactDurationMs(stage.durationMs)}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 function LiveTranscriptPanel({
   entries,
   lastEvent,
@@ -951,6 +1211,11 @@ function LiveTranscriptPanel({
           <LatencyBadge label="Total turn" value={latestAgentEntry.metrics.totalTurnMs} />
           <LatencyBadge label="LLM token" value={latestAgentEntry.metrics.llmFirstTokenLatencyMs} />
           <LatencyBadge label="TTS audio" value={latestAgentEntry.metrics.ttsFirstAudioLatencyMs} />
+          <DebugMetricBadge label="Tokens" value={tokenUsageLabel(latestAgentEntry.metrics.tokenUsage)} />
+          <DebugMetricBadge
+            label="TTS chunks"
+            value={compactCount(latestAgentEntry.metrics.ttsChunks?.textChunkCount ?? null)}
+          />
         </div>
       ) : null}
 
@@ -1020,18 +1285,36 @@ function LiveTranscriptPanel({
                     {entry.text}
                   </p>
                   {entry.speaker === 'agent' ? (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <LatencyBadge
-                        label="First audio"
-                        value={entry.latencyMs ?? entry.metrics.firstAudioLatencyMs}
-                      />
-                      <LatencyBadge label="Playback" value={entry.metrics.playbackDurationMs} />
-                      <LatencyBadge label="Total" value={entry.metrics.totalResponseMs} />
-                      <LatencyBadge
-                        label="Interrupt"
-                        value={entry.metrics.interruptionToSilenceMs}
-                      />
-                    </div>
+                    <>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <LatencyBadge
+                          label="First audio"
+                          value={entry.latencyMs ?? entry.metrics.firstAudioLatencyMs}
+                        />
+                        <LatencyBadge label="LLM first token" value={entry.metrics.llmFirstTokenLatencyMs} />
+                        <LatencyBadge label="TTS first audio" value={entry.metrics.ttsFirstAudioLatencyMs} />
+                        <LatencyBadge label="Playback" value={entry.metrics.playbackDurationMs} />
+                        <LatencyBadge label="Total" value={entry.metrics.totalResponseMs} />
+                        <LatencyBadge
+                          label="Interrupt"
+                          value={entry.metrics.interruptionToSilenceMs}
+                        />
+                        <DebugMetricBadge label="Tokens" value={tokenUsageLabel(entry.metrics.tokenUsage)} />
+                        <DebugMetricBadge
+                          label="Text chunks"
+                          value={compactCount(entry.metrics.ttsChunks?.textChunkCount ?? null)}
+                        />
+                        <DebugMetricBadge
+                          label="Audio frames"
+                          value={compactCount(entry.metrics.ttsChunks?.audioFrameCount ?? null)}
+                        />
+                      </div>
+                      {entry.metrics.stageWaterfall.length > 0 ? (
+                        <div className="mt-2">
+                          <StageWaterfallStrip stages={entry.metrics.stageWaterfall} />
+                        </div>
+                      ) : null}
+                    </>
                   ) : (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       <LatencyBadge label="STT" value={entry.metrics.sttLatencyMs} />
@@ -1149,6 +1432,21 @@ function PostCallSummaryPanel({
     {
       label: 'Last latency',
       value: compactDurationMs(summary.lastAgentLatencyMs) ?? 'Not available',
+    },
+    {
+      label: 'LLM tokens',
+      value:
+        summary.totalLlmTokens === null
+          ? 'Not available'
+          : `${summary.totalLlmTokens.toLocaleString()} (${summary.tokenUsageSource ?? 'unknown'})`,
+    },
+    { label: 'TTS chunks', value: String(summary.totalTtsTextChunks) },
+    {
+      label: 'Avg chunk',
+      value:
+        summary.avgTtsChunkChars === null
+          ? 'Not available'
+          : `${summary.avgTtsChunkChars} chars`,
     },
   ];
 
@@ -1805,7 +2103,18 @@ function BrowserTestRoomChrome({
               topic: TRANSCRIPT_TOPIC,
               kind: 'transcript',
               label: `${parsed.entry.speaker === 'agent' ? 'Agent' : 'User'} transcript ${parsed.entry.status}`,
-              detail: `${parsed.entry.text.length} chars${parsed.entry.latencyMs !== null ? `, ${parsed.entry.latencyMs}ms` : ''}`,
+              detail: [
+                `${parsed.entry.text.length} chars`,
+                parsed.entry.latencyMs !== null ? `${parsed.entry.latencyMs}ms` : null,
+                parsed.entry.metrics.tokenUsage?.totalTokens
+                  ? `${parsed.entry.metrics.tokenUsage.totalTokens} tokens`
+                  : null,
+                parsed.entry.metrics.ttsChunks?.textChunkCount
+                  ? `${parsed.entry.metrics.ttsChunks.textChunkCount} chunks`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(', '),
               timestamp: parsed.entry.timestamp,
               receivedAt,
               phase: null,

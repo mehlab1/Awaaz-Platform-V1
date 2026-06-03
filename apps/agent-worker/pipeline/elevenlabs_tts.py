@@ -13,6 +13,8 @@ from pipeline.tts import (
     DEFAULT_FIRST_CHUNK_CHARS,
     DEFAULT_IDLE_FLUSH_SECONDS,
     PCM_BYTES_PER_SAMPLE,
+    TtsMetricCallback,
+    emit_tts_metric,
     env_float,
     env_int,
     take_ready_text,
@@ -41,6 +43,7 @@ class ElevenLabsTTS(tts.TTS):
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
         idle_flush_seconds: float = DEFAULT_IDLE_FLUSH_SECONDS,
         streaming_latency: int = DEFAULT_STREAMING_LATENCY,
+        metrics_callback: TtsMetricCallback | None = None,
     ) -> None:
         if not api_key.strip():
             raise ValueError("ElevenLabs API key is required")
@@ -67,6 +70,7 @@ class ElevenLabsTTS(tts.TTS):
             "ELEVENLABS_TTS_IDLE_FLUSH_SECONDS",
             idle_flush_seconds,
         )
+        self._metrics_callback = metrics_callback
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=5.0))
         logger.info(
             "elevenlabs_tts_initialized voice=%s model=%s language=%s sample_rate=%s "
@@ -91,6 +95,7 @@ class ElevenLabsTTS(tts.TTS):
             sample_rate=self.sample_rate,
             num_channels=self.num_channels,
             streaming_latency=self._streaming_latency,
+            metrics_callback=self._metrics_callback,
         )
 
     def stream(self) -> "ElevenLabsSynthesizeStream":
@@ -105,6 +110,7 @@ class ElevenLabsSynthesizeStream(tts.SynthesizeStream):
         super().__init__()
         self._parent = parent
         self._generation_id = 0
+        self._text_chunk_count = 0
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -214,6 +220,16 @@ class ElevenLabsSynthesizeStream(tts.SynthesizeStream):
     async def _emit_chunk(self, text: str, *, generation_id: int) -> None:
         if generation_id != self._generation_id:
             return
+        is_first = self._text_chunk_count == 0
+        self._text_chunk_count += 1
+        emit_tts_metric(
+            self._parent._metrics_callback,
+            "tts_text_chunk",
+            provider="elevenlabs",
+            chars=len(text),
+            isFirst=is_first,
+            targetChars=self._parent._first_chunk_chars if is_first else self._parent._chunk_chars,
+        )
         stream = ElevenLabsStream(
             client=self._parent._client,
             api_key=self._parent._api_key,
@@ -224,6 +240,7 @@ class ElevenLabsSynthesizeStream(tts.SynthesizeStream):
             sample_rate=self._parent.sample_rate,
             num_channels=self._parent.num_channels,
             streaming_latency=self._parent._streaming_latency,
+            metrics_callback=self._parent._metrics_callback,
         )
         try:
             async for audio in stream:
@@ -249,6 +266,7 @@ class ElevenLabsStream(tts.ChunkedStream):
         sample_rate: int,
         num_channels: int,
         streaming_latency: int,
+        metrics_callback: TtsMetricCallback | None = None,
     ) -> None:
         super().__init__()
         self._client = client
@@ -260,6 +278,7 @@ class ElevenLabsStream(tts.ChunkedStream):
         self._sample_rate = sample_rate
         self._num_channels = num_channels
         self._streaming_latency = streaming_latency
+        self._metrics_callback = metrics_callback
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -299,13 +318,27 @@ class ElevenLabsStream(tts.ChunkedStream):
                 async for chunk in response.aiter_bytes():
                     if first_chunk:
                         first_chunk = False
+                        first_audio_ms = round((time.monotonic() - start) * 1000)
                         logger.info(
                             "elevenlabs_tts_first_audio_ms=%s chars=%s voice=%s",
-                            round((time.monotonic() - start) * 1000),
+                            first_audio_ms,
                             len(self._text),
                             self._voice_id,
                         )
+                        emit_tts_metric(
+                            self._metrics_callback,
+                            "tts_first_audio",
+                            provider="elevenlabs",
+                            chars=len(self._text),
+                            firstAudioMs=first_audio_ms,
+                        )
                     bytes_received += len(chunk)
+                    emit_tts_metric(
+                        self._metrics_callback,
+                        "tts_audio_packet",
+                        provider="elevenlabs",
+                        bytes=len(chunk),
+                    )
                     pending.extend(chunk)
                     self._emit_pending_pcm(pending, request_id, segment_id)
         except asyncio.CancelledError:
@@ -315,6 +348,14 @@ class ElevenLabsStream(tts.ChunkedStream):
                 len(self._text),
                 bytes_received,
                 self._voice_id,
+            )
+            emit_tts_metric(
+                self._metrics_callback,
+                "tts_audio_chunk_cancelled",
+                provider="elevenlabs",
+                chars=len(self._text),
+                bytes=bytes_received,
+                elapsedMs=round((time.monotonic() - start) * 1000),
             )
             raise
         except Exception as error:
@@ -329,6 +370,14 @@ class ElevenLabsStream(tts.ChunkedStream):
 
         if pending:
             self._emit_pending_pcm(pending, request_id, segment_id, flush=True)
+        emit_tts_metric(
+            self._metrics_callback,
+            "tts_audio_chunk_done",
+            provider="elevenlabs",
+            chars=len(self._text),
+            bytes=bytes_received,
+            elapsedMs=round((time.monotonic() - start) * 1000),
+        )
 
     def _emit_pending_pcm(
         self,
@@ -357,6 +406,14 @@ class ElevenLabsStream(tts.ChunkedStream):
             self._sample_rate,
             self._num_channels,
             samples_per_channel,
+        )
+        emit_tts_metric(
+            self._metrics_callback,
+            "tts_audio_frame",
+            provider="elevenlabs",
+            bytes=len(audio),
+            frames=1,
+            generatedAudioMs=round((samples_per_channel / self._sample_rate) * 1000),
         )
         self._event_ch.send_nowait(
             tts.SynthesizedAudio(

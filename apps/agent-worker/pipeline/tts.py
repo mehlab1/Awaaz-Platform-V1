@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable, Mapping
 
 import httpx
 from livekit import rtc
@@ -22,6 +23,20 @@ DEFAULT_CHUNK_CHARS = 48
 DEFAULT_IDLE_FLUSH_SECONDS = 0.35
 SENTENCE_BOUNDARY_RE = re.compile(r"^(.+?[.!?])(\s+|$)", re.DOTALL)
 WHITESPACE_RE = re.compile(r"\s+")
+TtsMetricCallback = Callable[[str, Mapping[str, object]], None]
+
+
+def emit_tts_metric(
+    callback: TtsMetricCallback | None,
+    event: str,
+    **fields: object,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(event, {key: value for key, value in fields.items() if value is not None})
+    except Exception:
+        logger.debug("tts_metric_callback_failed event=%s", event, exc_info=True)
 
 
 class RimeTTS(tts.TTS):
@@ -38,6 +53,7 @@ class RimeTTS(tts.TTS):
         first_chunk_chars: int = DEFAULT_FIRST_CHUNK_CHARS,
         chunk_chars: int = DEFAULT_CHUNK_CHARS,
         idle_flush_seconds: float = DEFAULT_IDLE_FLUSH_SECONDS,
+        metrics_callback: TtsMetricCallback | None = None,
     ) -> None:
         resolved_api_key = api_key or os.getenv("RIME_API_KEY")
         if not resolved_api_key:
@@ -63,6 +79,7 @@ class RimeTTS(tts.TTS):
             "RIME_TTS_IDLE_FLUSH_SECONDS",
             idle_flush_seconds,
         )
+        self._metrics_callback = metrics_callback
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0))
         logger.info(
             "rime_tts_initialized voice=%s model=%s lang=%s sample_rate=%s "
@@ -95,6 +112,7 @@ class RimeTTS(tts.TTS):
             speed_alpha=self._speed_alpha,
             sample_rate=self.sample_rate,
             num_channels=self.num_channels,
+            metrics_callback=self._metrics_callback,
         )
 
     def stream(self) -> "RimeSynthesizeStream":
@@ -117,6 +135,7 @@ class RimeTTS(tts.TTS):
             first_chunk_chars=self._first_chunk_chars,
             chunk_chars=self._chunk_chars,
             idle_flush_seconds=self._idle_flush_seconds,
+            metrics_callback=self._metrics_callback,
         )
 
     async def aclose(self) -> None:
@@ -139,6 +158,7 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
         first_chunk_chars: int,
         chunk_chars: int,
         idle_flush_seconds: float,
+        metrics_callback: TtsMetricCallback | None = None,
     ) -> None:
         super().__init__()
         self._client = client
@@ -153,6 +173,7 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
         self._first_chunk_chars = max(12, first_chunk_chars)
         self._chunk_chars = max(self._first_chunk_chars, chunk_chars)
         self._idle_flush_seconds = max(0.1, idle_flush_seconds)
+        self._metrics_callback = metrics_callback
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
@@ -271,6 +292,16 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
             is_first,
             text[:80],
         )
+        emit_tts_metric(
+            self._metrics_callback,
+            "tts_text_chunk",
+            provider="rime",
+            chars=len(text),
+            isFirst=is_first,
+            flushReason=flush_reason,
+            splitReason=split_reason,
+            targetChars=self._first_chunk_chars if is_first else self._chunk_chars,
+        )
         if is_first:
             logger.info("rime_tts_first_chunk_chars chars=%s", len(text))
         await self._synthesize_chunk(text)
@@ -313,10 +344,18 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
                 generated_samples += samples_per_channel
                 if first_frame:
                     first_frame = False
+                    first_audio_ms = round((time.monotonic() - start) * 1000)
                     logger.info(
                         "rime_tts_audio_first_frame_ms=%s chars=%s",
-                        round((time.monotonic() - start) * 1000),
+                        first_audio_ms,
                         len(text),
+                    )
+                    emit_tts_metric(
+                        self._metrics_callback,
+                        "tts_first_audio",
+                        provider="rime",
+                        chars=len(text),
+                        firstAudioMs=first_audio_ms,
                     )
                 frame_count += 1
                 self._event_ch.send_nowait(audio)
@@ -334,6 +373,14 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
                 frame_count,
                 generated_audio_ms,
             )
+            emit_tts_metric(
+                self._metrics_callback,
+                "tts_audio_chunk_cancelled",
+                provider="rime",
+                chars=len(text),
+                frames=frame_count,
+                generatedAudioMs=generated_audio_ms,
+            )
             raise
         finally:
             await stream.aclose()
@@ -349,6 +396,15 @@ class RimeSynthesizeStream(tts.SynthesizeStream):
             len(text),
             frame_count,
             generated_audio_ms,
+        )
+        emit_tts_metric(
+            self._metrics_callback,
+            "tts_audio_chunk_done",
+            provider="rime",
+            chars=len(text),
+            frames=frame_count,
+            generatedAudioMs=generated_audio_ms,
+            elapsedMs=round((time.monotonic() - start) * 1000),
         )
 
 
@@ -366,6 +422,7 @@ class RimeStream(tts.ChunkedStream):
         speed_alpha: float,
         sample_rate: int,
         num_channels: int,
+        metrics_callback: TtsMetricCallback | None = None,
     ) -> None:
         super().__init__()
         self._client = client
@@ -378,6 +435,7 @@ class RimeStream(tts.ChunkedStream):
         self._speed_alpha = speed_alpha
         self._sample_rate = sample_rate
         self._num_channels = num_channels
+        self._metrics_callback = metrics_callback
 
     @utils.log_exceptions()
     async def _main_task(self) -> None:
@@ -417,11 +475,19 @@ class RimeStream(tts.ChunkedStream):
                 async for chunk in response.aiter_bytes():
                     if first_chunk:
                         first_chunk = False
+                        first_byte_ms = round((time.monotonic() - start) * 1000)
                         logger.info(
                             "rime_http_first_byte_ms=%s chars=%s voice=%s",
-                            round((time.monotonic() - start) * 1000),
+                            first_byte_ms,
                             len(self._text),
                             self._voice_id,
+                        )
+                        emit_tts_metric(
+                            self._metrics_callback,
+                            "tts_first_audio",
+                            provider="rime",
+                            chars=len(self._text),
+                            firstAudioMs=first_byte_ms,
                         )
                     bytes_received += len(chunk)
                     pending.extend(chunk)
@@ -447,6 +513,14 @@ class RimeStream(tts.ChunkedStream):
             len(self._text),
             bytes_received,
             self._voice_id,
+        )
+        emit_tts_metric(
+            self._metrics_callback,
+            "tts_audio_chunk_done",
+            provider="rime",
+            chars=len(self._text),
+            bytes=bytes_received,
+            elapsedMs=round((time.monotonic() - start) * 1000),
         )
 
     def _take_complete_pcm_frames(self, pending: bytearray) -> bytes:

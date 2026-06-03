@@ -8,7 +8,7 @@ from livekit.agents import tts
 from pipeline.cartesia_tts import CartesiaTTS
 from pipeline.elevenlabs_tts import ElevenLabsTTS
 from pipeline.inworld_tts import InworldTTS
-from pipeline.tts import RimeTTS
+from pipeline.tts import RimeTTS, TtsMetricCallback
 
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,7 @@ class TtsRuntimeSelection:
 def build_tts(
     config: Mapping[str, object],
     selection: TtsRuntimeSelection | None = None,
+    metrics_callback: TtsMetricCallback | None = None,
 ) -> tts.TTS:
     resolved = selection or parse_tts_runtime_selection(config)
     log_tts_selection(resolved)
@@ -67,6 +68,7 @@ def build_tts(
             model_id=resolved.model_id,
             language=resolved.language,
             api_key=api_key,
+            metrics_callback=metrics_callback,
         )
 
     if resolved.provider_id == RUNTIME_TTS_PROVIDER_ELEVENLABS:
@@ -84,6 +86,7 @@ def build_tts(
             model_id=resolved.model_id,
             language=resolved.language,
             api_key=api_key,
+            metrics_callback=metrics_callback,
         )
 
     if resolved.provider_id == RUNTIME_TTS_PROVIDER_INWORLD:
@@ -100,6 +103,7 @@ def build_tts(
             model_id=resolved.model_id,
             language=resolved.language,
             api_key=api_key,
+            metrics_callback=metrics_callback,
         )
 
     api_key = resolved.api_key or _first_env("FINOVA_RIME_API_KEY", "RIME_API_KEY")
@@ -111,6 +115,7 @@ def build_tts(
         model_id=resolved.model_id,
         language=resolved.language,
         api_key=api_key,
+        metrics_callback=metrics_callback,
     )
 
 

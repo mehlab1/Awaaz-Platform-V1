@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime, timezone
 from collections.abc import AsyncIterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, llm, tts
@@ -693,6 +693,93 @@ class CallLifecycle:
         asyncio.create_task(publish())
 
 
+async def emit_worker_setup_error(
+    api: AwaazAPIClient,
+    call_id: str | None,
+    *,
+    code: str,
+    stage: str,
+    error: BaseException,
+    metadata: Mapping[str, object] | None = None,
+) -> None:
+    if not call_id:
+        logger.warning(
+            "worker_setup_error_not_persisted missing_call_id code=%s stage=%s",
+            code,
+            stage,
+        )
+        return
+
+    occurred_at = utc_now_iso()
+    message = str(error) or error.__class__.__name__
+    event_metadata = {
+        "timelineEvent": "error",
+        "source": "agent_worker.entrypoint",
+        "errorCode": code,
+        "stage": stage,
+        "errorType": error.__class__.__name__,
+        **(metadata or {}),
+    }
+    try:
+        await api.emit_event(
+            call_id,
+            {
+                "eventType": "ERROR",
+                "text": message,
+                "speaker": "system",
+                "startedAt": occurred_at,
+                "endedAt": occurred_at,
+                "metadata": event_metadata,
+            },
+        )
+    except Exception:
+        logger.warning(
+            "worker_setup_error_persist_failed call_id=%s code=%s stage=%s",
+            call_id,
+            code,
+            stage,
+            exc_info=True,
+        )
+
+
+async def end_call_after_worker_setup_error(
+    api: AwaazAPIClient,
+    call_id: str | None,
+    *,
+    code: str,
+    stage: str,
+) -> None:
+    if not call_id:
+        return
+
+    failed_at = utc_now_iso()
+    try:
+        await api.end_call(
+            call_id,
+            {
+                "reason": "technical_disconnect",
+                "metadata": {
+                    "source": "agent_worker.entrypoint",
+                    "endReason": "technical_disconnect",
+                    "endedBy": "system",
+                    "lifecycle": {
+                        "workerSetupFailedAt": failed_at,
+                        "workerSetupErrorCode": code,
+                        "workerSetupErrorStage": stage,
+                    },
+                },
+            },
+        )
+    except Exception:
+        logger.warning(
+            "worker_setup_end_call_failed call_id=%s code=%s stage=%s",
+            call_id,
+            code,
+            stage,
+            exc_info=True,
+        )
+
+
 class AwaazAgent:
     @staticmethod
     async def entrypoint(ctx: JobContext) -> None:
@@ -701,48 +788,122 @@ class AwaazAgent:
         register_room_debug_events(ctx.room)
 
         room_metadata = parse_json_object(ctx.room.metadata)
+        call_id = string_value(room_metadata, "callId")
         agent_id = string_value(room_metadata, "agentId")
-        if not agent_id:
-            raise ValueError("LiveKit room metadata must include agentId")
-
         api = AwaazAPIClient()
-        config = await api.get_agent_config(agent_id)
-        call = await api.start_call(
-            await start_call_payload(ctx, config, room_metadata),
-        )
-        call_id = string_value(call, "id")
-        tts_selection = parse_tts_runtime_selection(config)
-        logger.info(
-            "voice_config_loaded agent_id=%s call_id=%s agent_version_id=%s "
-            "stored_voice_id=%s rime_speaker=%s model=%s lang=%s tts_provider=%s",
-            agent_id,
-            call_id,
-            string_value(config, "agentVersionId"),
-            string_value(config, "voiceId"),
-            tts_selection.voice_id,
-            tts_selection.model_id,
-            tts_selection.language,
-            tts_selection.provider_id,
-        )
-
-        tts_engine = build_tts(config, tts_selection)
-        timing = PipelineTiming()
-        lifecycle = CallLifecycle(ctx, call_id)
-        transcript_publisher = LiveTranscriptPublisher(ctx.room, call_id)
-        timing.set_lifecycle(lifecycle)
-        assistant = create_assistant(config, tts_engine, AwaazTools(lifecycle), timing)
-        lifecycle.set_assistant(assistant)
-        register_call_control_events(ctx.room, lifecycle, call_id)
-        register_lifecycle_room_events(ctx.room, lifecycle)
-        if room_metadata.get("endRequestedAt"):
-            asyncio.create_task(
-                lifecycle.request_end(
-                    string_value(room_metadata, "endRequestedReason", "manual_user_end")
-                    or "manual_user_end",
-                    wait_for_final_playback=False,
-                    ended_by="user",
-                )
+        if not agent_id:
+            error = ValueError("LiveKit room metadata must include agentId")
+            await emit_worker_setup_error(
+                api,
+                call_id,
+                code="missing_agent_id",
+                stage="room_metadata",
+                error=error,
             )
+            await end_call_after_worker_setup_error(
+                api,
+                call_id,
+                code="missing_agent_id",
+                stage="room_metadata",
+            )
+            await api.aclose()
+            raise error
+
+        setup_stage = "get_agent_config"
+        tts_engine = None
+        try:
+            config = await api.get_agent_config(agent_id)
+            setup_stage = "start_call"
+            call = await api.start_call(
+                await start_call_payload(ctx, config, room_metadata),
+            )
+            call_id = string_value(call, "id") or call_id
+            if string_value(call, "status") == "COMPLETED":
+                logger.info(
+                    "worker_setup_aborted_call_already_completed call_id=%s",
+                    call_id,
+                )
+                await api.aclose()
+                return
+            setup_stage = "parse_tts_runtime"
+            tts_selection = parse_tts_runtime_selection(config)
+            timing = PipelineTiming()
+            timing.set_tts_runtime(
+                tts_selection.provider_id,
+                tts_selection.model_id,
+                tts_selection.voice_id,
+            )
+            logger.info(
+                "voice_config_loaded agent_id=%s call_id=%s agent_version_id=%s "
+                "stored_voice_id=%s rime_speaker=%s model=%s lang=%s tts_provider=%s",
+                agent_id,
+                call_id,
+                string_value(config, "agentVersionId"),
+                string_value(config, "voiceId"),
+                tts_selection.voice_id,
+                tts_selection.model_id,
+                tts_selection.language,
+                tts_selection.provider_id,
+            )
+
+            setup_stage = "build_tts"
+            tts_engine = build_tts(
+                config,
+                tts_selection,
+                metrics_callback=timing.record_tts_metric,
+            )
+            setup_stage = "create_assistant"
+            lifecycle = CallLifecycle(ctx, call_id)
+            transcript_publisher = LiveTranscriptPublisher(ctx.room, call_id)
+            timing.set_lifecycle(lifecycle)
+            assistant = create_assistant(config, tts_engine, AwaazTools(lifecycle), timing)
+            lifecycle.set_assistant(assistant)
+            setup_stage = "register_lifecycle"
+            register_call_control_events(ctx.room, lifecycle, call_id)
+            register_lifecycle_room_events(ctx.room, lifecycle)
+            if room_metadata.get("endRequestedAt"):
+                asyncio.create_task(
+                    lifecycle.request_end(
+                        string_value(room_metadata, "endRequestedReason", "manual_user_end")
+                        or "manual_user_end",
+                        wait_for_final_playback=False,
+                        ended_by="user",
+                    )
+                )
+        except Exception as error:
+            logger.error(
+                "worker_setup_failed call_id=%s stage=%s",
+                call_id,
+                setup_stage,
+                exc_info=True,
+            )
+            await emit_worker_setup_error(
+                api,
+                call_id,
+                code="worker_setup_failed",
+                stage=setup_stage,
+                error=error,
+                metadata={"agentId": agent_id},
+            )
+            await end_call_after_worker_setup_error(
+                api,
+                call_id,
+                code="worker_setup_failed",
+                stage=setup_stage,
+            )
+            if tts_engine is not None:
+                try:
+                    await close_tts(tts_engine)
+                except Exception:
+                    logger.warning(
+                        "worker_setup_tts_close_failed call_id=%s stage=%s",
+                        call_id,
+                        setup_stage,
+                        exc_info=True,
+                    )
+            await api.aclose()
+            raise
+
         speech_events = register_events(
             assistant,
             api,
@@ -855,6 +1016,7 @@ def create_assistant(
     stt_engine = build_stt(config, stt_selection)
     llm_selection = parse_llm_runtime_selection(config)
     llm_engine = build_llm(config, llm_selection)
+    timing.set_stt_runtime(stt_selection.provider_id, stt_selection.model_id)
     timing.set_llm_runtime(llm_selection.provider_id, llm_selection.model_id)
     logger.info(
         "pipeline_config_loaded stt_provider=%s stt_model=%s stt_key=%s llm_provider=%s llm_model=%s llm_key=%s",
@@ -1129,6 +1291,23 @@ class ResponseTiming:
     playback_stopped_at: float | None = None
     playback_stopped_at_iso: str | None = None
     interrupted: bool = False
+    llm_token_usage: dict[str, int] | None = None
+    llm_token_usage_source: str | None = None
+    tts_provider_id: str | None = None
+    tts_model_id: str | None = None
+    tts_voice_id: str | None = None
+    tts_text_chunk_count: int = 0
+    tts_text_total_chars: int = 0
+    tts_text_chunk_sizes: list[int] = field(default_factory=list)
+    tts_first_chunk_chars: int | None = None
+    tts_max_chunk_chars: int | None = None
+    tts_audio_packet_count: int = 0
+    tts_audio_chunk_count: int = 0
+    tts_audio_frame_count: int = 0
+    tts_audio_bytes: int = 0
+    tts_generated_audio_ms: int = 0
+    tts_provider_first_audio_ms: int | None = None
+    tts_cancelled_chunk_count: int = 0
 
     def response_reference_at(self) -> float | None:
         return self.user_stopped_at or self.final_transcript_at or self.user_started_at
@@ -1154,6 +1333,11 @@ class PipelineTiming:
         self._event_sink: SpeechEventSink | None = None
         self.llm_provider_id = "unknown"
         self.llm_model_id = "unknown"
+        self.stt_provider_id = "unknown"
+        self.stt_model_id = "unknown"
+        self.tts_provider_id = "unknown"
+        self.tts_model_id = "unknown"
+        self.tts_voice_id = "unknown"
 
     def set_lifecycle(self, lifecycle: CallLifecycle) -> None:
         self._lifecycle = lifecycle
@@ -1164,6 +1348,15 @@ class PipelineTiming:
     def set_llm_runtime(self, provider_id: str, model_id: str) -> None:
         self.llm_provider_id = provider_id
         self.llm_model_id = model_id
+
+    def set_stt_runtime(self, provider_id: str, model_id: str) -> None:
+        self.stt_provider_id = provider_id
+        self.stt_model_id = model_id
+
+    def set_tts_runtime(self, provider_id: str, model_id: str, voice_id: str) -> None:
+        self.tts_provider_id = provider_id
+        self.tts_model_id = model_id
+        self.tts_voice_id = voice_id
 
     def emit_error(
         self,
@@ -1322,6 +1515,95 @@ class PipelineTiming:
             elapsed_ms(response.user_stopped_at, response.first_llm_token_at),
         )
 
+    def record_llm_token_usage(
+        self,
+        response: ResponseTiming,
+        usage: dict[str, int],
+        *,
+        source: str,
+    ) -> None:
+        if not usage:
+            return
+        response.llm_token_usage = usage
+        response.llm_token_usage_source = source
+        logger.info(
+            "voice_llm_token_usage turn=%s response=%s source=%s usage=%s",
+            response.turn_id,
+            response.response_id,
+            source,
+            usage,
+        )
+
+    def record_tts_metric(self, event: str, fields: Mapping[str, object]) -> None:
+        response = self._event_response()
+        if response is None:
+            return
+
+        provider = string_from_mapping(fields, "provider")
+        if provider:
+            response.tts_provider_id = provider
+        if response.tts_model_id is None:
+            response.tts_model_id = self.tts_model_id
+        if response.tts_voice_id is None:
+            response.tts_voice_id = self.tts_voice_id
+
+        if event == "tts_text_chunk":
+            chars = non_negative_int(fields.get("chars"))
+            if chars is not None:
+                response.tts_text_chunk_count += 1
+                response.tts_text_total_chars += chars
+                response.tts_text_chunk_sizes.append(chars)
+                response.tts_text_chunk_sizes = response.tts_text_chunk_sizes[-24:]
+                if truthy_value(fields.get("isFirst")) and response.tts_first_chunk_chars is None:
+                    response.tts_first_chunk_chars = chars
+                response.tts_max_chunk_chars = max(response.tts_max_chunk_chars or 0, chars)
+            logger.info(
+                "voice_tts_text_chunk turn=%s response=%s provider=%s chars=%s count=%s",
+                response.turn_id,
+                response.response_id,
+                provider or response.tts_provider_id,
+                chars,
+                response.tts_text_chunk_count,
+            )
+            return
+
+        if event == "tts_first_audio":
+            first_audio_ms = non_negative_int(fields.get("firstAudioMs"))
+            if first_audio_ms is not None and response.tts_provider_first_audio_ms is None:
+                response.tts_provider_first_audio_ms = first_audio_ms
+            return
+
+        if event == "tts_audio_packet":
+            bytes_count = non_negative_int(fields.get("bytes"))
+            response.tts_audio_packet_count += 1
+            if bytes_count is not None:
+                response.tts_audio_bytes += bytes_count
+            return
+
+        if event == "tts_audio_frame":
+            frame_count = non_negative_int(fields.get("frames"))
+            generated_audio_ms = non_negative_int(fields.get("generatedAudioMs"))
+            response.tts_audio_frame_count += frame_count or 1
+            if generated_audio_ms is not None:
+                response.tts_generated_audio_ms += generated_audio_ms
+            return
+
+        if event == "tts_audio_chunk_done":
+            response.tts_audio_chunk_count += 1
+            frames = non_negative_int(fields.get("frames"))
+            bytes_count = non_negative_int(fields.get("bytes"))
+            generated_audio_ms = non_negative_int(fields.get("generatedAudioMs"))
+            if frames is not None:
+                response.tts_audio_frame_count += frames
+            if bytes_count is not None and response.tts_audio_packet_count == 0:
+                response.tts_audio_bytes += bytes_count
+            if generated_audio_ms is not None:
+                response.tts_generated_audio_ms += generated_audio_ms
+            return
+
+        if event == "tts_audio_chunk_cancelled":
+            response.tts_cancelled_chunk_count += 1
+
     def mark_llm_finished(self, response: ResponseTiming) -> None:
         if response.llm_finished_at is not None:
             return
@@ -1449,7 +1731,10 @@ class PipelineTiming:
             return None
         return elapsed_ms(response.user_started_at, response.playback_stopped_at)
 
-    def agent_response_metrics(self) -> dict[str, object]:
+    def agent_response_metrics(
+        self,
+        estimated_output_tokens: int | None = None,
+    ) -> dict[str, object]:
         response = self._event_response()
         metrics: dict[str, object] = {}
         self._put_metric(
@@ -1559,8 +1844,22 @@ class PipelineTiming:
                 metrics["playbackStartedAt"] = response.playback_started_at_iso
             if response.playback_stopped_at_iso:
                 metrics["playbackStoppedAt"] = response.playback_stopped_at_iso
+            token_usage = self.llm_token_usage_payload(response, estimated_output_tokens)
+            if token_usage:
+                metrics["llmTokenUsage"] = token_usage
+            tts_chunks = self.tts_chunk_metrics(response)
+            if tts_chunks:
+                metrics["ttsChunks"] = tts_chunks
+            stage_waterfall = self.stage_waterfall(response)
+            if stage_waterfall:
+                metrics["stageWaterfall"] = stage_waterfall
         metrics["llmProviderId"] = self.llm_provider_id
         metrics["llmModel"] = self.llm_model_id
+        metrics["sttProviderId"] = self.stt_provider_id
+        metrics["sttModel"] = self.stt_model_id
+        metrics["ttsProviderId"] = self.tts_provider_id
+        metrics["ttsModel"] = self.tts_model_id
+        metrics["ttsVoiceId"] = self.tts_voice_id
         if self.barge_in_reason:
             metrics["bargeInReason"] = self.barge_in_reason
         if self.barge_in_requested_at_iso:
@@ -1570,6 +1869,155 @@ class PipelineTiming:
         self._put_metric(metrics, "audioQueueFlushedBeforeMs", self.audio_queue_flushed_before_ms)
         self._put_metric(metrics, "audioQueueFlushedAfterMs", self.audio_queue_flushed_after_ms)
         return metrics
+
+    def llm_token_usage_payload(
+        self,
+        response: ResponseTiming,
+        estimated_output_tokens: int | None = None,
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        if response.llm_token_usage:
+            payload.update(response.llm_token_usage)
+            payload["source"] = response.llm_token_usage_source or "provider"
+        else:
+            payload["source"] = "estimated"
+        if estimated_output_tokens is not None:
+            payload["estimatedOutputTokens"] = estimated_output_tokens
+        return payload
+
+    def agent_response_token_count(self, estimated_output_tokens: int) -> int:
+        response = self._event_response()
+        if response and response.llm_token_usage:
+            total = response.llm_token_usage.get("totalTokens")
+            if isinstance(total, int) and total >= 0:
+                return total
+        return estimated_output_tokens
+
+    def agent_response_token_source(self) -> str:
+        response = self._event_response()
+        if response and response.llm_token_usage and "totalTokens" in response.llm_token_usage:
+            return response.llm_token_usage_source or "provider"
+        return "estimated"
+
+    def tts_chunk_metrics(self, response: ResponseTiming) -> dict[str, object]:
+        metrics: dict[str, object] = {}
+        self._put_metric(metrics, "textChunkCount", response.tts_text_chunk_count)
+        self._put_metric(metrics, "textChunkChars", response.tts_text_total_chars)
+        self._put_metric(metrics, "firstChunkChars", response.tts_first_chunk_chars)
+        self._put_metric(metrics, "maxChunkChars", response.tts_max_chunk_chars)
+        self._put_metric(metrics, "audioPacketCount", response.tts_audio_packet_count)
+        self._put_metric(metrics, "audioChunkCount", response.tts_audio_chunk_count)
+        self._put_metric(metrics, "audioFrameCount", response.tts_audio_frame_count)
+        self._put_metric(metrics, "audioBytes", response.tts_audio_bytes)
+        self._put_metric(metrics, "generatedAudioMs", response.tts_generated_audio_ms)
+        self._put_metric(metrics, "providerFirstAudioMs", response.tts_provider_first_audio_ms)
+        self._put_metric(metrics, "cancelledChunkCount", response.tts_cancelled_chunk_count)
+        if response.tts_text_chunk_sizes:
+            metrics["chunkCharSizes"] = response.tts_text_chunk_sizes
+        metrics["providerId"] = response.tts_provider_id or self.tts_provider_id
+        metrics["modelId"] = response.tts_model_id or self.tts_model_id
+        metrics["voiceId"] = response.tts_voice_id or self.tts_voice_id
+        return {key: value for key, value in metrics.items() if value not in (None, 0, "", [])}
+
+    def stage_waterfall(self, response: ResponseTiming) -> list[dict[str, object]]:
+        stages = [
+            self._stage(
+                "user_speech",
+                "User speech",
+                response.user_started_at,
+                response.user_stopped_at,
+                response.user_started_at_iso,
+                response.user_stopped_at_iso,
+            ),
+            self._stage(
+                "stt_final",
+                "STT final",
+                response.user_stopped_at,
+                response.final_transcript_at,
+                response.user_stopped_at_iso,
+                response.final_transcript_at_iso,
+            ),
+            self._stage(
+                "llm_start_wait",
+                "LLM start wait",
+                response.final_transcript_at,
+                response.llm_started_at,
+                response.final_transcript_at_iso,
+                response.llm_started_at_iso,
+            ),
+            self._stage(
+                "llm_first_token",
+                "LLM first token",
+                response.llm_started_at,
+                response.first_llm_token_at,
+                response.llm_started_at_iso,
+                response.first_llm_token_at_iso,
+            ),
+            self._stage(
+                "llm_stream",
+                "LLM stream",
+                response.first_llm_token_at or response.llm_started_at,
+                response.llm_finished_at,
+                response.first_llm_token_at_iso or response.llm_started_at_iso,
+                response.llm_finished_at_iso,
+            ),
+            self._stage(
+                "tts_text",
+                "TTS text",
+                response.tts_text_started_at,
+                response.tts_text_finished_at,
+                response.tts_text_started_at_iso,
+                response.tts_text_finished_at_iso,
+            ),
+            self._stage(
+                "tts_first_audio",
+                "TTS first audio",
+                response.tts_text_started_at,
+                response.playback_started_at,
+                response.tts_text_started_at_iso,
+                response.playback_started_at_iso,
+            ),
+            self._stage(
+                "playback",
+                "Playback",
+                response.playback_started_at,
+                response.playback_stopped_at,
+                response.playback_started_at_iso,
+                response.playback_stopped_at_iso,
+            ),
+            self._stage(
+                "total_turn",
+                "Total turn",
+                response.user_started_at,
+                response.playback_stopped_at,
+                response.user_started_at_iso,
+                response.playback_stopped_at_iso,
+            ),
+        ]
+        return [stage for stage in stages if stage is not None]
+
+    def _stage(
+        self,
+        name: str,
+        label: str,
+        started_at: float | None,
+        ended_at: float | None,
+        started_at_iso: str | None,
+        ended_at_iso: str | None,
+    ) -> dict[str, object] | None:
+        duration_ms = elapsed_ms(started_at, ended_at)
+        if duration_ms is None:
+            return None
+        stage: dict[str, object] = {
+            "stage": name,
+            "label": label,
+            "durationMs": duration_ms,
+        }
+        if started_at_iso:
+            stage["startedAt"] = started_at_iso
+        if ended_at_iso:
+            stage["endedAt"] = ended_at_iso
+        return stage
 
     def user_turn_metrics(self) -> dict[str, object]:
         turn = self.current_user
@@ -1682,6 +2130,9 @@ class PipelineTiming:
             user_stopped_at_iso=turn.stopped_at_iso if turn else None,
             final_transcript_at=turn.final_transcript_at if turn else None,
             final_transcript_at_iso=turn.final_transcript_at_iso if turn else None,
+            tts_provider_id=self.tts_provider_id,
+            tts_model_id=self.tts_model_id,
+            tts_voice_id=self.tts_voice_id,
         )
         self.active_response = response
         return response
@@ -1783,6 +2234,13 @@ class TimedLLMStream(LLMStream):
         if content and not self._saw_first_token:
             self._saw_first_token = True
             self._timing.mark_first_llm_token(self._response)
+        usage = extract_llm_token_usage(chunk)
+        if usage:
+            self._timing.record_llm_token_usage(
+                self._response,
+                usage,
+                source="provider_stream",
+            )
         return chunk
 
 
@@ -2359,6 +2817,8 @@ def register_events(
 
     def on_user_speech(message: llm.ChatMessage) -> None:
         text = message_text(message)
+        user_metrics = timing.user_turn_metrics()
+        estimated_tokens = estimate_token_count(text)
         if (
             timing.barge_in_requested_at is not None
             and time.monotonic() - timing.barge_in_requested_at < 20
@@ -2378,7 +2838,6 @@ def register_events(
             source="user_speech_committed",
             metrics=user_metrics,
         )
-        user_metrics = timing.user_turn_metrics()
         sink.emit(
             "USER_SPEECH",
             message,
@@ -2387,9 +2846,9 @@ def register_events(
                 "timelineEvent": "user_speech_final",
                 "metrics": user_metrics,
                 "textChars": len(text),
-                "estimatedTokens": estimate_token_count(text),
+                "estimatedTokens": estimated_tokens,
             },
-            token_count=estimate_token_count(text),
+            token_count=estimated_tokens,
         )
         sink.emit_raw(
             "TURN_METRICS",
@@ -2399,7 +2858,7 @@ def register_events(
                 "timelineEvent": "user_turn_metrics",
                 "metrics": user_metrics,
                 "textChars": len(text),
-                "estimatedTokens": estimate_token_count(text),
+                "estimatedTokens": estimated_tokens,
             },
         )
         if is_closing_utterance(text, end_call_phrases):
@@ -2419,10 +2878,12 @@ def register_events(
                 len(message_text(message)),
             )
             return
-        latency_ms = timing.response_latency_ms()
-        metrics = timing.agent_response_metrics()
         text = message_text(message)
-        token_count = estimate_token_count(text)
+        estimated_tokens = estimate_token_count(text)
+        latency_ms = timing.response_latency_ms()
+        metrics = timing.agent_response_metrics(estimated_tokens)
+        token_count = timing.agent_response_token_count(estimated_tokens)
+        token_count_source = timing.agent_response_token_source()
         response_id = (
             metrics.get("responseId") if isinstance(metrics.get("responseId"), int) else None
         )
@@ -2453,7 +2914,8 @@ def register_events(
                 "timelineEvent": "agent_speech_final",
                 "metrics": metrics,
                 "textChars": len(text),
-                "estimatedTokens": token_count,
+                "estimatedTokens": estimated_tokens,
+                "tokenCountSource": token_count_source,
             },
             token_count=token_count,
         )
@@ -2467,7 +2929,8 @@ def register_events(
                 "timelineEvent": "agent_turn_metrics",
                 "metrics": metrics,
                 "textChars": len(text),
-                "estimatedTokens": token_count,
+                "estimatedTokens": estimated_tokens,
+                "tokenCountSource": token_count_source,
             },
         )
         timing.consume_agent_response()
@@ -2480,10 +2943,12 @@ def register_events(
                 len(message_text(message)),
             )
             return
-        latency_ms = timing.response_latency_ms()
-        metrics = timing.agent_response_metrics()
         text = message_text(message)
-        token_count = estimate_token_count(text)
+        estimated_tokens = estimate_token_count(text)
+        latency_ms = timing.response_latency_ms()
+        metrics = timing.agent_response_metrics(estimated_tokens)
+        token_count = timing.agent_response_token_count(estimated_tokens)
+        token_count_source = timing.agent_response_token_source()
         response_id = (
             metrics.get("responseId") if isinstance(metrics.get("responseId"), int) else None
         )
@@ -2498,6 +2963,9 @@ def register_events(
         metadata: dict[str, object] = {
             "timelineEvent": "agent_speech_interrupted",
             "interrupted": True,
+            "textChars": len(text),
+            "estimatedTokens": estimated_tokens,
+            "tokenCountSource": token_count_source,
         }
         if metrics:
             metadata["metrics"] = metrics
@@ -2531,7 +2999,8 @@ def register_events(
                 "timelineEvent": "agent_turn_metrics",
                 "metrics": metrics,
                 "textChars": len(text),
-                "estimatedTokens": token_count,
+                "estimatedTokens": estimated_tokens,
+                "tokenCountSource": token_count_source,
                 "interrupted": True,
             },
         )
@@ -2657,6 +3126,73 @@ def estimate_token_count(text: str) -> int:
     if not stripped:
         return 0
     return max(1, (len(stripped) + 3) // 4)
+
+
+def extract_llm_token_usage(chunk: object) -> dict[str, int]:
+    usage = object_value(chunk, "usage")
+    if usage is None:
+        return {}
+    prompt_tokens = first_non_negative_int(
+        usage,
+        "prompt_tokens",
+        "promptTokens",
+        "input_tokens",
+        "inputTokens",
+    )
+    completion_tokens = first_non_negative_int(
+        usage,
+        "completion_tokens",
+        "completionTokens",
+        "output_tokens",
+        "outputTokens",
+    )
+    total_tokens = first_non_negative_int(usage, "total_tokens", "totalTokens")
+    if total_tokens is None and (prompt_tokens is not None or completion_tokens is not None):
+        total_tokens = (prompt_tokens or 0) + (completion_tokens or 0)
+
+    payload: dict[str, int] = {}
+    if prompt_tokens is not None:
+        payload["promptTokens"] = prompt_tokens
+    if completion_tokens is not None:
+        payload["completionTokens"] = completion_tokens
+    if total_tokens is not None:
+        payload["totalTokens"] = total_tokens
+    return payload
+
+
+def object_value(source: object, key: str) -> object | None:
+    if isinstance(source, Mapping):
+        return source.get(key)
+    return getattr(source, key, None)
+
+
+def first_non_negative_int(source: object, *keys: str) -> int | None:
+    for key in keys:
+        value = non_negative_int(object_value(source, key))
+        if value is not None:
+            return value
+    return None
+
+
+def non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, float) and value >= 0 and value.is_integer():
+        return int(value)
+    return None
+
+
+def truthy_value(value: object) -> bool:
+    return value is True or value == "true" or value == 1
+
+
+def string_from_mapping(source: Mapping[str, object], key: str) -> str | None:
+    value = source.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 QUESTION_INTENT_RE = re.compile(

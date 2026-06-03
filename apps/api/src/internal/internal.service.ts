@@ -279,9 +279,23 @@ export class InternalService {
     if (canonicalCallId) {
       const existing = await this.prisma.call.findUnique({
         where: { id: canonicalCallId },
-        select: { id: true, metadata: true, liveKitRoomId: true, startedAt: true },
+        select: {
+          id: true,
+          status: true,
+          metadata: true,
+          liveKitRoomId: true,
+          fromNumber: true,
+          startedAt: true,
+        },
       });
       if (existing) {
+        if (existing.status === CallStatus.COMPLETED && this.isBrowserPreviewCall(existing)) {
+          this.logger.warn(
+            `call_start_ignored_completed_browser_preview call_id=${existing.id} liveKitRoomId=${dto.liveKitRoomId}`,
+          );
+          return existing;
+        }
+
         const reconciled = await this.prisma.call.update({
           where: { id: existing.id },
           data: {

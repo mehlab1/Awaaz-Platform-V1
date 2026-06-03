@@ -6,7 +6,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { AuditAction, Prisma, CallStatus, ProviderCredentialMode } from '@prisma/client';
+import { AuditAction, Prisma, CallStatus, EventType, ProviderCredentialMode } from '@prisma/client';
 
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
@@ -568,12 +568,13 @@ export class AgentsService {
     organizationId: string,
     agentId: string,
     callId: string,
-  ): Promise<{ ok: true; state: 'ending' | 'already_ended' }> {
+  ): Promise<{ ok: true; state: 'ending' | 'ended' | 'already_ended' }> {
     const call = await this.prisma.call.findFirst({
       where: { id: callId, organizationId, agentId },
       select: {
         id: true,
         status: true,
+        startedAt: true,
         liveKitRoomId: true,
         fromNumber: true,
         metadata: true,
@@ -585,19 +586,20 @@ export class AgentsService {
 
     const roomName = this.browserRoomName(call);
     const requestedAt = new Date().toISOString();
+    const endMetadata = this.mergeBrowserCallMetadata(call.metadata, {
+      endRequestedAt: requestedAt,
+      endRequestedBy: 'frontend',
+      endReason: 'manual_user_end',
+      endedBy: 'user',
+      lifecycle: {
+        endRequestedAt: requestedAt,
+        endRequestedBy: 'frontend',
+      },
+    });
     await this.prisma.call.update({
       where: { id: call.id },
       data: {
-        metadata: this.mergeBrowserCallMetadata(call.metadata, {
-          endRequestedAt: requestedAt,
-          endRequestedBy: 'frontend',
-          endReason: 'manual_user_end',
-          endedBy: 'user',
-          lifecycle: {
-            endRequestedAt: requestedAt,
-            endRequestedBy: 'frontend',
-          },
-        }),
+        metadata: endMetadata,
       },
     });
 
@@ -634,7 +636,98 @@ export class AgentsService {
       }
     }
 
+    if (
+      await this.completeWorkerlessBrowserTestCall(
+        call,
+        endMetadata,
+        requestedAt,
+        roomName,
+      )
+    ) {
+      return { ok: true, state: 'ended' };
+    }
+
     return { ok: true, state: 'ending' };
+  }
+
+  private async completeWorkerlessBrowserTestCall(
+    call: {
+      id: string;
+      status: CallStatus;
+      startedAt: Date | null;
+      liveKitRoomId: string | null;
+      metadata: Prisma.JsonValue | null;
+    },
+    endMetadata: Prisma.InputJsonValue,
+    endedAtIso: string,
+    roomName: string | null,
+  ): Promise<boolean> {
+    if (call.status !== CallStatus.INITIATED) {
+      return false;
+    }
+
+    const endedAt = new Date(endedAtIso);
+    const completedMetadata = this.mergeBrowserCallMetadata(endMetadata, {
+      endedAt: endedAtIso,
+      completedBy: 'api_workerless_browser_end',
+      lifecycle: {
+        backendCompletedAt: endedAtIso,
+        backendCompletedBy: 'agents.endBrowserTestCall',
+        workerlessCompletion: true,
+      },
+    });
+    const completed = await this.prisma.$transaction(async (tx) => {
+      const update = await tx.call.updateMany({
+        where: { id: call.id, status: CallStatus.INITIATED },
+        data: {
+          status: CallStatus.COMPLETED,
+          endedAt,
+          durationSeconds: this.durationSeconds(call.startedAt, endedAt),
+          metadata: completedMetadata,
+        },
+      });
+      if (update.count === 0) {
+        return false;
+      }
+
+      await tx.callEvent.create({
+        data: {
+          callId: call.id,
+          eventType: EventType.CALL_ENDED,
+          content: 'Call ended',
+          startedAt: call.startedAt ?? undefined,
+          endedAt,
+          durationMs:
+            call.startedAt === null
+              ? undefined
+              : Math.max(0, endedAt.getTime() - call.startedAt.getTime()),
+          metadata: {
+            timelineEvent: 'call_ended',
+            source: 'agents.endBrowserTestCall.workerless',
+            liveKitRoomId: call.liveKitRoomId,
+            liveKitRoomName: roomName,
+            endReason: 'manual_user_end',
+            endedBy: 'user',
+            lifecycle: {
+              backendCompletedAt: endedAtIso,
+              backendCompletedBy: 'agents.endBrowserTestCall',
+              workerlessCompletion: true,
+            },
+          } as Prisma.InputJsonObject,
+        },
+      });
+      return true;
+    });
+
+    if (completed && roomName) {
+      await this.liveKitBrowserTest.closeBrowserRoom({
+        roomName,
+        callId: call.id,
+        reason: 'manual_user_end',
+      });
+    }
+
+    return completed;
   }
 
   private isBrowserPreviewCall(call: {
@@ -672,7 +765,7 @@ export class AgentsService {
   }
 
   private mergeBrowserCallMetadata(
-    metadata: Prisma.JsonValue | null,
+    metadata: Prisma.JsonValue | Prisma.InputJsonValue | null,
     update: Record<string, unknown>,
   ): Prisma.InputJsonValue {
     const base =
@@ -695,6 +788,13 @@ export class AgentsService {
         ...updateLifecycle,
       },
     } as Prisma.InputJsonObject;
+  }
+
+  private durationSeconds(startedAt: Date | null, endedAt: Date): number | undefined {
+    if (!startedAt) {
+      return undefined;
+    }
+    return Math.max(0, Math.floor((endedAt.getTime() - startedAt.getTime()) / 1000));
   }
 
   private browserTestRuntimeSummary(version: {

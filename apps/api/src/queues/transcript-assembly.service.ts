@@ -26,6 +26,13 @@ interface TranscriptEntry {
   firstAudioLatencyMs: number | null;
   playbackDurationMs: number | null;
   totalResponseMs: number | null;
+  totalTurnMs: number | null;
+  llmFirstTokenLatencyMs: number | null;
+  ttsFirstAudioLatencyMs: number | null;
+  tokenCount: number | null;
+  tokenUsage: Prisma.JsonValue | null;
+  ttsChunks: Prisma.JsonValue | null;
+  stageWaterfall: Prisma.JsonValue | null;
 }
 
 interface CostBreakdown {
@@ -99,6 +106,13 @@ export class TranscriptAssemblyService {
           metrics.playbackDurationMs ??
           (event.eventType === EventType.AGENT_SPEECH ? event.durationMs : null),
         totalResponseMs: metrics.totalResponseMs ?? null,
+        totalTurnMs: metrics.totalTurnMs ?? null,
+        llmFirstTokenLatencyMs: metrics.llmFirstTokenLatencyMs ?? null,
+        ttsFirstAudioLatencyMs: metrics.ttsFirstAudioLatencyMs ?? null,
+        tokenCount: event.tokenCount ?? null,
+        tokenUsage: metrics.tokenUsage,
+        ttsChunks: metrics.ttsChunks,
+        stageWaterfall: metrics.stageWaterfall,
       };
     });
     const cost = this.calculateCost({
@@ -189,6 +203,12 @@ export class TranscriptAssemblyService {
     firstAudioLatencyMs?: number;
     playbackDurationMs?: number;
     totalResponseMs?: number;
+    totalTurnMs?: number;
+    llmFirstTokenLatencyMs?: number;
+    ttsFirstAudioLatencyMs?: number;
+    tokenUsage: Prisma.JsonValue | null;
+    ttsChunks: Prisma.JsonValue | null;
+    stageWaterfall: Prisma.JsonValue | null;
   } {
     const metadata = this.asRecord(event.metadata);
     const metrics = this.asRecord(metadata?.metrics);
@@ -196,6 +216,12 @@ export class TranscriptAssemblyService {
       firstAudioLatencyMs: this.nonNegativeNumber(metrics?.firstAudioLatencyMs),
       playbackDurationMs: this.nonNegativeNumber(metrics?.playbackDurationMs),
       totalResponseMs: this.nonNegativeNumber(metrics?.totalResponseMs),
+      totalTurnMs: this.nonNegativeNumber(metrics?.totalTurnMs),
+      llmFirstTokenLatencyMs: this.nonNegativeNumber(metrics?.llmFirstTokenLatencyMs),
+      ttsFirstAudioLatencyMs: this.nonNegativeNumber(metrics?.ttsFirstAudioLatencyMs),
+      tokenUsage: this.jsonValue(metrics?.llmTokenUsage),
+      ttsChunks: this.jsonValue(metrics?.ttsChunks),
+      stageWaterfall: this.jsonValue(metrics?.stageWaterfall),
     };
   }
 
@@ -209,6 +235,26 @@ export class TranscriptAssemblyService {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0
       ? Math.round(value)
       : undefined;
+  }
+
+  private jsonValue(value: unknown): Prisma.JsonValue | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value as Prisma.JsonArray;
+    }
+    if (typeof value === 'object') {
+      return value as Prisma.JsonObject;
+    }
+    return null;
   }
 
   private calculateCost(input: {

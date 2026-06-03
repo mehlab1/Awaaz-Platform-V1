@@ -50,6 +50,32 @@ type TranscriptTurn = {
   firstAudioLatencyMs: number | null;
   playbackDurationMs: number | null;
   totalResponseMs: number | null;
+  totalTurnMs: number | null;
+  llmFirstTokenLatencyMs: number | null;
+  ttsFirstAudioLatencyMs: number | null;
+  tokenCount: number | null;
+  tokenUsage: TokenUsage | null;
+  ttsChunks: TtsChunkMetrics | null;
+  stageWaterfall: StageWaterfallItem[];
+};
+
+type TokenUsage = {
+  totalTokens: number | null;
+  estimatedOutputTokens: number | null;
+  source: string | null;
+};
+
+type TtsChunkMetrics = {
+  textChunkCount: number | null;
+  audioFrameCount: number | null;
+  firstChunkChars: number | null;
+  maxChunkChars: number | null;
+};
+
+type StageWaterfallItem = {
+  stage: string;
+  label: string;
+  durationMs: number;
 };
 
 interface CallDetailPayload {
@@ -96,6 +122,8 @@ interface LatencyStats {
   firstAudio: MetricSummary;
   playback: MetricSummary;
   total: MetricSummary;
+  llmFirstToken: MetricSummary;
+  ttsFirstAudio: MetricSummary;
   usedLegacyLatency: boolean;
 }
 
@@ -731,6 +759,10 @@ function collectTranscriptTurns(content: unknown): TranscriptTurn[] {
     const firstAudioLatencyMs = numericField(e.firstAudioLatencyMs);
     const playbackDurationMs = numericField(e.playbackDurationMs);
     const totalResponseMs = numericField(e.totalResponseMs);
+    const totalTurnMs = numericField(e.totalTurnMs);
+    const llmFirstTokenLatencyMs = numericField(e.llmFirstTokenLatencyMs);
+    const ttsFirstAudioLatencyMs = numericField(e.ttsFirstAudioLatencyMs);
+    const tokenCount = numericField(e.tokenCount);
     out.push({
       speaker,
       text,
@@ -740,9 +772,72 @@ function collectTranscriptTurns(content: unknown): TranscriptTurn[] {
       firstAudioLatencyMs,
       playbackDurationMs,
       totalResponseMs,
+      totalTurnMs,
+      llmFirstTokenLatencyMs,
+      ttsFirstAudioLatencyMs,
+      tokenCount,
+      tokenUsage: collectTokenUsage(e.tokenUsage),
+      ttsChunks: collectTtsChunks(e.ttsChunks),
+      stageWaterfall: collectStageWaterfall(e.stageWaterfall),
     });
   }
   return out;
+}
+
+function collectTokenUsage(value: unknown): TokenUsage | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const usage = {
+    totalTokens: numericField(record.totalTokens),
+    estimatedOutputTokens: numericField(record.estimatedOutputTokens),
+    source: typeof record.source === 'string' ? record.source : null,
+  };
+  return usage.totalTokens !== null ||
+    usage.estimatedOutputTokens !== null ||
+    usage.source !== null
+    ? usage
+    : null;
+}
+
+function collectTtsChunks(value: unknown): TtsChunkMetrics | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const chunks = {
+    textChunkCount: numericField(record.textChunkCount),
+    audioFrameCount: numericField(record.audioFrameCount),
+    firstChunkChars: numericField(record.firstChunkChars),
+    maxChunkChars: numericField(record.maxChunkChars),
+  };
+  return Object.values(chunks).some((item) => item !== null) ? chunks : null;
+}
+
+function collectStageWaterfall(value: unknown): StageWaterfallItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item): StageWaterfallItem | null => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return null;
+      }
+      const record = item as Record<string, unknown>;
+      const stage = typeof record.stage === 'string' ? record.stage : null;
+      const durationMs = numericField(record.durationMs);
+      if (!stage || durationMs === null) {
+        return null;
+      }
+      return {
+        stage,
+        label: typeof record.label === 'string' ? record.label : stage.replaceAll('_', ' '),
+        durationMs,
+      };
+    })
+    .filter((item): item is StageWaterfallItem => item !== null)
+    .slice(0, 12);
 }
 
 function numericField(value: unknown): number | null {
@@ -759,10 +854,18 @@ function summarizeLatencies(entries: TranscriptTurn[]): LatencyStats {
   const totalValues = entries
     .map((entry) => entry.totalResponseMs)
     .filter(isNumber);
+  const llmFirstTokenValues = entries
+    .map((entry) => entry.llmFirstTokenLatencyMs)
+    .filter(isNumber);
+  const ttsFirstAudioValues = entries
+    .map((entry) => entry.ttsFirstAudioLatencyMs)
+    .filter(isNumber);
   return {
     firstAudio: summarizeNumbers(firstAudioValues),
     playback: summarizeNumbers(playbackValues),
     total: summarizeNumbers(totalValues),
+    llmFirstToken: summarizeNumbers(llmFirstTokenValues),
+    ttsFirstAudio: summarizeNumbers(ttsFirstAudioValues),
     usedLegacyLatency: entries.some(
       (entry) => entry.firstAudioLatencyMs == null && entry.latencyMs != null,
     ),
@@ -973,6 +1076,18 @@ function TurnTimingChips({ turn }: { turn: TranscriptTurn }) {
     turn.totalResponseMs != null
       ? { label: 'Total', value: formatMs(turn.totalResponseMs), color: 'text-violet-700 bg-violet-50 dark:text-violet-400 dark:bg-violet-500/10 border-violet-500/20' }
       : null,
+    turn.llmFirstTokenLatencyMs != null
+      ? { label: 'LLM token', value: formatMs(turn.llmFirstTokenLatencyMs), color: 'text-cyan-700 bg-cyan-50 dark:text-cyan-400 dark:bg-cyan-500/10 border-cyan-500/20' }
+      : null,
+    turn.ttsFirstAudioLatencyMs != null
+      ? { label: 'TTS audio', value: formatMs(turn.ttsFirstAudioLatencyMs), color: 'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-500/10 border-amber-500/20' }
+      : null,
+    turn.tokenCount != null
+      ? { label: 'Tokens', value: `${turn.tokenCount.toLocaleString()}${turn.tokenUsage?.source === 'estimated' ? ' est.' : ''}`, color: 'text-slate-700 bg-slate-50 dark:text-slate-300 dark:bg-slate-500/10 border-slate-500/20' }
+      : null,
+    turn.ttsChunks?.textChunkCount != null
+      ? { label: 'Chunks', value: String(turn.ttsChunks.textChunkCount), color: 'text-teal-700 bg-teal-50 dark:text-teal-400 dark:bg-teal-500/10 border-teal-500/20' }
+      : null,
   ].filter((chip): chip is { label: string; value: string; color: string } => chip !== null);
 
   if (chips.length === 0) {
@@ -984,18 +1099,35 @@ function TurnTimingChips({ turn }: { turn: TranscriptTurn }) {
   }
 
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {chips.map((chip) => (
-        <span
-          key={chip.label}
-          className={cn(
-            "inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-mono font-medium tracking-tight",
-            chip.color
-          )}
-        >
-          {chip.label}: {chip.value}
-        </span>
-      ))}
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap gap-1.5">
+        {chips.map((chip) => (
+          <span
+            key={chip.label}
+            className={cn(
+              "inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-mono font-medium tracking-tight",
+              chip.color
+            )}
+          >
+            {chip.label}: {chip.value}
+          </span>
+        ))}
+      </div>
+      {turn.stageWaterfall.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {turn.stageWaterfall
+            .filter((stage) => stage.stage !== 'total_turn')
+            .slice(0, 6)
+            .map((stage) => (
+              <span
+                key={`${stage.stage}:${stage.durationMs}`}
+                className="inline-flex items-center rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-[9px] text-muted-foreground"
+              >
+                {stage.label}: {formatMs(stage.durationMs)}
+              </span>
+            ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1107,7 +1239,9 @@ function LatencyCard(props: { stats: LatencyStats }) {
   const has =
     props.stats.firstAudio.values.length > 0 ||
     props.stats.playback.values.length > 0 ||
-    props.stats.total.values.length > 0;
+    props.stats.total.values.length > 0 ||
+    props.stats.llmFirstToken.values.length > 0 ||
+    props.stats.ttsFirstAudio.values.length > 0;
 
   return (
     <Card className="border-border/50 shadow-sm overflow-hidden">
@@ -1128,7 +1262,7 @@ function LatencyCard(props: { stats: LatencyStats }) {
           </p>
         ) : (
           <div className="space-y-6">
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-5">
               <TimingSummary
                 label="First audio"
                 summary={props.stats.firstAudio}
@@ -1149,6 +1283,20 @@ function LatencyCard(props: { stats: LatencyStats }) {
                 empty="Missing"
                 icon={Timer}
                 color="border-violet-500/20 bg-violet-500/[0.01]"
+              />
+              <TimingSummary
+                label="LLM token"
+                summary={props.stats.llmFirstToken}
+                empty="Missing"
+                icon={Cpu}
+                color="border-cyan-500/20 bg-cyan-500/[0.01]"
+              />
+              <TimingSummary
+                label="TTS audio"
+                summary={props.stats.ttsFirstAudio}
+                empty="Missing"
+                icon={Volume2}
+                color="border-amber-500/20 bg-amber-500/[0.01]"
               />
             </div>
 
