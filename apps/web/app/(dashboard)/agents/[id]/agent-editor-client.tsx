@@ -1276,6 +1276,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       if (options.reloadCatalog) {
         await loadData(showAllVersions && allVersionsLoaded);
       }
+      window.dispatchEvent(new CustomEvent('awaaz:onboarding:api-keys-configured'));
       return updated;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

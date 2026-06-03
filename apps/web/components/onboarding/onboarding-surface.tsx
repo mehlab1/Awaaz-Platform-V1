@@ -9,16 +9,37 @@ import {
   ArrowRight,
   Bot,
   Building2,
+  ChevronRight,
   PhoneCall,
   Sparkles,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useOnboarding } from './onboarding-provider';
 
+export const findVisibleOnboardingTarget = (targetId: string): Element | null => {
+  const elements = document.querySelectorAll(`[data-onboarding-target="${targetId}"]`);
+  for (const el of Array.from(elements)) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      return el;
+    }
+  }
+  return null;
+};
+
+interface SpotlightRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
 const WELCOME_START_BUTTON_ID = 'awaaz-onboarding-start';
 
 export function OnboardingSurface() {
   const onboarding = useOnboarding();
+  const currentTarget = onboarding.currentStep?.target ?? null;
+  const spotlight = useSpotlightRect(currentTarget);
   const allComplete =
     onboarding.isActive &&
     onboarding.steps.every((step) => step.completed);
@@ -48,6 +69,7 @@ export function OnboardingSurface() {
   return (
     <>
       {showConfetti && <ConfettiCelebration />}
+      <SoftHighlightOverlay rect={spotlight} />
       <MinimalProgressIndicator allComplete={allComplete} />
     </>
   );
@@ -188,11 +210,21 @@ function MinimalProgressIndicator({ allComplete }: { allComplete: boolean }) {
           {currentRealStep ? currentRealStep.title : 'Setup in progress'}
         </span>
       </div>
+      {currentRealStep && (
+        <Button
+          size="sm"
+          onClick={onboarding.runCurrentStepAction}
+          className="h-7 text-[10px] px-3 rounded-full font-semibold"
+        >
+          Do this
+          <ChevronRight className="ml-1 size-3" />
+        </Button>
+      )}
       <Button 
         variant="outline" 
         size="sm" 
         onClick={onboarding.dismiss}
-        className="h-7 text-[10px] px-2.5 rounded-full"
+        className="h-7 text-[10px] px-2.5 rounded-full text-muted-foreground hover:text-foreground"
       >
         Skip
       </Button>
@@ -218,6 +250,75 @@ function ConfettiCelebration() {
         };
         return <div key={i} style={style} />;
       })}
+    </div>
+  );
+}
+
+function useSpotlightRect(targetId: string | null): SpotlightRect | null {
+  const [rect, setRect] = useState<SpotlightRect | null>(null);
+
+  useEffect(() => {
+    if (!targetId) {
+      setRect(null);
+      return;
+    }
+
+    const updateRect = () => {
+      const el = findVisibleOnboardingTarget(targetId);
+      if (el) {
+        const r = el.getBoundingClientRect();
+        setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+      } else {
+        setRect(null);
+      }
+    };
+
+    updateRect();
+    const interval = setInterval(updateRect, 200);
+    window.addEventListener('resize', updateRect);
+    window.addEventListener('scroll', updateRect, true);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('resize', updateRect);
+      window.removeEventListener('scroll', updateRect, true);
+    };
+  }, [targetId]);
+
+  return rect;
+}
+
+function SoftHighlightOverlay({ rect }: { rect: SpotlightRect | null }) {
+  const [style, setStyle] = useState<React.CSSProperties>({
+    opacity: 0,
+    transform: 'scale(0.95)',
+  });
+
+  useEffect(() => {
+    if (!rect) {
+      setStyle({ opacity: 0, transform: 'scale(0.95)', transition: 'all 0.3s ease' });
+      return;
+    }
+
+    setStyle({
+      top: rect.top - 4,
+      left: rect.left - 4,
+      width: rect.width + 8,
+      height: rect.height + 8,
+      opacity: 1,
+      transform: 'scale(1)',
+      transition: 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+    });
+  }, [rect]);
+
+  if (!rect && style.opacity === 0) return null;
+
+  return (
+    <div
+      className="fixed z-[220] pointer-events-none rounded-lg ring-2 ring-primary/40 shadow-[0_0_15px_rgba(var(--primary),0.2)]"
+      style={style}
+    >
+      <div className="absolute inset-0 bg-primary/5 rounded-lg" />
     </div>
   );
 }

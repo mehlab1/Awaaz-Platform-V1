@@ -164,15 +164,8 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         completed: normalizedState.steps.promptConfigured,
       },
       {
-        id: 'apiKeysMode',
-        title: 'Choose Key Management',
-        description: 'Select between Finova Managed infrastructure or Bring Your Own Keys.',
-        target: 'api-keys-mode',
-        completed: normalizedState.steps.apiKeysModeViewed,
-      },
-      {
         id: 'apiKeys',
-        title: 'Configure API Keys',
+        title: 'Configure Voice Pipeline',
         description:
           'Set up your Voice Pipeline keys (STT, LLM, TTS) and save runtime settings.',
         target: 'api-keys',
@@ -200,7 +193,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       normalizedState.steps.agentCreated,
       normalizedState.steps.blueprintsViewed,
       normalizedState.steps.promptConfigured,
-      normalizedState.steps.apiKeysModeViewed,
       normalizedState.steps.apiKeysConfigured,
       normalizedState.steps.versionPublished,
       normalizedState.steps.testCallCompleted,
@@ -386,12 +378,17 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const target = currentStep.target
       ? findVisibleOnboardingTarget(currentStep.target)
       : null;
-    if (target instanceof HTMLElement && !target.hasAttribute('disabled')) {
-      target.focus({ preventScroll: false });
-      target.click();
+    if (target instanceof HTMLElement) {
+      if (['testCall', 'agentPrompt', 'apiKeys', 'publishVersion', 'agentBlueprints'].includes(currentStep.id)) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      if (!target.hasAttribute('disabled')) {
+        target.focus({ preventScroll: true });
+        target.click();
+      }
       return;
     }
-    if (['testCall', 'agentPrompt', 'apiKeys', 'publishVersion', 'agentBlueprints', 'apiKeysMode'].includes(currentStep.id)) {
+    if (['testCall', 'agentPrompt', 'apiKeys', 'publishVersion', 'agentBlueprints'].includes(currentStep.id)) {
       if (pathname.startsWith('/agents/') && pathname !== '/agents/new') {
         // Already on an agent page, target just might be hidden or scrolling.
       } else if (firstAgentId) {
@@ -465,7 +462,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       normalizedState.steps.agentCreated &&
       normalizedState.steps.blueprintsViewed &&
       normalizedState.steps.promptConfigured &&
-      normalizedState.steps.apiKeysModeViewed &&
       normalizedState.steps.apiKeysConfigured &&
       normalizedState.steps.versionPublished &&
       normalizedState.steps.testCallCompleted;
@@ -486,7 +482,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     normalizedState.steps.agentCreated,
     normalizedState.steps.blueprintsViewed,
     normalizedState.steps.promptConfigured,
-    normalizedState.steps.apiKeysModeViewed,
     normalizedState.steps.apiKeysConfigured,
     normalizedState.steps.versionPublished,
     normalizedState.steps.testCallCompleted,
