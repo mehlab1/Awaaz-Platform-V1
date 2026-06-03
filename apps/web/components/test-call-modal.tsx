@@ -37,8 +37,10 @@ import {
   Gauge,
   Info,
   Loader2,
+  Maximize,
   Mic,
   MicOff,
+  Minimize,
   MessageSquareText,
   Radio,
   Phone,
@@ -62,6 +64,7 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { dispatchOnboardingTestInteractionCompleted } from '@/components/onboarding/onboarding-provider';
 import { cn } from '@/lib/utils';
 
@@ -968,6 +971,7 @@ function SessionDebugDrawer({
   endedAtMs,
   errorMessage,
   summary,
+  className,
 }: {
   agentId: string;
   agentName: string;
@@ -979,9 +983,10 @@ function SessionDebugDrawer({
   endedAtMs: number | null;
   errorMessage: string | null;
   summary: PostCallSummary;
+  className?: string;
 }) {
   return (
-    <section className="max-h-[min(16rem,45dvh)] shrink-0 overflow-y-auto border-t border-border/50 bg-muted/15 px-4 py-3 sm:px-5">
+    <section className={cn("max-h-[min(16rem,45dvh)] shrink-0 overflow-y-auto border-t border-border/50 bg-muted/15 px-4 py-3 sm:px-5", className)}>
       <div className="flex items-start gap-2 text-xs text-muted-foreground">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
         <p>
@@ -1151,6 +1156,98 @@ function StageWaterfallStrip({
   );
 }
 
+function LiveTranscriptEntryCard({ entry }: { entry: LiveTranscriptEntry }) {
+  const [showMetrics, setShowMetrics] = useState(false);
+  const meta = transcriptSpeakerMeta(entry.speaker);
+  const StatusIcon = meta.Icon;
+
+  return (
+    <article
+      className={cn('rounded-lg border px-3 py-2 text-left', meta.className)}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={cn('grid h-6 w-6 shrink-0 place-items-center rounded-full', meta.badgeClassName)}>
+            <StatusIcon className="h-3.5 w-3.5" aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-xs font-semibold">{meta.label}</p>
+            <p className="truncate text-[10px] text-muted-foreground">
+              {formatTranscriptTime(entry.timestamp)}
+              {entry.latencyMs !== null ? ` · ${entry.latencyMs}ms` : ''}
+            </p>
+          </div>
+        </div>
+        <Badge
+          variant={entry.status === 'interrupted' ? 'destructive' : 'outline'}
+          className="shrink-0 px-2 py-0.5 text-[10px]"
+        >
+          {entry.status === 'interim'
+            ? 'Interim'
+            : entry.status === 'interrupted'
+              ? 'Interrupted'
+              : 'Final'}
+        </Badge>
+      </div>
+      <p
+        className={cn(
+          'mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed',
+          entry.status === 'interim' ? 'text-muted-foreground italic' : 'text-foreground',
+        )}
+      >
+        {entry.text}
+      </p>
+      {entry.speaker === 'agent' ? (
+        <>
+          <div className="mt-2 flex flex-wrap gap-1.5 items-center">
+            <LatencyBadge
+              label="First audio"
+              value={entry.latencyMs ?? entry.metrics.firstAudioLatencyMs}
+            />
+            <LatencyBadge label="Total" value={entry.metrics.totalResponseMs} />
+            <button
+              onClick={() => setShowMetrics(!showMetrics)}
+              className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"
+            >
+              {showMetrics ? 'Hide metrics' : 'Show metrics'}
+              {showMetrics ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+          </div>
+          {showMetrics && (
+            <div className="mt-2 pt-2 border-t border-border/40 space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                <LatencyBadge label="LLM first token" value={entry.metrics.llmFirstTokenLatencyMs} />
+                <LatencyBadge label="TTS first audio" value={entry.metrics.ttsFirstAudioLatencyMs} />
+                <LatencyBadge label="Playback" value={entry.metrics.playbackDurationMs} />
+                <LatencyBadge
+                  label="Interrupt"
+                  value={entry.metrics.interruptionToSilenceMs}
+                />
+                <DebugMetricBadge label="Tokens" value={tokenUsageLabel(entry.metrics.tokenUsage)} />
+                <DebugMetricBadge
+                  label="Text chunks"
+                  value={compactCount(entry.metrics.ttsChunks?.textChunkCount ?? null)}
+                />
+                <DebugMetricBadge
+                  label="Audio frames"
+                  value={compactCount(entry.metrics.ttsChunks?.audioFrameCount ?? null)}
+                />
+              </div>
+              {entry.metrics.stageWaterfall.length > 0 ? (
+                <StageWaterfallStrip stages={entry.metrics.stageWaterfall} />
+              ) : null}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <LatencyBadge label="STT" value={entry.metrics.sttLatencyMs} />
+        </div>
+      )}
+    </article>
+  );
+}
+
 function LiveTranscriptPanel({
   entries,
   lastEvent,
@@ -1244,85 +1341,9 @@ function LiveTranscriptPanel({
           </div>
         ) : (
           <div className="space-y-2">
-            {entries.map((entry) => {
-              const meta = transcriptSpeakerMeta(entry.speaker);
-              const StatusIcon = meta.Icon;
-              return (
-                <article
-                  key={entry.id}
-                  className={cn('rounded-lg border px-3 py-2 text-left', meta.className)}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className={cn('grid h-6 w-6 shrink-0 place-items-center rounded-full', meta.badgeClassName)}>
-                        <StatusIcon className="h-3.5 w-3.5" aria-hidden />
-                      </span>
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-semibold">{meta.label}</p>
-                        <p className="truncate text-[10px] text-muted-foreground">
-                          {formatTranscriptTime(entry.timestamp)}
-                          {entry.latencyMs !== null ? ` · ${entry.latencyMs}ms` : ''}
-                        </p>
-                      </div>
-                    </div>
-                    <Badge
-                      variant={entry.status === 'interrupted' ? 'destructive' : 'outline'}
-                      className="shrink-0 px-2 py-0.5 text-[10px]"
-                    >
-                      {entry.status === 'interim'
-                        ? 'Interim'
-                        : entry.status === 'interrupted'
-                          ? 'Interrupted'
-                          : 'Final'}
-                    </Badge>
-                  </div>
-                  <p
-                    className={cn(
-                      'mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed',
-                      entry.status === 'interim' ? 'text-muted-foreground italic' : 'text-foreground',
-                    )}
-                  >
-                    {entry.text}
-                  </p>
-                  {entry.speaker === 'agent' ? (
-                    <>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        <LatencyBadge
-                          label="First audio"
-                          value={entry.latencyMs ?? entry.metrics.firstAudioLatencyMs}
-                        />
-                        <LatencyBadge label="LLM first token" value={entry.metrics.llmFirstTokenLatencyMs} />
-                        <LatencyBadge label="TTS first audio" value={entry.metrics.ttsFirstAudioLatencyMs} />
-                        <LatencyBadge label="Playback" value={entry.metrics.playbackDurationMs} />
-                        <LatencyBadge label="Total" value={entry.metrics.totalResponseMs} />
-                        <LatencyBadge
-                          label="Interrupt"
-                          value={entry.metrics.interruptionToSilenceMs}
-                        />
-                        <DebugMetricBadge label="Tokens" value={tokenUsageLabel(entry.metrics.tokenUsage)} />
-                        <DebugMetricBadge
-                          label="Text chunks"
-                          value={compactCount(entry.metrics.ttsChunks?.textChunkCount ?? null)}
-                        />
-                        <DebugMetricBadge
-                          label="Audio frames"
-                          value={compactCount(entry.metrics.ttsChunks?.audioFrameCount ?? null)}
-                        />
-                      </div>
-                      {entry.metrics.stageWaterfall.length > 0 ? (
-                        <div className="mt-2">
-                          <StageWaterfallStrip stages={entry.metrics.stageWaterfall} />
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <LatencyBadge label="STT" value={entry.metrics.sttLatencyMs} />
-                    </div>
-                  )}
-                </article>
-              );
-            })}
+            {entries.map((entry) => (
+              <LiveTranscriptEntryCard key={entry.id} entry={entry} />
+            ))}
             <div ref={endRef} />
           </div>
         )}
@@ -1682,6 +1703,15 @@ interface RoomChromeProps {
   transcriptEntries: LiveTranscriptEntry[];
   lastTranscriptEvent: LiveTranscriptEvent | null;
   dataChannelEvents: LiveDataChannelEvent[];
+  agentId: string;
+  agentName: string;
+  session: BrowserTestSession | null;
+  sessionPhase: BrowserSessionPhase | null;
+  badgePhase: BrowserTestPhaseBadge;
+  connectedAtMs: number | null;
+  endedAtMs: number | null;
+  errorMessage: string | null;
+  summary: PostCallSummary;
   onSessionActive: () => void;
   onSessionMode: (mode: VoiceUiMode) => void;
   onLifecycleState: (phase: BrowserSessionPhase, message?: string) => void;
@@ -1701,6 +1731,15 @@ function BrowserTestRoomChrome({
   transcriptEntries,
   lastTranscriptEvent,
   dataChannelEvents,
+  agentId,
+  agentName,
+  session: testSession,
+  sessionPhase,
+  badgePhase,
+  connectedAtMs,
+  endedAtMs,
+  errorMessage,
+  summary,
   onSessionActive,
   onSessionMode,
   onLifecycleState,
@@ -2414,16 +2453,7 @@ function BrowserTestRoomChrome({
 
       <div className="flex min-h-0 flex-1 p-3 sm:p-5">
         <section className="flex min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-sm">
-          <div className="flex shrink-0 flex-col gap-3 border-b border-border/40 bg-card/35 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase text-muted-foreground">
-                Browser preview
-              </p>
-              <h3 className="mt-1 truncate text-base font-semibold tracking-tight sm:text-lg">
-                {agentDisplayName}
-              </h3>
-            </div>
-
+          <div className="flex shrink-0 flex-col gap-3 border-b border-border/40 bg-card/35 px-3 py-3 sm:flex-row sm:items-center sm:justify-end sm:px-4">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="px-2 py-0.5 text-[10px]">
                 <Clock className="h-3 w-3 mr-1" aria-hidden />
@@ -2550,12 +2580,38 @@ function BrowserTestRoomChrome({
               </div>
 
               <div className="flex min-h-0 min-w-0 flex-col gap-3">
-                <LiveTranscriptPanel
-                  entries={transcriptEntries}
-                  lastEvent={lastTranscriptEvent}
-                  isRoomConnected={isRoomConnected}
-                />
-                <LiveDataChannelPanel events={dataChannelEvents} />
+                <Tabs defaultValue="transcript" className="flex min-h-0 min-w-0 flex-col h-full w-full">
+                  <TabsList className="grid w-full grid-cols-3 shrink-0">
+                    <TabsTrigger value="transcript">Transcript</TabsTrigger>
+                    <TabsTrigger value="data">Data</TabsTrigger>
+                    <TabsTrigger value="debug">Debug</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="transcript" className="min-h-0 flex-1 data-[state=inactive]:hidden mt-3 h-full">
+                    <LiveTranscriptPanel
+                      entries={transcriptEntries}
+                      lastEvent={lastTranscriptEvent}
+                      isRoomConnected={isRoomConnected}
+                    />
+                  </TabsContent>
+                  <TabsContent value="data" className="min-h-0 flex-1 data-[state=inactive]:hidden mt-3 h-full">
+                    <LiveDataChannelPanel events={dataChannelEvents} />
+                  </TabsContent>
+                  <TabsContent value="debug" className="min-h-0 flex-1 data-[state=inactive]:hidden mt-3 h-full overflow-y-auto">
+                    <SessionDebugDrawer
+                      agentId={agentId}
+                      agentName={agentName}
+                      session={testSession}
+                      sessionPhase={sessionPhase}
+                      badgePhase={badgePhase}
+                      durationLabel={elapsedLabel}
+                      connectedAtMs={connectedAtMs}
+                      endedAtMs={endedAtMs}
+                      errorMessage={errorMessage}
+                      summary={summary}
+                      className="max-h-none border-0 bg-transparent px-0 py-0"
+                    />
+                  </TabsContent>
+                </Tabs>
               </div>
             </div>
           </div>
@@ -2598,11 +2654,12 @@ function BrowserTestRoomChrome({
 export function TestCallModal(props: TestCallModalProps) {
   const { agentId, agentName, open, onOpenChange, apiCall } = props;
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fetchFailed, setFetchFailed] = useState(false);
   const [session, setSession] = useState<BrowserTestSession | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [debugOpen, setDebugOpen] = useState(false);
+
   const [sessionConnectedAtMs, setSessionConnectedAtMs] = useState<number | null>(null);
   const [sessionEndedAtMs, setSessionEndedAtMs] = useState<number | null>(null);
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
@@ -2704,7 +2761,7 @@ export function TestCallModal(props: TestCallModalProps) {
       setLifecycleNotice(null);
       setSessionConnectedAtMs(null);
       setSessionEndedAtMs(null);
-      setDebugOpen(false);
+
       setLiveTranscriptEntries([]);
       setLastLiveTranscriptEvent(null);
       setDataChannelEvents([]);
@@ -2951,7 +3008,10 @@ export function TestCallModal(props: TestCallModalProps) {
       aria-label="Browser agent test call"
       className="animate-in fade-in fixed inset-0 z-[260] flex items-stretch justify-center bg-black/60 p-2 backdrop-blur-md duration-200 sm:items-center sm:p-4"
     >
-      <div className="relative flex h-[calc(100dvh-1rem)] w-full max-w-4xl animate-in zoom-in-95 flex-col overflow-hidden rounded-2xl border border-border/80 bg-background shadow-2xl duration-200 sm:h-[calc(100dvh-2rem)] sm:max-h-[760px]">
+      <div className={cn(
+        "relative flex w-full animate-in zoom-in-95 flex-col overflow-hidden bg-background shadow-2xl duration-200",
+        isFullscreen ? "h-full max-w-none rounded-none border-0" : "h-[calc(100dvh-1rem)] max-w-4xl rounded-2xl border border-border/80 sm:h-[calc(100dvh-2rem)] sm:max-h-[760px]"
+      )}>
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border/40 bg-card/45 px-4 py-3 sm:items-center sm:gap-4 sm:px-5">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -2983,18 +3043,14 @@ export function TestCallModal(props: TestCallModalProps) {
             <CallDetailLink callId={session?.callId} />
             <Button
               type="button"
-              variant="outline"
-              size="sm"
-              aria-expanded={debugOpen}
-              onClick={() => setDebugOpen((open) => !open)}
-              className="h-8 gap-1.5 rounded-full px-3 text-xs"
+              variant="ghost"
+              size="icon"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="h-8 w-8 shrink-0 rounded-full transition-colors hover:bg-muted/50 hover:text-foreground"
             >
-              Debug
-              {debugOpen ? (
-                <ChevronUp className="h-3.5 w-3.5" aria-hidden />
-              ) : (
-                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-              )}
+              {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
             </Button>
             <Button
               type="button"
@@ -3080,6 +3136,15 @@ export function TestCallModal(props: TestCallModalProps) {
               transcriptEntries={liveTranscriptEntries}
               lastTranscriptEvent={lastLiveTranscriptEvent}
               dataChannelEvents={dataChannelEvents}
+              agentId={agentId}
+              agentName={agentName}
+              session={session}
+              sessionPhase={sessionPhase}
+              badgePhase={badgePhase}
+              connectedAtMs={sessionConnectedAtMs}
+              endedAtMs={sessionEndedAtMs}
+              errorMessage={errorMessage}
+              summary={postCallSummary}
               onSessionActive={markRtcActive}
               onSessionMode={markSessionMode}
               onLifecycleState={markLifecycleState}
@@ -3152,21 +3217,6 @@ export function TestCallModal(props: TestCallModalProps) {
             </div>
           </div>
         )}
-
-        {debugOpen ? (
-          <SessionDebugDrawer
-            agentId={agentId}
-            agentName={agentName}
-            session={session}
-            sessionPhase={sessionPhase}
-            badgePhase={badgePhase}
-            durationLabel={durationLabel}
-            connectedAtMs={sessionConnectedAtMs}
-            endedAtMs={sessionEndedAtMs}
-            errorMessage={errorMessage}
-            summary={postCallSummary}
-          />
-        ) : null}
 
         {session !== null && sessionPhase === 'CONNECTING' && !fetchFailed ? (
           <footer className="shrink-0 border-t border-border bg-muted/20 px-4 py-2.5 text-center text-xs text-muted-foreground sm:px-8">
