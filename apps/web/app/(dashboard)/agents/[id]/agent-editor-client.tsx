@@ -381,6 +381,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const voiceListRef = useRef<HTMLDivElement | null>(null);
   const voiceRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const saveInFlightRef = useRef(false);
+  const promptDraftDispatchedRef = useRef(false);
   const voicesLoadedRef = useRef(false);
   const phonesLoadedOrgRef = useRef<string | undefined>(undefined);
 
@@ -468,6 +469,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   }, [voiceModalOpen, selectedTtsProvider, selectedVoiceId, voices]);
 
   useEffect(() => {
+    promptDraftDispatchedRef.current = false;
     setPromptHydrated(false);
     setPrompt('');
     setSelectedVoiceId('');
@@ -560,11 +562,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         latestVersion
       : latestVersion;
   const nextVersionNumber = (latestVersion?.versionNumber ?? 0) + 1;
+  const promptHasText = prompt.trim().length > 0;
   const hasUnsavedChanges =
     promptHydrated &&
     (selectedVersion
-      ? prompt !== selectedVersion.systemPrompt
-      : prompt.trim().length > 0);
+      ? normalizePromptForCompare(prompt) !==
+        normalizePromptForCompare(selectedVersion.systemPrompt)
+      : promptHasText);
   const hasRuntimeChanges =
     promptHydrated &&
     selectedVersion != null &&
@@ -598,6 +602,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     [liveVersion?.model, liveVersion?.voiceId, voices],
   );
 
+  const selectedVersionRuntimeAssessment = useMemo(() => {
+    if (!selectedVersion) {
+      return null;
+    }
+    return assessRuntimeConfig({
+      voiceId: selectedVersion.voiceId,
+      model: selectedVersion.model ?? DEFAULT_LLM_MODEL,
+      voices,
+    });
+  }, [selectedVersion, voices]);
+
   const publishTargetRuntimeAssessment = useMemo(() => {
     if (!publishTarget) {
       return null;
@@ -609,7 +624,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     });
   }, [publishTarget, voices]);
 
-  const promptIsValid = prompt.trim().length > 0 && selectedVoiceId.trim().length > 0;
+  const promptIsValid = promptHasText;
   const versionPanelBusy = versionMutating !== null;
   const canSaveRuntimeSettings =
     promptHydrated &&
@@ -651,9 +666,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     !isSelectedLive &&
     saveBusy === null &&
     !versionPanelBusy &&
-    editorRuntimeAssessment.canPublishLive;
-  const publishLiveBlockedReason = !editorRuntimeAssessment.canPublishLive
-    ? editorRuntimeAssessment.issues[0]
+    selectedVersionRuntimeAssessment?.canPublishLive === true;
+  const publishLiveBlockedReason =
+    selectedVersionRuntimeAssessment &&
+    !selectedVersionRuntimeAssessment.canPublishLive
+    ? selectedVersionRuntimeAssessment.issues[0]
     : null;
   const isViewingHistoricalVersion =
     selectedVersion != null &&
@@ -667,6 +684,29 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       : selectedVersion
         ? `Viewing · ${selectedVersionLabel}`
         : 'New Agent';
+
+  const dispatchPromptDraftedForOnboarding = useCallback(() => {
+    if (promptDraftDispatchedRef.current) {
+      return;
+    }
+    promptDraftDispatchedRef.current = true;
+    window.dispatchEvent(new CustomEvent('awaaz:onboarding:prompt-drafted'));
+  }, []);
+
+  const handlePromptChange = useCallback(
+    (nextPrompt: string) => {
+      setPrompt(nextPrompt);
+      const baseline = selectedVersion?.systemPrompt ?? '';
+      const changedFromBaseline = selectedVersion
+        ? normalizePromptForCompare(nextPrompt) !==
+          normalizePromptForCompare(baseline)
+        : nextPrompt.trim().length > 0;
+      if (nextPrompt.trim().length > 0 && changedFromBaseline) {
+        dispatchPromptDraftedForOnboarding();
+      }
+    },
+    [dispatchPromptDraftedForOnboarding, selectedVersion],
+  );
 
   const previewVersions = versions.slice(0, VERSION_HISTORY_PREVIEW_LIMIT);
   const pinnedLiveVersion =
@@ -717,6 +757,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     if (!hasUnsavedChanges) {
       return;
     }
+    if (prompt.trim().length > 0) {
+      dispatchPromptDraftedForOnboarding();
+    }
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
       setDraftPrompt(prompt);
       event.preventDefault();
@@ -724,7 +767,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [hasUnsavedChanges, prompt, setDraftPrompt]);
+  }, [dispatchPromptDraftedForOnboarding, hasUnsavedChanges, prompt, setDraftPrompt]);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1076,16 +1119,30 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   const buildVersionPayload = useCallback(() => {
     const source = selectedVersion ?? agent?.currentVersion;
+    const voiceIdForVersion = source?.voiceId ?? selectedVoiceId;
+    const llmProviderForVersion = source?.llmProviderId ?? selectedLlmProvider;
+    const modelForVersion = source?.model ?? selectedModelId;
+    const sttProviderForVersion = source?.sttProviderId ?? selectedSttProvider;
+    const sttModelForVersion = source?.sttModel ?? selectedSttModel;
+    const ttsCredentialModeForVersion = source
+      ? credentialModeOrDefault(source.ttsCredentialMode)
+      : ttsCredentialMode;
+    const llmCredentialModeForVersion = source
+      ? credentialModeOrDefault(source.llmCredentialMode)
+      : llmCredentialMode;
+    const sttCredentialModeForVersion = source
+      ? credentialModeOrDefault(source.sttCredentialMode)
+      : sttCredentialMode;
     const body: Record<string, unknown> = {
       systemPrompt: prompt,
-      voiceId: selectedVoiceId,
-      llmProviderId: selectedLlmProvider,
-      model: selectedModelId,
-      sttProviderId: selectedSttProvider,
-      sttModel: selectedSttModel,
-      ttsCredentialMode,
-      llmCredentialMode,
-      sttCredentialMode,
+      voiceId: voiceIdForVersion,
+      llmProviderId: llmProviderForVersion,
+      model: modelForVersion,
+      sttProviderId: sttProviderForVersion,
+      sttModel: sttModelForVersion,
+      ttsCredentialMode: ttsCredentialModeForVersion,
+      llmCredentialMode: llmCredentialModeForVersion,
+      sttCredentialMode: sttCredentialModeForVersion,
       temperature: source?.temperature ?? 0.7,
       maxTokens: source?.maxTokens ?? 1024,
       endCallPhrases: source?.endCallPhrases ?? [],
@@ -1116,7 +1173,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     if (!activeOrgId || !agent || !selectedVersion) {
       return;
     }
-    if (!selectedVoiceId.trim()) {
+    const versionPayload = buildVersionPayload();
+    const versionVoiceId =
+      typeof versionPayload.voiceId === 'string' ? versionPayload.voiceId : '';
+    if (!versionVoiceId.trim()) {
       setToast('Select a voice.');
       return;
     }
@@ -1146,7 +1206,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildVersionPayload()),
+          body: JSON.stringify(versionPayload),
         },
       );
       if (!res.ok) {
@@ -1343,7 +1403,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     if (!activeOrgId || !agent) {
       return;
     }
-    if (!selectedVoiceId.trim()) {
+    const versionPayload = buildVersionPayload();
+    const versionVoiceId =
+      typeof versionPayload.voiceId === 'string' ? versionPayload.voiceId : '';
+    if (!versionVoiceId.trim()) {
       setToast('Select a voice.');
       return;
     }
@@ -1380,7 +1443,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       const res = await apiCall(`/api/v1/agents/${agentId}/versions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildVersionPayload()),
+        body: JSON.stringify(versionPayload),
       });
       if (!res.ok) {
         const txt = await res.text();
@@ -2522,6 +2585,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 </span>
               ) : null}
             </div>
+            <p className="hidden max-w-md text-[11px] leading-relaxed text-muted-foreground xl:block">
+              Write a prompt from scratch or start with a blueprint. Save the version, then publish it to make the prompt live.
+            </p>
 
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1 bg-muted/40 p-0.5 rounded-lg border border-border/20">
@@ -2591,9 +2657,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
               {promptHydrated ? (
                 <AgentSystemPromptEditor
                   value={prompt}
-                  onChange={setPrompt}
+                  onChange={handlePromptChange}
                   disabled={saveBusy !== null}
-                  helperLabel={hasUnsavedChanges ? 'Draft changes saved locally' : undefined}
+                  helperLabel={
+                    hasUnsavedChanges
+                      ? `Draft saved locally. Use Update or Save V${nextVersionNumber} to store it.`
+                      : 'Write instructions directly, or choose a blueprint and edit it.'
+                  }
                   viewMode={promptViewMode}
                   oldValue={selectedVersion?.systemPrompt ?? ''}
                 />
@@ -2603,30 +2673,38 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             </div>
 
             {blueprintDrawerOpen && (
-              <div className="w-[260px] h-[calc(100vh-130px)] min-h-[500px] shrink-0 flex flex-col rounded-xl border border-border/30 bg-background shadow-sm overflow-hidden animate-in slide-in-from-right duration-250">
-                <div className="p-3.5 border-b border-border/20 bg-muted/[0.02] shrink-0">
+              <div className="w-[320px] h-[calc(100vh-130px)] min-h-[500px] shrink-0 flex flex-col rounded-xl border border-border/30 bg-background shadow-sm overflow-hidden animate-in slide-in-from-right duration-250">
+                <div className="p-4 border-b border-border/20 bg-muted/[0.02] shrink-0">
                   <h3 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                     <Sparkles className="size-3.5 text-amber-500" />
                     Prompt Blueprints
                   </h3>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">Click to insert pre-built prompt templates</p>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground mt-1">
+                    Pick a starting point, then edit the prompt before saving the version.
+                  </p>
                 </div>
-                <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+                <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
                   {BLUEPRINTS.map((bp) => (
-                    <div
+                    <button
+                      type="button"
                       key={bp.id}
-                      className="p-2.5 rounded-lg border border-transparent hover:bg-muted/50 transition-colors cursor-pointer group"
+                      className="w-full p-3 rounded-lg border border-border/30 bg-background text-left hover:bg-muted/40 transition-colors group"
                       onClick={() => {
                         setSelectedBlueprint(bp);
                       }}
                     >
-                      <h4 className="text-[11px] font-semibold text-foreground group-hover:text-primary transition-colors">
-                        {bp.name}
-                      </h4>
-                      <p className="text-[9px] text-muted-foreground line-clamp-3 mt-0.5 leading-relaxed">
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors">
+                          {bp.name}
+                        </h4>
+                        <span className="shrink-0 text-[10px] font-medium text-primary opacity-80">
+                          Preview
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground line-clamp-3 mt-1.5 leading-relaxed">
                         {bp.description}
                       </p>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -2874,6 +2952,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   type="button"
                   variant="outline"
                   size="sm"
+                  data-onboarding-target={
+                    !canCreateNewVersion && canUpdateCurrentVersion
+                      ? 'save-version'
+                      : undefined
+                  }
                   className="flex-1 h-8 text-[11px] px-2.5 rounded-lg transition-all"
                   disabled={!canUpdateCurrentVersion}
                   onMouseEnter={() => {
@@ -2895,6 +2978,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                   type="button"
                   variant="secondary"
                   size="sm"
+                  data-onboarding-target={
+                    canCreateNewVersion ? 'save-version' : undefined
+                  }
                   className="flex-1 h-8 text-[11px] px-2.5 rounded-lg transition-all"
                   disabled={!canCreateNewVersion}
                   onMouseEnter={() => {
@@ -3201,7 +3287,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 Blueprint: {selectedBlueprint.name}
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground mt-1.5">
-                {selectedBlueprint.description}
+                {selectedBlueprint.description} Applying it replaces the editor text; you can still edit before saving.
               </DialogDescription>
             </DialogHeader>
 
@@ -3232,13 +3318,13 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 size="sm"
                 className="h-10 w-full rounded-xl px-5 text-sm font-medium shadow-none sm:w-auto sm:min-w-[140px] bg-foreground text-background hover:bg-foreground/90"
                 onClick={() => {
-                  setPrompt(selectedBlueprint.template);
+                  handlePromptChange(selectedBlueprint.template);
                   setPromptViewMode('edit');
                   setSelectedBlueprint(null);
-                  setToast(`Applied ${selectedBlueprint.name} blueprint.`);
+                  setToast(`Applied ${selectedBlueprint.name}. Save the prompt version when ready.`);
                 }}
               >
-                Use This Prompt
+                Apply Blueprint
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -4432,6 +4518,10 @@ function versionPayloadFromVersion(version: AgentVersion): Record<string, unknow
     firstMessage: version.firstMessage ?? undefined,
     endCallPhrases: version.endCallPhrases,
   };
+}
+
+function normalizePromptForCompare(value: string): string {
+  return value.replace(/\r\n/g, '\n');
 }
 
 function credentialModeOrDefault(

@@ -22,6 +22,7 @@ export type OnboardingStepId =
   | 'agent'
   | 'agentBlueprints'
   | 'agentPrompt'
+  | 'saveVersion'
   | 'apiKeysMode'
   | 'apiKeys'
   | 'publishVersion'
@@ -37,6 +38,7 @@ interface OnboardingStepState {
   organizationCreated: boolean;
   agentCreated: boolean;
   blueprintsViewed: boolean;
+  promptDrafted: boolean;
   promptConfigured: boolean;
   apiKeysModeViewed: boolean;
   apiKeysConfigured: boolean;
@@ -86,6 +88,7 @@ const DEFAULT_STATE: StoredOnboardingState = {
     organizationCreated: false,
     agentCreated: false,
     blueprintsViewed: false,
+    promptDrafted: false,
     promptConfigured: false,
     apiKeysModeViewed: false,
     apiKeysConfigured: false,
@@ -96,6 +99,7 @@ const DEFAULT_STATE: StoredOnboardingState = {
 
 const ONBOARDING_EVENT_AGENT_CREATED = 'awaaz:onboarding:agent-created';
 const ONBOARDING_EVENT_BLUEPRINTS_VIEWED = 'awaaz:onboarding:blueprints-viewed';
+const ONBOARDING_EVENT_PROMPT_DRAFTED = 'awaaz:onboarding:prompt-drafted';
 const ONBOARDING_EVENT_PROMPT_CONFIGURED = 'awaaz:onboarding:prompt-configured';
 const ONBOARDING_EVENT_API_KEYS_MODE_VIEWED = 'awaaz:onboarding:api-keys-mode-clicked';
 const ONBOARDING_EVENT_API_KEYS_CONFIGURED = 'awaaz:onboarding:api-keys-configured';
@@ -149,18 +153,21 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
         completed: normalizedState.steps.agentCreated,
       },
       {
-        id: 'agentBlueprints',
-        title: 'Start with a Blueprint',
-        description: 'Explore pre-built prompt templates to kickstart your agent.',
-        target: 'agent-blueprints',
-        completed: normalizedState.steps.blueprintsViewed,
+        id: 'agentPrompt',
+        title: 'Write a prompt or choose a blueprint',
+        description:
+          'Type the agent instructions, or open Blueprints and apply one as a starting point.',
+        target: 'agent-prompt',
+        completed:
+          normalizedState.steps.promptDrafted ||
+          normalizedState.steps.promptConfigured,
       },
       {
-        id: 'agentPrompt',
-        title: 'Write a system prompt',
+        id: 'saveVersion',
+        title: 'Save the prompt version',
         description:
-          'Define the agent\'s behavior and knowledge. Save it to continue.',
-        target: 'agent-prompt',
+          'Use Update or Save V to store the prompt. Publishing live comes next.',
+        target: 'save-version',
         completed: normalizedState.steps.promptConfigured,
       },
       {
@@ -191,7 +198,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     [
       normalizedState.status,
       normalizedState.steps.agentCreated,
-      normalizedState.steps.blueprintsViewed,
+      normalizedState.steps.promptDrafted,
       normalizedState.steps.promptConfigured,
       normalizedState.steps.apiKeysConfigured,
       normalizedState.steps.versionPublished,
@@ -296,6 +303,21 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     });
   }, [patchState]);
 
+  const markPromptDrafted = useCallback(() => {
+    patchState((current) => {
+      if (current.steps.promptDrafted) {
+        return current;
+      }
+      return {
+        ...current,
+        steps: {
+          ...current.steps,
+          promptDrafted: true,
+        },
+      };
+    });
+  }, [patchState]);
+
   const markPromptConfigured = useCallback(() => {
     patchState((current) => {
       if (current.steps.promptConfigured) {
@@ -379,7 +401,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       ? findVisibleOnboardingTarget(currentStep.target)
       : null;
     if (target instanceof HTMLElement) {
-      if (['testCall', 'agentPrompt', 'apiKeys', 'publishVersion', 'agentBlueprints'].includes(currentStep.id)) {
+      if (['testCall', 'agentPrompt', 'saveVersion', 'apiKeys', 'publishVersion', 'agentBlueprints'].includes(currentStep.id)) {
         target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       if (!target.hasAttribute('disabled')) {
@@ -388,7 +410,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       }
       return;
     }
-    if (['testCall', 'agentPrompt', 'apiKeys', 'publishVersion', 'agentBlueprints'].includes(currentStep.id)) {
+    if (['testCall', 'agentPrompt', 'saveVersion', 'apiKeys', 'publishVersion', 'agentBlueprints'].includes(currentStep.id)) {
       if (pathname.startsWith('/agents/') && pathname !== '/agents/new') {
         // Already on an agent page, target just might be hidden or scrolling.
       } else if (firstAgentId) {
@@ -416,6 +438,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onAgentCreated = () => markAgentCreated();
     const onBlueprintsViewed = () => markBlueprintsViewed();
+    const onPromptDrafted = () => markPromptDrafted();
     const onPromptConfigured = () => markPromptConfigured();
     const onApiKeysModeViewed = () => markApiKeysModeViewed();
     const onApiKeysConfigured = () => markApiKeysConfigured();
@@ -432,6 +455,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     
     window.addEventListener(ONBOARDING_EVENT_AGENT_CREATED, onAgentCreated);
     window.addEventListener(ONBOARDING_EVENT_BLUEPRINTS_VIEWED, onBlueprintsViewed);
+    window.addEventListener(ONBOARDING_EVENT_PROMPT_DRAFTED, onPromptDrafted);
     window.addEventListener(ONBOARDING_EVENT_PROMPT_CONFIGURED, onPromptConfigured);
     window.addEventListener(ONBOARDING_EVENT_API_KEYS_MODE_VIEWED, onApiKeysModeViewed);
     window.addEventListener(ONBOARDING_EVENT_API_KEYS_CONFIGURED, onApiKeysConfigured);
@@ -445,6 +469,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener(ONBOARDING_EVENT_AGENT_CREATED, onAgentCreated);
       window.removeEventListener(ONBOARDING_EVENT_BLUEPRINTS_VIEWED, onBlueprintsViewed);
+      window.removeEventListener(ONBOARDING_EVENT_PROMPT_DRAFTED, onPromptDrafted);
       window.removeEventListener(ONBOARDING_EVENT_PROMPT_CONFIGURED, onPromptConfigured);
       window.removeEventListener(ONBOARDING_EVENT_API_KEYS_MODE_VIEWED, onApiKeysModeViewed);
       window.removeEventListener(ONBOARDING_EVENT_API_KEYS_CONFIGURED, onApiKeysConfigured);
@@ -455,7 +480,7 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
       );
       window.removeEventListener(ONBOARDING_EVENT_AGENTS_LOADED, onAgentsLoaded);
     };
-  }, [markAgentCreated, markBlueprintsViewed, markPromptConfigured, markApiKeysModeViewed, markApiKeysConfigured, markVersionPublished, markTestCallCompleted]);
+  }, [markAgentCreated, markBlueprintsViewed, markPromptDrafted, markPromptConfigured, markApiKeysModeViewed, markApiKeysConfigured, markVersionPublished, markTestCallCompleted]);
 
   useEffect(() => {
     if (normalizedState.status !== 'active') {
@@ -464,7 +489,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const allComplete =
       organizationCreated &&
       normalizedState.steps.agentCreated &&
-      normalizedState.steps.blueprintsViewed &&
       normalizedState.steps.promptConfigured &&
       normalizedState.steps.apiKeysConfigured &&
       normalizedState.steps.versionPublished &&
@@ -484,7 +508,6 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
   }, [
     normalizedState.status,
     normalizedState.steps.agentCreated,
-    normalizedState.steps.blueprintsViewed,
     normalizedState.steps.promptConfigured,
     normalizedState.steps.apiKeysConfigured,
     normalizedState.steps.versionPublished,
@@ -574,6 +597,7 @@ function normalizeState(
       organizationCreated: Boolean(value.steps?.organizationCreated),
       agentCreated: Boolean(value.steps?.agentCreated),
       blueprintsViewed: Boolean(value.steps?.blueprintsViewed),
+      promptDrafted: Boolean(value.steps?.promptDrafted),
       promptConfigured: Boolean(value.steps?.promptConfigured),
       apiKeysModeViewed: Boolean(value.steps?.apiKeysModeViewed),
       apiKeysConfigured: Boolean(value.steps?.apiKeysConfigured),
