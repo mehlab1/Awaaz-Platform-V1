@@ -856,6 +856,7 @@ class AwaazAgent:
             lifecycle = CallLifecycle(ctx, call_id)
             transcript_publisher = LiveTranscriptPublisher(ctx.room, call_id)
             timing.set_lifecycle(lifecycle)
+            timing.set_transcript_publisher(transcript_publisher)
             assistant = create_assistant(config, tts_engine, AwaazTools(lifecycle), timing)
             lifecycle.set_assistant(assistant)
             setup_stage = "register_lifecycle"
@@ -1308,6 +1309,7 @@ class ResponseTiming:
     tts_generated_audio_ms: int = 0
     tts_provider_first_audio_ms: int | None = None
     tts_cancelled_chunk_count: int = 0
+    llm_transcript_published: bool = False
 
     def response_reference_at(self) -> float | None:
         return self.user_stopped_at or self.final_transcript_at or self.user_started_at
@@ -1331,6 +1333,7 @@ class PipelineTiming:
         self.audio_queue_flushed_after_ms: int | None = None
         self._lifecycle: CallLifecycle | None = None
         self._event_sink: SpeechEventSink | None = None
+        self._transcript_publisher: LiveTranscriptPublisher | None = None
         self.llm_provider_id = "unknown"
         self.llm_model_id = "unknown"
         self.stt_provider_id = "unknown"
@@ -1344,6 +1347,9 @@ class PipelineTiming:
 
     def set_event_sink(self, event_sink: SpeechEventSink) -> None:
         self._event_sink = event_sink
+
+    def set_transcript_publisher(self, publisher: LiveTranscriptPublisher) -> None:
+        self._transcript_publisher = publisher
 
     def set_llm_runtime(self, provider_id: str, model_id: str) -> None:
         self.llm_provider_id = provider_id
@@ -1604,7 +1610,11 @@ class PipelineTiming:
         if event == "tts_audio_chunk_cancelled":
             response.tts_cancelled_chunk_count += 1
 
-    def mark_llm_finished(self, response: ResponseTiming) -> None:
+    def mark_llm_finished(
+        self,
+        response: ResponseTiming,
+        generated_text: str | None = None,
+    ) -> None:
         if response.llm_finished_at is not None:
             return
         response.llm_finished_at = time.monotonic()
@@ -1617,6 +1627,36 @@ class PipelineTiming:
             response.response_id,
             elapsed_ms(response.llm_started_at, response.llm_finished_at),
             elapsed_ms(response.user_stopped_at, response.llm_finished_at),
+        )
+        self.publish_llm_transcript_ready(response, generated_text)
+
+    def publish_llm_transcript_ready(
+        self,
+        response: ResponseTiming,
+        generated_text: str | None,
+    ) -> None:
+        publisher = self._transcript_publisher
+        text = (generated_text or "").strip()
+        if publisher is None or response.llm_transcript_published or not text:
+            return
+        response.llm_transcript_published = True
+        estimated_tokens = estimate_token_count(text)
+        metrics = self.agent_response_metrics(estimated_tokens)
+        logger.info(
+            "voice_agent_llm_transcript_ready turn=%s response=%s chars=%s",
+            response.turn_id,
+            response.response_id,
+            len(text),
+        )
+        publisher.emit_entry(
+            entry_id=f"agent:{response.response_id}",
+            speaker="agent",
+            status="final",
+            text=text,
+            turn_id=response.turn_id,
+            response_id=response.response_id,
+            source="llm_response_complete",
+            metrics=metrics,
         )
 
     def mark_tts_text_started(self, response: ResponseTiming, text: str) -> None:
@@ -2185,28 +2225,32 @@ class TimedLLMStream(LLMStream):
         self._response = response
         self._saw_first_token = False
         self._finished = False
+        self._content_parts: list[str] = []
 
     @property
     def function_calls(self):
         return self._inner.function_calls
 
-    def _mark_finished_once(self) -> None:
+    def _mark_finished_once(self, *, publish_text: bool = False) -> None:
         if not self._finished:
             self._finished = True
-            self._timing.mark_llm_finished(self._response)
+            self._timing.mark_llm_finished(
+                self._response,
+                "".join(self._content_parts) if publish_text else None,
+            )
 
     async def aclose(self) -> None:
         try:
             await self._inner.aclose()
             await super().aclose()
         finally:
-            self._mark_finished_once()
+            self._mark_finished_once(publish_text=False)
 
     async def __anext__(self):
         try:
             chunk = await self._inner.__anext__()
         except StopAsyncIteration:
-            self._mark_finished_once()
+            self._mark_finished_once(publish_text=True)
             raise
         except Exception:
             logger.error(
@@ -2227,13 +2271,15 @@ class TimedLLMStream(LLMStream):
                     "responseId": self._response.response_id,
                 },
             )
-            self._mark_finished_once()
+            self._mark_finished_once(publish_text=False)
             raise
 
         content = chunk.choices[0].delta.content if chunk.choices else None
         if content and not self._saw_first_token:
             self._saw_first_token = True
             self._timing.mark_first_llm_token(self._response)
+        if content:
+            self._content_parts.append(content)
         usage = extract_llm_token_usage(chunk)
         if usage:
             self._timing.record_llm_token_usage(

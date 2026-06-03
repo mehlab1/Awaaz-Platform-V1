@@ -1177,6 +1177,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
           ? `Updated live V${updated.versionNumber}.`
           : `Updated V${updated.versionNumber}.`,
       );
+      window.dispatchEvent(new CustomEvent('awaaz:onboarding:prompt-configured'));
       await loadData(showAllVersions && allVersionsLoaded);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -1409,6 +1410,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         voiceId: created.voiceId,
       });
       setToast(`Created V${created.versionNumber}. Publish it when ready.`);
+      window.dispatchEvent(new CustomEvent('awaaz:onboarding:prompt-configured'));
       await loadData(showAllVersions && allVersionsLoaded);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);

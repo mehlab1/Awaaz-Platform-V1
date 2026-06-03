@@ -16,7 +16,6 @@ import {
   RoomAudioRenderer,
   StartAudio,
   useConnectionState,
-  useDisconnectButton,
   useLocalParticipant,
   useRemoteParticipants,
   useRoomContext,
@@ -72,10 +71,11 @@ const browserAudioCaptureOptions: AudioCaptureOptions = {
   autoGainControl: true,
   voiceIsolation: true,
 };
-const CLIENT_BARGE_IN_DUCK_VOLUME = 0.15;
-const CLIENT_BARGE_IN_DUCK_START_VOLUME = 0.05;
-const CLIENT_BARGE_IN_DUCK_END_VOLUME = 0.025;
-const CLIENT_BARGE_IN_DUCK_RELEASE_MS = 250;
+const CLIENT_BARGE_IN_DUCK_VOLUME = 0.65;
+const CLIENT_BARGE_IN_DUCK_START_VOLUME = 0.09;
+const CLIENT_BARGE_IN_DUCK_END_VOLUME = 0.045;
+const CLIENT_BARGE_IN_DUCK_HOLD_MS = 180;
+const CLIENT_BARGE_IN_DUCK_RELEASE_MS = 450;
 const CLIENT_BARGE_IN_AGENT_VOLUME_FLOOR = 0.012;
 const NO_AGENT_TIMEOUT_MS = 20_000;
 const CONTROL_TOPIC = 'awaaz.call.control';
@@ -995,7 +995,7 @@ function SessionDebugDrawer({
         <DebugRow label="UI phase" value={phaseLabel(badgePhase)} />
         <DebugRow label="Session phase" value={sessionPhase ?? 'Preparing'} />
         <DebugRow label="Duration" value={durationLabel} />
-        <DebugRow label="Connected at" value={formatDebugTime(connectedAtMs)} />
+        <DebugRow label="Ready at" value={formatDebugTime(connectedAtMs)} />
         <DebugRow label="Ended at" value={formatDebugTime(endedAtMs)} />
         <DebugRow label="Call ID" value={session?.callId} />
         <DebugRow label="Room name" value={session?.roomName} />
@@ -1474,6 +1474,7 @@ function deriveVoiceMode(
     isMicrophoneEnabled: boolean;
     isMicrophonePublished: boolean;
     isRoomConnected: boolean;
+    hasCompletedReadiness: boolean;
   },
 ): VoiceUiMode {
   if (!input.isRoomConnected) {
@@ -1481,6 +1482,9 @@ function deriveVoiceMode(
   }
   if (input.agentState === 'failed') {
     return 'failed';
+  }
+  if (!input.hasCompletedReadiness) {
+    return 'connecting';
   }
   if (input.agentState === 'speaking' || input.agentVolume > 0.012) {
     return 'speaking';
@@ -1644,33 +1648,19 @@ function EndCallToolbar({
   isEnding: boolean;
   onEndSession: () => Promise<void>;
 }) {
-  const { buttonProps } = useDisconnectButton({ stopTracks: true });
-  const safeButtonProps = { ...buttonProps } as typeof buttonProps & {
-    stopTracks?: unknown;
-  };
-  delete safeButtonProps.stopTracks;
-  const { disabled, onClick, ...rest } = safeButtonProps;
-
   const handleClick = async (event: MouseEvent<HTMLButtonElement>): Promise<void> => {
+    event.preventDefault();
     logTestCallDebug('call_end_requested', { source: 'frontend' });
-    try {
-      await onEndSession();
-    } catch (error: unknown) {
-      logTestCallDebug('call_end_frontend_fallback_disconnect', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-      onClick?.(event);
-    }
+    await onEndSession();
   };
 
   return (
     <Button
       type="button"
       variant="destructive"
-      {...rest}
-      disabled={!!disabled || isEnding}
+      disabled={isEnding}
       onClick={(event) => void handleClick(event)}
-      className={cn(rest.className, 'h-9 gap-2 rounded-full px-4 text-sm', className)}
+      className={cn('h-9 gap-2 rounded-full px-4 text-sm', className)}
     >
       {isEnding ? (
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -1699,6 +1689,7 @@ interface RoomChromeProps {
   onTranscriptEvent: (event: LiveTranscriptEvent) => void;
   onDataChannelEvent: (event: LiveDataChannelEvent) => void;
   onRemoteEndRequested: () => void;
+  onClientDisconnected: () => void;
   onEndSession: () => Promise<void>;
 }
 
@@ -1717,6 +1708,7 @@ function BrowserTestRoomChrome({
   onTranscriptEvent,
   onDataChannelEvent,
   onRemoteEndRequested,
+  onClientDisconnected,
   onEndSession,
 }: RoomChromeProps) {
   const room = useRoomContext();
@@ -1737,11 +1729,13 @@ function BrowserTestRoomChrome({
   const [muteBusy, setMuteBusy] = useState(false);
   const [agentAudioDucked, setAgentAudioDucked] = useState(false);
   const [agentWaitTimedOut, setAgentWaitTimedOut] = useState(false);
+  const [hasCompletedReadiness, setHasCompletedReadiness] = useState(false);
   const autoMicAttemptRef = useRef(0);
   const readinessLoggedRef = useRef(false);
   const userMutedRef = useRef(false);
   const bargeInDuckedRef = useRef(false);
   const localNoiseFloorRef = useRef(0.006);
+  const localSpeechStartedAtRef = useRef<number | null>(null);
   const lastLocalSpeechAtRef = useRef(0);
 
   const localMicPublication = localParticipant.getTrackPublication(
@@ -1788,12 +1782,14 @@ function BrowserTestRoomChrome({
     agentState,
     agentVolume,
     hasAgentParticipant: Boolean(detectedAgent),
+    hasCompletedReadiness,
     isMicrophoneEnabled,
     isMicrophonePublished,
     isRoomConnected,
   });
   const mode = agentWaitTimedOut ? 'failed' : derivedMode;
-  const isAudioActive = mode === 'listening' || mode === 'speaking';
+  const isAudioActive =
+    hasCompletedReadiness && (mode === 'listening' || mode === 'speaking');
   const agentDisplayName =
     detectedAgent?.name || detectedAgent?.identity || 'Local agent';
   const agentAudioRenderVolume = agentAudioDucked
@@ -1811,6 +1807,11 @@ function BrowserTestRoomChrome({
       microphoneErrorMessage,
     );
   const activeAgentAudioTrackReady = Boolean(activeAgentAudioTrack);
+  const sessionFullyReady =
+    isRoomConnected &&
+    microphoneReady &&
+    Boolean(detectedAgent) &&
+    activeAgentAudioTrackReady;
   const connectionSteps = useMemo<ConnectionStep[]>(
     () => [
       {
@@ -1901,8 +1902,37 @@ function BrowserTestRoomChrome({
     [agentVolume, localVolume],
   );
 
+  const endSessionAndDisconnect = useCallback(async (): Promise<void> => {
+    let apiError: unknown = null;
+    try {
+      await onEndSession();
+    } catch (error: unknown) {
+      apiError = error;
+      logTestCallDebug('call_end_api_request_failed_before_local_disconnect', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    try {
+      await room.disconnect(true);
+      logTestCallDebug('call_end_local_disconnect_completed');
+    } catch (error: unknown) {
+      logTestCallDebug('call_end_local_disconnect_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      onClientDisconnected();
+    }
+
+    if (apiError) {
+      logTestCallDebug('call_end_completed_with_api_error', {
+        message: apiError instanceof Error ? apiError.message : String(apiError),
+      });
+    }
+  }, [onClientDisconnected, onEndSession, room]);
+
   useEffect(() => {
-    if (!isRoomConnected || detectedAgent) {
+    if (isEnding || !isRoomConnected || detectedAgent) {
       setAgentWaitTimedOut(false);
       return undefined;
     }
@@ -1917,11 +1947,13 @@ function BrowserTestRoomChrome({
     }, NO_AGENT_TIMEOUT_MS);
 
     return () => window.clearTimeout(timer);
-  }, [connectionState, detectedAgent, isRoomConnected, room.state]);
+  }, [connectionState, detectedAgent, isEnding, isRoomConnected, room.state]);
 
   useEffect(() => {
     const now = performance.now();
     const agentAudible =
+      !isEnding &&
+      hasCompletedReadiness &&
       isRoomConnected &&
       (agentState === 'speaking' ||
         mode === 'speaking' ||
@@ -1935,6 +1967,7 @@ function BrowserTestRoomChrome({
 
     if (!canDuck) {
       localNoiseFloorRef.current = floor * 0.92 + localVolume * 0.08;
+      localSpeechStartedAtRef.current = null;
       lastLocalSpeechAtRef.current = 0;
       setBargeInDucked(
         false,
@@ -1955,10 +1988,18 @@ function BrowserTestRoomChrome({
     const threshold = bargeInDuckedRef.current ? endThreshold : startThreshold;
 
     if (localVolume >= threshold) {
+      localSpeechStartedAtRef.current ??= now;
       lastLocalSpeechAtRef.current = now;
-      setBargeInDucked(true, 'local_speech_detected', threshold);
+      if (
+        bargeInDuckedRef.current ||
+        now - localSpeechStartedAtRef.current >= CLIENT_BARGE_IN_DUCK_HOLD_MS
+      ) {
+        setBargeInDucked(true, 'local_speech_detected', threshold);
+      }
       return;
     }
+
+    localSpeechStartedAtRef.current = null;
 
     if (!bargeInDuckedRef.current) {
       localNoiseFloorRef.current = floor * 0.95 + localVolume * 0.05;
@@ -1972,6 +2013,8 @@ function BrowserTestRoomChrome({
   }, [
     agentState,
     agentVolume,
+    hasCompletedReadiness,
+    isEnding,
     isMicrophoneEnabled,
     isMicrophonePublished,
     isRoomConnected,
@@ -1982,6 +2025,9 @@ function BrowserTestRoomChrome({
   ]);
 
   const toggleMute = useCallback(async () => {
+    if (isEnding || !isRoomConnected) {
+      return;
+    }
     const nextEnabled = !isMicrophoneEnabled;
     userMutedRef.current = !nextEnabled;
     logTestCallDebug('mic_toggle_requested', {
@@ -2003,7 +2049,7 @@ function BrowserTestRoomChrome({
     } finally {
       setMuteBusy(false);
     }
-  }, [isMicrophoneEnabled, localParticipant]);
+  }, [isEnding, isMicrophoneEnabled, isRoomConnected, localParticipant]);
 
   useEffect(() => {
     const localMicPublication = localParticipant.getTrackPublication(
@@ -2185,7 +2231,9 @@ function BrowserTestRoomChrome({
               receivedAt,
               phase,
             });
-            onLifecycleState(phase, notice);
+            if (phase !== 'LIVE' || hasCompletedReadiness) {
+              onLifecycleState(phase, notice);
+            }
           }
         }
       }),
@@ -2254,6 +2302,7 @@ function BrowserTestRoomChrome({
     return () => cleanups.forEach((cleanup) => cleanup());
   }, [
     localParticipant,
+    hasCompletedReadiness,
     onDataChannelEvent,
     onLifecycleState,
     onRemoteEndRequested,
@@ -2263,13 +2312,19 @@ function BrowserTestRoomChrome({
   ]);
 
   useEffect(() => {
-    if (isRoomConnected && isMicrophonePublished) {
+    if (isEnding) {
+      return;
+    }
+
+    if (sessionFullyReady) {
+      setHasCompletedReadiness(true);
       if (!readinessLoggedRef.current) {
         logTestCallDebug('session_ready_detected', {
           connectionState,
           roomState: room.state,
           microphone: describePublication(localMicPublication),
           agent: detectedAgent ? describeParticipant(detectedAgent) : null,
+          agentAudioReady: activeAgentAudioTrackReady,
         });
         readinessLoggedRef.current = true;
       }
@@ -2277,15 +2332,19 @@ function BrowserTestRoomChrome({
       return;
     }
 
-    readinessLoggedRef.current = false;
+    if (!hasCompletedReadiness) {
+      readinessLoggedRef.current = false;
+    }
   }, [
+    activeAgentAudioTrackReady,
     connectionState,
     detectedAgent,
-    isMicrophonePublished,
-    isRoomConnected,
+    hasCompletedReadiness,
+    isEnding,
     localMicPublication,
     onSessionActive,
     room.state,
+    sessionFullyReady,
   ]);
 
   useEffect(() => {
@@ -2294,6 +2353,7 @@ function BrowserTestRoomChrome({
       return undefined;
     }
     if (
+      isEnding ||
       connectionState !== ConnectionState.Connected ||
       userMutedRef.current ||
       autoMicAttemptRef.current >= 4 ||
@@ -2335,6 +2395,7 @@ function BrowserTestRoomChrome({
     };
   }, [
     connectionState,
+    isEnding,
     isMicrophoneEnabled,
     lastMicrophoneError,
     localParticipant,
@@ -2410,7 +2471,7 @@ function BrowserTestRoomChrome({
                 <VoiceOrb
                   mode={mode}
                   isMuted={!isMicrophoneEnabled}
-                  isBusy={muteBusy}
+                  isBusy={muteBusy || isEnding || !isRoomConnected}
                   localVolume={localVolume}
                   agentVolume={agentVolume}
                   onToggleMute={toggleMute}
@@ -2505,7 +2566,7 @@ function BrowserTestRoomChrome({
               variant="outline"
               className="h-9 gap-2 rounded-full px-4 text-sm"
               onClick={toggleMute}
-              disabled={muteBusy}
+              disabled={muteBusy || isEnding || !isRoomConnected}
             >
               {muteBusy ? (
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -2519,7 +2580,7 @@ function BrowserTestRoomChrome({
             {showEndButton ? (
               <EndCallToolbar
                 isEnding={isEnding}
-                onEndSession={onEndSession}
+                onEndSession={endSessionAndDisconnect}
               />
             ) : null}
             {showEndButton ? (
@@ -2574,11 +2635,17 @@ export function TestCallModal(props: TestCallModalProps) {
       if (phase === 'IDLE') {
         return phase;
       }
+      if (mode === 'connecting' || mode === 'failed') {
+        return phase ?? 'CONNECTING';
+      }
       if (mode === 'speaking') {
         return 'SPEAKING';
       }
       if (mode === 'listening') {
         return 'LISTENING';
+      }
+      if (mode === 'muted') {
+        return phase ?? 'CONNECTING';
       }
       return phase === null || phase === 'CONNECTING' ? 'LIVE' : phase;
     });
@@ -2586,6 +2653,9 @@ export function TestCallModal(props: TestCallModalProps) {
 
   const markLifecycleState = useCallback(
     (phase: BrowserSessionPhase, message?: string) => {
+      if (phase === 'ENDING' || phase === 'DISCONNECTED') {
+        setSessionEndedAtMs((current) => current ?? Date.now());
+      }
       setLifecycleNotice(() => {
         if (phase === 'IDLE') {
           return message ?? 'Waiting for response...';
@@ -2612,10 +2682,17 @@ export function TestCallModal(props: TestCallModalProps) {
   );
 
   const markRemoteEndRequested = useCallback(() => {
+    setSessionEndedAtMs((current) => current ?? Date.now());
     setLifecycleNotice('Ending session...');
     setSessionPhase((phase) =>
       phase === 'DISCONNECTED' ? phase : 'ENDING',
     );
+  }, []);
+
+  const markClientDisconnected = useCallback(() => {
+    setLifecycleNotice(null);
+    setSessionEndedAtMs((current) => current ?? Date.now());
+    setSessionPhase('DISCONNECTED');
   }, []);
 
   useEffect(() => {
@@ -2693,14 +2770,20 @@ export function TestCallModal(props: TestCallModalProps) {
   }, [open, agentId, apiCall, reloadKey]);
 
   useEffect(() => {
-    if (!open || !session || sessionPhase === 'DISCONNECTED' || sessionPhase === null) {
+    if (
+      !open ||
+      !session ||
+      sessionPhase === 'DISCONNECTED' ||
+      sessionPhase === null ||
+      sessionEndedAtMs !== null
+    ) {
       setClockNowMs(Date.now());
       return undefined;
     }
 
     const timer = window.setInterval(() => setClockNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [open, session, sessionPhase]);
+  }, [open, session, sessionEndedAtMs, sessionPhase]);
 
   useEffect(() => {
     if (
@@ -2717,6 +2800,7 @@ export function TestCallModal(props: TestCallModalProps) {
     if (!session) {
       return;
     }
+    setSessionEndedAtMs((current) => current ?? Date.now());
     setSessionPhase((phase) =>
       phase === 'DISCONNECTED' ? phase : 'ENDING',
     );
@@ -2809,11 +2893,11 @@ export function TestCallModal(props: TestCallModalProps) {
       status: fetchFailed ? 'issue' : session ? 'complete' : 'current',
     },
     {
-      label: 'Room',
+      label: 'Ready',
       description: sessionConnectedAtMs
-        ? 'Browser joined the LiveKit room.'
+        ? 'Room, mic, agent, and audio are ready.'
         : session
-          ? 'Opening the LiveKit room.'
+          ? 'Waiting for room, mic, agent, and agent audio.'
           : 'Waiting for session details.',
       status: sessionConnectedAtMs ? 'complete' : session ? 'current' : 'waiting',
     },
@@ -2968,13 +3052,16 @@ export function TestCallModal(props: TestCallModalProps) {
             audio={browserAudioCaptureOptions}
             video={false}
             options={{ adaptiveStream: true, dynacast: true }}
-            onConnected={markRtcActive}
+            onConnected={() => {
+              logTestCallDebug('livekit_room_connected_waiting_for_readiness');
+            }}
             onDisconnected={(reason?: DisconnectReason) => {
               logTestCallDebug('livekit_room_disconnected', { reason });
               logTestCallDebug('call_end_frontend_synced', {
                 source: 'room_disconnected',
                 reason,
               });
+              setSessionEndedAtMs((current) => current ?? Date.now());
               setSessionPhase('DISCONNECTED');
             }}
             onError={(error) => {
@@ -2986,7 +3073,7 @@ export function TestCallModal(props: TestCallModalProps) {
             className="flex min-h-0 flex-1 flex-col overflow-hidden"
           >
             <BrowserTestRoomChrome
-              showEndButton={sessionPhase !== 'CONNECTING'}
+              showEndButton
               isEnding={sessionPhase === 'ENDING'}
               elapsedLabel={durationLabel}
               lifecycleNotice={lifecycleNotice}
@@ -3000,6 +3087,7 @@ export function TestCallModal(props: TestCallModalProps) {
               onTranscriptEvent={recordTranscriptEvent}
               onDataChannelEvent={recordDataChannelEvent}
               onRemoteEndRequested={markRemoteEndRequested}
+              onClientDisconnected={markClientDisconnected}
               onEndSession={requestEndSession}
             />
           </LiveKitRoom>
