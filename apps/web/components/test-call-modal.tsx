@@ -1829,8 +1829,6 @@ function BrowserTestRoomChrome({
   const mode = agentWaitTimedOut ? 'failed' : derivedMode;
   const isAudioActive =
     hasCompletedReadiness && (mode === 'listening' || mode === 'speaking');
-  const agentDisplayName =
-    detectedAgent?.name || detectedAgent?.identity || 'Local agent';
   const agentAudioRenderVolume = agentAudioDucked
     ? CLIENT_BARGE_IN_DUCK_VOLUME
     : 1;

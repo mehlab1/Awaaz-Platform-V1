@@ -423,7 +423,11 @@ export function OnboardingProvider({ children }: { children: ReactNode }) {
     const onTestCompleted = () => markTestCallCompleted();
     const onAgentsLoaded = (e: Event) => {
       const customEvent = e as CustomEvent<{ firstAgentId: string | null }>;
-      setFirstAgentId(customEvent.detail.firstAgentId);
+      const loadedFirstAgentId = customEvent.detail?.firstAgentId ?? null;
+      setFirstAgentId(loadedFirstAgentId);
+      if (loadedFirstAgentId) {
+        markAgentCreated();
+      }
     };
     
     window.addEventListener(ONBOARDING_EVENT_AGENT_CREATED, onAgentCreated);
