@@ -15,6 +15,7 @@ import {
 import { useOrgContext } from '@/components/org-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   type CatalogProvider,
   type CredentialMode,
@@ -188,38 +189,48 @@ export function AiProvidersClient() {
           {catalog.error.message}
         </p>
       ) : (
-        (Object.keys(providersByKind) as ProviderKind[]).map((kind) => (
-          <section key={kind} className="space-y-3">
-            <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-foreground">
+        <Tabs defaultValue="llm" className="w-full">
+          <TabsList className="mb-6 grid w-full grid-cols-3 lg:w-[400px]">
+            {(Object.keys(providersByKind) as ProviderKind[]).map((kind) => (
+              <TabsTrigger key={kind} value={kind}>
                 {KIND_LABELS[kind]}
-              </h2>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                {KIND_DESCRIPTIONS[kind]}
-              </p>
-            </div>
-            <div className="grid gap-3 xl:grid-cols-2">
-              {providersByKind[kind].map((provider) => (
-                <ProviderCredentialCard
-                  key={provider.id}
-                  provider={provider}
-                  draft={draftFor(drafts, provider.id)}
-                  voices={voices}
-                  canManage={canManage}
-                  onDraftChange={(draft) =>
-                    setDrafts((current) => ({
-                      ...current,
-                      [provider.id]: draft,
-                    }))
-                  }
-                  onSave={() => saveProvider(provider)}
-                  onValidate={() => validateProvider(provider)}
-                  onDelete={() => removeProvider(provider)}
-                />
-              ))}
-            </div>
-          </section>
-        ))
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          
+          {(Object.keys(providersByKind) as ProviderKind[]).map((kind) => (
+            <TabsContent key={kind} value={kind} className="space-y-4 outline-none">
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-foreground">
+                  {KIND_LABELS[kind]} Providers
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {KIND_DESCRIPTIONS[kind]}
+                </p>
+              </div>
+              <div className="grid gap-3 xl:grid-cols-2">
+                {providersByKind[kind].map((provider) => (
+                  <ProviderCredentialCard
+                    key={provider.id}
+                    provider={provider}
+                    draft={draftFor(drafts, provider.id)}
+                    voices={voices}
+                    canManage={canManage}
+                    onDraftChange={(draft) =>
+                      setDrafts((current) => ({
+                        ...current,
+                        [provider.id]: draft,
+                      }))
+                    }
+                    onSave={() => saveProvider(provider)}
+                    onValidate={() => validateProvider(provider)}
+                    onDelete={() => removeProvider(provider)}
+                  />
+                ))}
+              </div>
+            </TabsContent>
+          ))}
+        </Tabs>
       )}
     </div>
   );
