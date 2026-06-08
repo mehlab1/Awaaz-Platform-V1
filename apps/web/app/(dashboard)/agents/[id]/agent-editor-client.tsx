@@ -1308,6 +1308,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
         agentKeyDraft: agentKeyDrafts.stt,
       }),
     );
+    if (typeof payload.fallbackTtsProviderId === 'string' && payload.fallbackTtsProviderId) {
+      issues.push(
+        ...keySourceIssuesForProvider({
+          label: 'Fallback TTS',
+          providerId: payload.fallbackTtsProviderId,
+          keySource: keySourceValue(payload.fallbackTtsKeySource),
+          hasAgentKey: Boolean(version?.fallbackTtsHasAgentKey),
+          agentKeyDraft: agentKeyDrafts.fallbackTts,
+        }),
+      );
+    }
     return issues;
   };
 
@@ -1318,7 +1329,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     hasAgentKey,
     agentKeyDraft,
   }: {
-    label: 'TTS' | 'LLM' | 'STT';
+    label: 'TTS' | 'LLM' | 'STT' | 'Fallback TTS';
     providerId: string;
     keySource: ProviderKeySource;
     hasAgentKey: boolean;
@@ -1331,6 +1342,12 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       return status === 'configured_valid'
         ? []
         : [`${label} saved workspace key for ${provider?.label ?? providerId} is missing or invalid.`];
+    }
+    if (keySource === 'finova_managed') {
+      const provider = catalogProviders?.find((item) => item.id === providerId);
+      if (provider && !provider.finovaManagedAvailable) {
+        return [`${label} Finova Managed is not configured for ${provider.label}; choose another key source.`];
+      }
     }
     if (keySource === 'agent_own' && !hasAgentKey && !agentKeyDraft?.trim()) {
       return [`${label} agent-owned key is required before saving.`];
