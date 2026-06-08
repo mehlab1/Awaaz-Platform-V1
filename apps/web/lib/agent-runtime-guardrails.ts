@@ -11,19 +11,33 @@ export const RUNTIME_TTS_PROVIDER_IDS = [
 
 export type RuntimeTtsProviderId = (typeof RUNTIME_TTS_PROVIDER_IDS)[number];
 
-export const GROQ_RUNTIME_MODEL_IDS = [
-  'llama-3.3-70b-versatile',
-  'openai/gpt-oss-120b',
-  'openai/gpt-oss-20b',
+export const RUNTIME_LLM_PROVIDER_IDS = [
+  'groq',
+  'openai',
+  'anthropic',
 ] as const;
+
+export type RuntimeLlmProviderId = (typeof RUNTIME_LLM_PROVIDER_IDS)[number];
+
+export const RUNTIME_LLM_MODELS_BY_PROVIDER = {
+  groq: [
+    'llama-3.3-70b-versatile',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
+  ],
+  openai: ['gpt-4o'],
+  anthropic: ['claude-sonnet-4-0'],
+} as const satisfies Record<RuntimeLlmProviderId, readonly string[]>;
+
+export const GROQ_RUNTIME_MODEL_IDS = RUNTIME_LLM_MODELS_BY_PROVIDER.groq;
 
 export type GroqRuntimeModelId = (typeof GROQ_RUNTIME_MODEL_IDS)[number];
 
 export const CATALOG_ONLY_VOICE_MESSAGE =
   'Catalog only: this provider is not enabled for live calls or Test Agent yet.';
 
-export const GROQ_RUNTIME_ISSUE_MESSAGE =
-  'Live runtime supports verified Groq chat models only.';
+export const LLM_RUNTIME_ISSUE_MESSAGE =
+  'Live runtime supports Groq, OpenAI GPT-4o, and Anthropic Claude Sonnet model selections only.';
 
 export const VOICE_PREVIEW_UNAVAILABLE_MESSAGE =
   'Preview is not available for this provider yet.';
@@ -41,7 +55,10 @@ export interface VoiceRef {
 
 export interface RuntimeConfigAssessment {
   voiceProviderId: string;
+  llmProviderId: string;
   isRuntimeTtsVoice: boolean;
+  isRuntimeLlmProvider: boolean;
+  isRuntimeLlmModel: boolean;
   isRimeVoice: boolean;
   isGroqModel: boolean;
   canPublishLive: boolean;
@@ -62,6 +79,13 @@ export function isRuntimeTtsProvider(
 ): providerId is RuntimeTtsProviderId {
   const normalized = normalizeProviderId(providerId);
   return (RUNTIME_TTS_PROVIDER_IDS as readonly string[]).includes(normalized);
+}
+
+export function isRuntimeLlmProvider(
+  providerId: string | null | undefined,
+): providerId is RuntimeLlmProviderId {
+  const normalized = normalizeProviderId(providerId);
+  return (RUNTIME_LLM_PROVIDER_IDS as readonly string[]).includes(normalized);
 }
 
 export function voiceProviderIdFromStoredId(
@@ -101,6 +125,19 @@ export function isGroqRuntimeModel(model: string): boolean {
   return (GROQ_RUNTIME_MODEL_IDS as readonly string[]).includes(normalized);
 }
 
+export function isRuntimeLlmModel(
+  providerId: string | null | undefined,
+  model: string | null | undefined,
+): boolean {
+  const normalizedProvider = normalizeProviderId(providerId);
+  if (!isRuntimeLlmProvider(normalizedProvider)) {
+    return false;
+  }
+  const normalizedModel = model?.trim() ?? '';
+  return (RUNTIME_LLM_MODELS_BY_PROVIDER[normalizedProvider] as readonly string[])
+    .includes(normalizedModel);
+}
+
 export function canPreviewVoice(voice: VoiceRef): boolean {
   const providerId = voiceProviderIdFromStoredId(voice.rimeVoiceId, [voice]);
   if (providerId === RUNTIME_TTS_PROVIDER || providerId === 'inworld' || providerId === 'cartesia') {
@@ -129,13 +166,17 @@ export function voiceRuntimeStatusLabels(
 
 export function assessRuntimeConfig(params: {
   voiceId: string;
+  llmProviderId?: string | null;
   model: string;
   voices: readonly VoiceRef[];
 }): RuntimeConfigAssessment {
   const voiceProviderId = voiceProviderIdFromStoredId(params.voiceId, params.voices);
+  const llmProviderId = normalizeProviderId(params.llmProviderId) || RUNTIME_LLM_PROVIDER;
   const isRuntimeTtsVoice = isRuntimeTtsProvider(voiceProviderId);
+  const isRuntimeLlmProviderSelection = isRuntimeLlmProvider(llmProviderId);
+  const isRuntimeLlmModelSelection = isRuntimeLlmModel(llmProviderId, params.model);
   const isRimeVoice = voiceProviderId === RUNTIME_TTS_PROVIDER;
-  const isGroqModel = isGroqRuntimeModel(params.model);
+  const isGroqModel = llmProviderId === RUNTIME_LLM_PROVIDER && isGroqRuntimeModel(params.model);
 
   const blockingIssues: string[] = [];
   const warnings: string[] = [];
@@ -143,10 +184,13 @@ export function assessRuntimeConfig(params: {
   if (!isRuntimeTtsVoice) {
     blockingIssues.push(CATALOG_ONLY_VOICE_MESSAGE);
   }
-  if (!isGroqModel) {
-    blockingIssues.push(GROQ_RUNTIME_ISSUE_MESSAGE);
+  if (!isRuntimeLlmProviderSelection || !isRuntimeLlmModelSelection) {
+    blockingIssues.push(LLM_RUNTIME_ISSUE_MESSAGE);
   }
-  const canRunLive = isRuntimeTtsVoice && isGroqModel;
+  const canRunLive =
+    isRuntimeTtsVoice &&
+    isRuntimeLlmProviderSelection &&
+    isRuntimeLlmModelSelection;
   const selectedVoice = params.voices.find(
     (voice) => voice.rimeVoiceId === params.voiceId.trim(),
   );
@@ -158,7 +202,10 @@ export function assessRuntimeConfig(params: {
 
   return {
     voiceProviderId,
+    llmProviderId,
     isRuntimeTtsVoice,
+    isRuntimeLlmProvider: isRuntimeLlmProviderSelection,
+    isRuntimeLlmModel: isRuntimeLlmModelSelection,
     isRimeVoice,
     isGroqModel,
     canPublishLive: canRunLive,

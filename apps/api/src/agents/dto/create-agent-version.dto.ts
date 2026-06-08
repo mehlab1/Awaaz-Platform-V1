@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,6 +14,12 @@ import {
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ProviderCredentialMode } from '@prisma/client';
+
+const PROVIDER_KEY_SOURCES = [
+  'finova_managed',
+  'org_default',
+  'agent_own',
+] as const;
 
 export class CreateAgentVersionDto {
   @ApiProperty({
@@ -47,6 +54,22 @@ export class CreateAgentVersionDto {
   @IsEnum(ProviderCredentialMode)
   llmCredentialMode?: ProviderCredentialMode;
 
+  @ApiPropertyOptional({ enum: PROVIDER_KEY_SOURCES })
+  @IsOptional()
+  @IsIn(PROVIDER_KEY_SOURCES)
+  llmKeySource?: string;
+
+  @ApiPropertyOptional({
+    example: 'sk_provider_secret',
+    maxLength: 10000,
+    description: 'Write-only agent-owned LLM key when llmKeySource is agent_own.',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(10_000)
+  llmAgentKey?: string;
+
   @ApiPropertyOptional({ example: 'deepgram', maxLength: 100 })
   @IsOptional()
   @IsString()
@@ -66,10 +89,42 @@ export class CreateAgentVersionDto {
   @IsEnum(ProviderCredentialMode)
   sttCredentialMode?: ProviderCredentialMode;
 
+  @ApiPropertyOptional({ enum: PROVIDER_KEY_SOURCES })
+  @IsOptional()
+  @IsIn(PROVIDER_KEY_SOURCES)
+  sttKeySource?: string;
+
+  @ApiPropertyOptional({
+    example: 'sk_provider_secret',
+    maxLength: 10000,
+    description: 'Write-only agent-owned STT key when sttKeySource is agent_own.',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(10_000)
+  sttAgentKey?: string;
+
   @ApiPropertyOptional({ enum: ProviderCredentialMode })
   @IsOptional()
   @IsEnum(ProviderCredentialMode)
   ttsCredentialMode?: ProviderCredentialMode;
+
+  @ApiPropertyOptional({ enum: PROVIDER_KEY_SOURCES })
+  @IsOptional()
+  @IsIn(PROVIDER_KEY_SOURCES)
+  ttsKeySource?: string;
+
+  @ApiPropertyOptional({
+    example: 'sk_provider_secret',
+    maxLength: 10000,
+    description: 'Write-only agent-owned TTS key when ttsKeySource is agent_own.',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(10_000)
+  ttsAgentKey?: string;
 
   @ApiPropertyOptional({ example: 0.7, minimum: 0, maximum: 2 })
   @IsOptional()

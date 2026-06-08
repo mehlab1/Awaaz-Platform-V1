@@ -4,15 +4,25 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from livekit.agents import llm
-from livekit.plugins import openai
+from livekit.plugins import anthropic, openai
 
 
 logger = logging.getLogger(__name__)
 
 RUNTIME_LLM_PROVIDER_GROQ = "groq"
-RUNTIME_LLM_PROVIDERS = frozenset({RUNTIME_LLM_PROVIDER_GROQ})
+RUNTIME_LLM_PROVIDER_OPENAI = "openai"
+RUNTIME_LLM_PROVIDER_ANTHROPIC = "anthropic"
+RUNTIME_LLM_PROVIDERS = frozenset(
+    {
+        RUNTIME_LLM_PROVIDER_GROQ,
+        RUNTIME_LLM_PROVIDER_OPENAI,
+        RUNTIME_LLM_PROVIDER_ANTHROPIC,
+    },
+)
 DEFAULT_LLM_PROVIDER = RUNTIME_LLM_PROVIDER_GROQ
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_OPENAI_MODEL = "gpt-4o"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-0"
 GROQ_RUNTIME_MODELS = frozenset(
     {
         "llama-3.3-70b-versatile",
@@ -20,6 +30,13 @@ GROQ_RUNTIME_MODELS = frozenset(
         "openai/gpt-oss-20b",
     },
 )
+OPENAI_RUNTIME_MODELS = frozenset({DEFAULT_OPENAI_MODEL})
+ANTHROPIC_RUNTIME_MODELS = frozenset({DEFAULT_ANTHROPIC_MODEL})
+SUPPORTED_LLM_MODELS_BY_PROVIDER = {
+    RUNTIME_LLM_PROVIDER_GROQ: GROQ_RUNTIME_MODELS,
+    RUNTIME_LLM_PROVIDER_OPENAI: OPENAI_RUNTIME_MODELS,
+    RUNTIME_LLM_PROVIDER_ANTHROPIC: ANTHROPIC_RUNTIME_MODELS,
+}
 
 
 @dataclass(frozen=True)
@@ -42,13 +59,48 @@ def build_llm(
         raise ValueError(
             f"LLM provider {resolved.provider_id} is not enabled in worker runtime."
         )
-    if resolved.model_id not in GROQ_RUNTIME_MODELS:
-        raise ValueError(f"Unsupported Groq LLM model: {resolved.model_id}")
+    supported_models = SUPPORTED_LLM_MODELS_BY_PROVIDER[resolved.provider_id]
+    if resolved.model_id not in supported_models:
+        raise ValueError(
+            f"Unsupported {resolved.provider_id} LLM model: {resolved.model_id}"
+        )
 
-    api_key = resolved.api_key or _first_env("FINOVA_GROQ_API_KEY", "GROQ_API_KEY")
+    if resolved.provider_id == RUNTIME_LLM_PROVIDER_OPENAI:
+        api_key = resolved.api_key or _first_env(
+            "FINOVA_OPENAI_API_KEY",
+            "OPENAI_API_KEY",
+        )
+        if not api_key:
+            raise ValueError(
+                "FINOVA_OPENAI_API_KEY or OPENAI_API_KEY is required for OpenAI LLM"
+            )
+        return openai.LLM(
+            model=resolved.model_id,
+            api_key=api_key,
+        )
+
+    if resolved.provider_id == RUNTIME_LLM_PROVIDER_ANTHROPIC:
+        api_key = resolved.api_key or _first_env(
+            "FINOVA_ANTHROPIC_API_KEY",
+            "ANTHROPIC_API_KEY",
+        )
+        if not api_key:
+            raise ValueError(
+                "FINOVA_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY is required for Anthropic LLM"
+            )
+        return anthropic.LLM(
+            model=resolved.model_id,
+            api_key=api_key,
+        )
+
+    api_key = resolved.api_key or _first_env(
+        "FINOVA_GROQ_API_KEY",
+        "GROQ_API_KEY",
+    )
     if not api_key:
-        raise ValueError("FINOVA_GROQ_API_KEY or GROQ_API_KEY is required for Groq LLM")
-
+        raise ValueError(
+            "FINOVA_GROQ_API_KEY or GROQ_API_KEY is required for Groq LLM"
+        )
     return openai.LLM.with_groq(
         model=resolved.model_id,
         api_key=api_key,
@@ -70,7 +122,11 @@ def parse_llm_runtime_selection(config: Mapping[str, object]) -> LlmRuntimeSelec
     model_id = (
         _string_value(pipeline_llm, "model")
         or _string_value(metadata, "llmModel")
-        or _legacy_string(config, "model", DEFAULT_GROQ_MODEL)
+        or _legacy_string(
+            config,
+            "model",
+            _default_model_for_provider(provider_id),
+        )
     )
     api_key = _string_value(credentials_llm, "apiKey")
     key_fingerprint = _string_value(credentials_llm, "keyFingerprint") or _string_value(
@@ -140,6 +196,14 @@ def _legacy_string(
 
 def _normalize_provider_id(provider_id: str) -> str:
     return provider_id.strip().lower() or DEFAULT_LLM_PROVIDER
+
+
+def _default_model_for_provider(provider_id: str) -> str:
+    if provider_id == RUNTIME_LLM_PROVIDER_OPENAI:
+        return DEFAULT_OPENAI_MODEL
+    if provider_id == RUNTIME_LLM_PROVIDER_ANTHROPIC:
+        return DEFAULT_ANTHROPIC_MODEL
+    return DEFAULT_GROQ_MODEL
 
 
 def _first_env(*names: str) -> str | None:

@@ -212,12 +212,18 @@ model AgentVersion {
   ttsModel      String?
   ttsVoiceId    String?
   ttsCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
+  ttsKeySource  String   @default("finova_managed") @map("tts_key_source")
+  ttsKeyEncrypted String? @db.Text @map("tts_key_encrypted")
   llmProviderId String   @default("groq")
   llmModel      String?
   llmCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
+  llmKeySource  String   @default("finova_managed") @map("llm_key_source")
+  llmKeyEncrypted String? @db.Text @map("llm_key_encrypted")
   sttProviderId String   @default("deepgram")
   sttModel      String   @default("nova-2-conversationalai")
   sttCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
+  sttKeySource  String   @default("finova_managed") @map("stt_key_source")
+  sttKeyEncrypted String? @db.Text @map("stt_key_encrypted")
   temperature   Float    @default(0.7)
   maxTokens     Int      @default(1024)
   firstMessage  String?

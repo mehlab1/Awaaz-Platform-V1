@@ -10,6 +10,7 @@ import { AuditAction, Prisma, CallStatus, EventType, ProviderCredentialMode } fr
 
 import { AuditService } from '../audit/audit.service';
 import { LiveKitBrowserTestService } from '../livekit/livekit-browser-test.service';
+import { PluginsService } from '../plugins/plugins.service';
 import { providerById } from '../plugins/provider-catalog';
 import { PrismaService } from '../prisma/prisma.service';
 import { VoicesService, type ResolvedTtsVoice } from '../voices/voices.service';
@@ -21,11 +22,28 @@ const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
 const DEFAULT_LLM_PROVIDER_ID = 'groq';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
-const RUNTIME_LLM_PROVIDER_IDS = new Set([DEFAULT_LLM_PROVIDER_ID]);
+const DEFAULT_KEY_SOURCE = 'finova_managed';
+const ORG_DEFAULT_KEY_SOURCE = 'org_default';
+const AGENT_OWN_KEY_SOURCE = 'agent_own';
+const KEY_SOURCES = new Set([
+  DEFAULT_KEY_SOURCE,
+  ORG_DEFAULT_KEY_SOURCE,
+  AGENT_OWN_KEY_SOURCE,
+]);
+const RUNTIME_LLM_PROVIDER_IDS = new Set([
+  DEFAULT_LLM_PROVIDER_ID,
+  'openai',
+  'anthropic',
+]);
 const RUNTIME_STT_PROVIDER_IDS = new Set([
   DEFAULT_STT_PROVIDER_ID,
   'assemblyai',
   'groq-whisper',
+]);
+const DEFAULT_LLM_MODEL_BY_PROVIDER = new Map<string, string>([
+  [DEFAULT_LLM_PROVIDER_ID, DEFAULT_LLM_MODEL],
+  ['openai', 'gpt-4o'],
+  ['anthropic', 'claude-sonnet-4-0'],
 ]);
 const DEFAULT_STT_MODEL_BY_PROVIDER = new Map<string, string>([
   [DEFAULT_STT_PROVIDER_ID, DEFAULT_STT_MODEL],
@@ -40,6 +58,7 @@ export class AgentsService {
     private readonly audit: AuditService,
     private readonly liveKitBrowserTest: LiveKitBrowserTestService,
     private readonly voices: VoicesService,
+    private readonly plugins: PluginsService,
   ) {}
 
   async list(organizationId: string) {
@@ -143,7 +162,7 @@ export class AgentsService {
     if (!agent) {
       throw new NotFoundException('Agent not found');
     }
-    return agent;
+    return this.sanitizeAgent(agent);
   }
 
   async update(
@@ -203,11 +222,12 @@ export class AgentsService {
     options: { limit?: number } = {},
   ) {
     await this.ensureAgent(organizationId, agentId);
-    return this.prisma.agentVersion.findMany({
+    const versions = await this.prisma.agentVersion.findMany({
       where: { agentId },
       orderBy: { versionNumber: 'desc' },
       take: options.limit,
     });
+    return versions.map((version) => this.sanitizeVersion(version));
   }
 
   async createVersion(
@@ -219,6 +239,12 @@ export class AgentsService {
     const resolvedVoice = await this.voices.resolveVoiceForAgentVersion(
       dto.voiceId,
       organizationId,
+    );
+    const pipelineData = await this.v1CompatiblePipelineData(
+      dto,
+      resolvedVoice,
+      organizationId,
+      null,
     );
     return this.prisma.$transaction(
       async (tx) => {
@@ -233,7 +259,7 @@ export class AgentsService {
             agentId,
             versionNumber: (last?.versionNumber ?? 0) + 1,
             systemPrompt: dto.systemPrompt,
-            ...this.v1CompatiblePipelineData(dto, resolvedVoice),
+            ...pipelineData,
             temperature: dto.temperature,
             maxTokens: dto.maxTokens,
             firstMessage: dto.firstMessage,
@@ -255,12 +281,15 @@ export class AgentsService {
               ttsProviderId: version.ttsProviderId,
               ttsVoiceId: version.ttsVoiceId,
               ttsCredentialMode: version.ttsCredentialMode,
+              ttsKeySource: version.ttsKeySource,
               llmProviderId: version.llmProviderId,
               llmModel: version.llmModel,
               llmCredentialMode: version.llmCredentialMode,
+              llmKeySource: version.llmKeySource,
               sttProviderId: version.sttProviderId,
               sttModel: version.sttModel,
               sttCredentialMode: version.sttCredentialMode,
+              sttKeySource: version.sttKeySource,
               voiceModelId: resolvedVoice.modelId,
               voiceLang: resolvedVoice.lang,
               voiceProviderId: resolvedVoice.providerId,
@@ -274,7 +303,7 @@ export class AgentsService {
           },
           tx,
         );
-        return version;
+        return this.sanitizeVersion(version);
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -295,17 +324,30 @@ export class AgentsService {
       await this.ensureAgentInTransaction(tx, organizationId, agentId);
       const existing = await tx.agentVersion.findFirst({
         where: { id: versionId, agentId },
-        select: { id: true, versionNumber: true, isLive: true },
+        select: {
+          id: true,
+          versionNumber: true,
+          isLive: true,
+          ttsKeyEncrypted: true,
+          llmKeyEncrypted: true,
+          sttKeyEncrypted: true,
+        },
       });
       if (!existing) {
         throw new NotFoundException('Agent version not found');
       }
 
+      const pipelineData = await this.v1CompatiblePipelineData(
+        dto,
+        resolvedVoice,
+        organizationId,
+        existing,
+      );
       const version = await tx.agentVersion.update({
         where: { id: versionId },
         data: {
           systemPrompt: dto.systemPrompt,
-          ...this.v1CompatiblePipelineData(dto, resolvedVoice),
+          ...pipelineData,
           temperature: dto.temperature,
           maxTokens: dto.maxTokens,
           firstMessage: dto.firstMessage,
@@ -329,12 +371,15 @@ export class AgentsService {
             ttsProviderId: version.ttsProviderId,
             ttsVoiceId: version.ttsVoiceId,
             ttsCredentialMode: version.ttsCredentialMode,
+            ttsKeySource: version.ttsKeySource,
             llmProviderId: version.llmProviderId,
             llmModel: version.llmModel,
             llmCredentialMode: version.llmCredentialMode,
+            llmKeySource: version.llmKeySource,
             sttProviderId: version.sttProviderId,
             sttModel: version.sttModel,
             sttCredentialMode: version.sttCredentialMode,
+            sttKeySource: version.sttKeySource,
             voiceModelId: resolvedVoice.modelId,
             voiceLang: resolvedVoice.lang,
             model: version.model,
@@ -348,7 +393,7 @@ export class AgentsService {
         tx,
       );
 
-      return version;
+      return this.sanitizeVersion(version);
     });
   }
 
@@ -394,7 +439,7 @@ export class AgentsService {
         },
         tx,
       );
-      return published;
+      return this.sanitizeVersion(published);
     });
   }
 
@@ -418,8 +463,8 @@ export class AgentsService {
           orderBy: { versionNumber: 'desc' },
           select: { versionNumber: true },
         });
-        return tx.agentVersion.create({
-          data: {
+      const restored = await tx.agentVersion.create({
+        data: {
             agentId,
             versionNumber: (last?.versionNumber ?? 0) + 1,
             systemPrompt: source.systemPrompt,
@@ -429,12 +474,18 @@ export class AgentsService {
             ttsModel: source.ttsModel,
             ttsVoiceId: source.ttsVoiceId ?? source.voiceId,
             ttsCredentialMode: source.ttsCredentialMode,
+            ttsKeySource: source.ttsKeySource,
+            ttsKeyEncrypted: source.ttsKeyEncrypted,
             llmProviderId: source.llmProviderId,
             llmModel: source.llmModel ?? source.model,
             llmCredentialMode: source.llmCredentialMode,
+            llmKeySource: source.llmKeySource,
+            llmKeyEncrypted: source.llmKeyEncrypted,
             sttProviderId: source.sttProviderId,
             sttModel: source.sttModel,
             sttCredentialMode: source.sttCredentialMode,
+            sttKeySource: source.sttKeySource,
+            sttKeyEncrypted: source.sttKeyEncrypted,
             temperature: source.temperature,
             maxTokens: source.maxTokens,
             firstMessage: source.firstMessage,
@@ -443,6 +494,7 @@ export class AgentsService {
             publishedAt: null,
           },
         });
+        return this.sanitizeVersion(restored);
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -863,16 +915,27 @@ export class AgentsService {
     }
   }
 
-  private v1CompatiblePipelineData(
+  private async v1CompatiblePipelineData(
     dto: CreateAgentVersionDto,
     resolvedVoice: ResolvedTtsVoice,
+    organizationId: string,
+    existing:
+      | {
+          ttsKeyEncrypted: string | null;
+          llmKeyEncrypted: string | null;
+          sttKeyEncrypted: string | null;
+        }
+      | null,
   ) {
     const llmProviderId =
       dto.llmProviderId?.trim().toLowerCase() || DEFAULT_LLM_PROVIDER_ID;
     if (!RUNTIME_LLM_PROVIDER_IDS.has(llmProviderId)) {
       throw new BadRequestException(`Unsupported LLM provider: ${llmProviderId}`);
     }
-    const llmModel = dto.model?.trim() || DEFAULT_LLM_MODEL;
+    const llmModel =
+      (dto.model?.trim() ||
+        DEFAULT_LLM_MODEL_BY_PROVIDER.get(llmProviderId)) ??
+      DEFAULT_LLM_MODEL;
     const llmProvider = providerById(llmProviderId);
     const supportedLlmModelIds = new Set(
       llmProvider?.models?.map((model) => model.id) ?? [],
@@ -900,22 +963,152 @@ export class AgentsService {
         `Unsupported ${sttProvider?.label ?? sttProviderId} STT model: ${sttModel}`,
       );
     }
-    const ttsCredentialMode = dto.ttsCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
-    const llmCredentialMode = dto.llmCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
-    const sttCredentialMode = dto.sttCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
+    const ttsKey = await this.resolveKeySourceForSave({
+      label: 'TTS',
+      organizationId,
+      providerId: resolvedVoice.providerId,
+      requestedKeySource: dto.ttsKeySource,
+      legacyCredentialMode: dto.ttsCredentialMode,
+      agentKey: dto.ttsAgentKey,
+      existingEncryptedKey: existing?.ttsKeyEncrypted ?? null,
+    });
+    const llmKey = await this.resolveKeySourceForSave({
+      label: 'LLM',
+      organizationId,
+      providerId: llmProviderId,
+      requestedKeySource: dto.llmKeySource,
+      legacyCredentialMode: dto.llmCredentialMode,
+      agentKey: dto.llmAgentKey,
+      existingEncryptedKey: existing?.llmKeyEncrypted ?? null,
+    });
+    const sttKey = await this.resolveKeySourceForSave({
+      label: 'STT',
+      organizationId,
+      providerId: sttProviderId,
+      requestedKeySource: dto.sttKeySource,
+      legacyCredentialMode: dto.sttCredentialMode,
+      agentKey: dto.sttAgentKey,
+      existingEncryptedKey: existing?.sttKeyEncrypted ?? null,
+    });
     return {
       voiceId: resolvedVoice.storedVoiceId,
       model: llmModel,
       ttsProviderId: resolvedVoice.providerId,
       ttsModel: resolvedVoice.modelId,
       ttsVoiceId: resolvedVoice.providerVoiceId,
-      ttsCredentialMode,
+      ttsCredentialMode: ttsKey.credentialMode,
+      ttsKeySource: ttsKey.keySource,
+      ttsKeyEncrypted: ttsKey.encryptedKey,
       llmProviderId,
       llmModel,
-      llmCredentialMode,
+      llmCredentialMode: llmKey.credentialMode,
+      llmKeySource: llmKey.keySource,
+      llmKeyEncrypted: llmKey.encryptedKey,
       sttProviderId,
       sttModel,
-      sttCredentialMode,
+      sttCredentialMode: sttKey.credentialMode,
+      sttKeySource: sttKey.keySource,
+      sttKeyEncrypted: sttKey.encryptedKey,
+    };
+  }
+
+  private async resolveKeySourceForSave(input: {
+    label: 'TTS' | 'LLM' | 'STT';
+    organizationId: string;
+    providerId: string;
+    requestedKeySource?: string;
+    legacyCredentialMode?: ProviderCredentialMode;
+    agentKey?: string;
+    existingEncryptedKey: string | null;
+  }): Promise<{
+    keySource: string;
+    encryptedKey: string | null;
+    credentialMode: ProviderCredentialMode;
+  }> {
+    const keySource = this.normalizeKeySource(
+      input.requestedKeySource,
+      input.legacyCredentialMode,
+    );
+
+    if (keySource === DEFAULT_KEY_SOURCE) {
+      return {
+        keySource,
+        encryptedKey: null,
+        credentialMode: ProviderCredentialMode.FINOVA_MANAGED,
+      };
+    }
+
+    if (keySource === ORG_DEFAULT_KEY_SOURCE) {
+      const secret = await this.plugins.resolveOrgDefaultProviderSecret(
+        input.organizationId,
+        input.providerId,
+      );
+      if (!secret.ok) {
+        throw new BadRequestException(
+          `${input.label} saved workspace key for provider "${input.providerId}" is not available: ${secret.error}`,
+        );
+      }
+      return {
+        keySource,
+        encryptedKey: null,
+        credentialMode: ProviderCredentialMode.BYOK,
+      };
+    }
+
+    const trimmedKey = input.agentKey?.trim();
+    const encryptedKey = trimmedKey
+      ? this.plugins.encryptSecretForStorage(trimmedKey)
+      : input.existingEncryptedKey;
+    if (!encryptedKey) {
+      throw new BadRequestException(
+        `${input.label} agent-owned key is required when key source is agent_own`,
+      );
+    }
+    return {
+      keySource,
+      encryptedKey,
+      credentialMode: ProviderCredentialMode.BYOK,
+    };
+  }
+
+  private normalizeKeySource(
+    requestedKeySource?: string,
+    legacyCredentialMode?: ProviderCredentialMode,
+  ): string {
+    const normalized = requestedKeySource?.trim().toLowerCase();
+    if (normalized) {
+      if (!KEY_SOURCES.has(normalized)) {
+        throw new BadRequestException(`Unsupported provider key source: ${normalized}`);
+      }
+      return normalized;
+    }
+    return legacyCredentialMode === ProviderCredentialMode.BYOK
+      ? ORG_DEFAULT_KEY_SOURCE
+      : DEFAULT_KEY_SOURCE;
+  }
+
+  private sanitizeAgent<T extends { currentVersion?: any | null }>(agent: T): T {
+    if (!agent.currentVersion) {
+      return agent;
+    }
+    return {
+      ...agent,
+      currentVersion: this.sanitizeVersion(agent.currentVersion),
+    };
+  }
+
+  private sanitizeVersion<T extends Record<string, any>>(version: T) {
+    const {
+      ttsKeyEncrypted,
+      llmKeyEncrypted,
+      sttKeyEncrypted,
+      ...safeVersion
+    } = version;
+    return {
+      ...safeVersion,
+      ttsHasAgentKey: Boolean(ttsKeyEncrypted),
+      llmHasAgentKey: Boolean(llmKeyEncrypted),
+      sttHasAgentKey: Boolean(sttKeyEncrypted),
     };
   }
 }

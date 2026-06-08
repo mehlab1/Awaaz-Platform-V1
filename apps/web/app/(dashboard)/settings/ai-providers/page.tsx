@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import { AiProvidersClient } from './ai-providers-client';
 
 export default function AiProvidersPage() {
-  redirect('/agents');
+  return <AiProvidersClient />;
 }

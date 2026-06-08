@@ -47,10 +47,17 @@ const catalogProviderSchema = z.object({
   models: z.array(catalogProviderModelSchema).optional(),
   supportsByok: z.boolean(),
   supportsFinovaManaged: z.boolean(),
+  runtimeSupported: z.boolean().optional(),
+  runtimeUnsupportedReason: z.string().nullable().optional(),
   finovaManagedAvailable: z.boolean(),
   organizationCredential: pluginCredentialSchema.nullable(),
   available: z.boolean(),
   availableVia: credentialModeSchema.nullable(),
+  orgCredentialStatus: z.enum([
+    'not_configured',
+    'configured_valid',
+    'configured_invalid',
+  ]).optional(),
 });
 
 const catalogResponseSchema = z.object({

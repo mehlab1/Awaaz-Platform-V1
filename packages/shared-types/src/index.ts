@@ -7,6 +7,7 @@ export const V2_TTS_PROVIDER_IDS = [
 
 export const V2_LLM_PROVIDER_IDS = [
   'groq',
+  'openai',
   'anthropic',
 ] as const;
 
@@ -116,6 +117,30 @@ export const V2_PROVIDER_CATALOG = [
     credentialEnvVar: 'ANTHROPIC_API_KEY',
     supportsByok: true,
     supportsFinovaManaged: true,
+    defaultModel: 'claude-sonnet-4-0',
+    models: [
+      {
+        id: 'claude-sonnet-4-0',
+        label: 'Claude Sonnet 4.0',
+        default: true,
+      },
+    ],
+  },
+  {
+    id: 'openai',
+    kind: 'llm',
+    label: 'OpenAI',
+    credentialEnvVar: 'OPENAI_API_KEY',
+    supportsByok: true,
+    supportsFinovaManaged: true,
+    defaultModel: 'gpt-4o',
+    models: [
+      {
+        id: 'gpt-4o',
+        label: 'GPT-4o',
+        default: true,
+      },
+    ],
   },
   {
     id: 'deepgram',

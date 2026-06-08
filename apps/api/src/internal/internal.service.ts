@@ -32,11 +32,23 @@ const DEFAULT_LLM_PROVIDER_ID = 'groq';
 const DEFAULT_LLM_MODEL = 'llama-3.3-70b-versatile';
 const DEFAULT_STT_PROVIDER_ID = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
-const RUNTIME_LLM_PROVIDER_IDS = new Set([DEFAULT_LLM_PROVIDER_ID]);
+const DEFAULT_KEY_SOURCE = 'finova_managed';
+const ORG_DEFAULT_KEY_SOURCE = 'org_default';
+const AGENT_OWN_KEY_SOURCE = 'agent_own';
+const RUNTIME_LLM_PROVIDER_IDS = new Set([
+  DEFAULT_LLM_PROVIDER_ID,
+  'openai',
+  'anthropic',
+]);
 const RUNTIME_STT_PROVIDER_IDS = new Set([
   DEFAULT_STT_PROVIDER_ID,
   'assemblyai',
   'groq-whisper',
+]);
+const DEFAULT_LLM_MODEL_BY_PROVIDER = new Map<string, string>([
+  [DEFAULT_LLM_PROVIDER_ID, DEFAULT_LLM_MODEL],
+  ['openai', 'gpt-4o'],
+  ['anthropic', 'claude-sonnet-4-0'],
 ]);
 
 type WorkerProviderSecret = {
@@ -76,17 +88,24 @@ export class InternalService {
     );
     const ttsCredentialMode =
       version.ttsCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
-    const ttsSecret = await this.plugins.resolveOrganizationProviderSecret(
-      agent.organizationId,
-      voice.providerId,
+    const ttsKeySource = this.normalizeKeySource(
+      version.ttsKeySource,
       ttsCredentialMode,
     );
-    if (!ttsSecret.ok) {
+    const ttsSecret = await this.workerProviderSecretBySource(
+      agent.organizationId,
+      voice.providerId,
+      ttsKeySource,
+      ttsCredentialMode,
+      version.ttsKeyEncrypted,
+      'TTS',
+      true,
+    );
+    if (!ttsSecret) {
       throw new ServiceUnavailableException(
-        `TTS credential for provider "${voice.providerId}" is not available: ${ttsSecret.error}`,
+        `TTS credential for provider "${voice.providerId}" is not available`,
       );
     }
-    await this.plugins.markProviderCredentialUsed(ttsSecret.credentialId);
 
     const sttProviderId = (
       version.sttProviderId ?? DEFAULT_STT_PROVIDER_ID
@@ -95,34 +114,51 @@ export class InternalService {
     const llmProviderId = (
       version.llmProviderId ?? DEFAULT_LLM_PROVIDER_ID
     ).trim().toLowerCase();
-    const llmModel = (version.llmModel ?? version.model ?? DEFAULT_LLM_MODEL).trim();
+    const llmDefaultModel =
+      DEFAULT_LLM_MODEL_BY_PROVIDER.get(llmProviderId) ?? DEFAULT_LLM_MODEL;
+    const llmModel = (version.llmModel ?? version.model ?? llmDefaultModel).trim();
     this.ensureRuntimeModel('STT', sttProviderId, sttModel);
     this.ensureRuntimeModel('LLM', llmProviderId, llmModel);
     const sttCredentialMode =
       version.sttCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
     const llmCredentialMode =
       version.llmCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
-    const sttSecret = await this.optionalWorkerProviderSecret(
+    const sttKeySource = this.normalizeKeySource(
+      version.sttKeySource,
+      sttCredentialMode,
+    );
+    const llmKeySource = this.normalizeKeySource(
+      version.llmKeySource,
+      llmCredentialMode,
+    );
+    const sttSecret = await this.workerProviderSecretBySource(
       agent.organizationId,
       sttProviderId,
+      sttKeySource,
       sttCredentialMode,
+      version.sttKeyEncrypted,
       'STT',
+      false,
     );
-    const llmSecret = await this.optionalWorkerProviderSecret(
+    const llmSecret = await this.workerProviderSecretBySource(
       agent.organizationId,
       llmProviderId,
+      llmKeySource,
       llmCredentialMode,
+      version.llmKeyEncrypted,
       'LLM',
+      false,
     );
-    const keyFingerprint = this.plugins.keyFingerprint(ttsSecret.key);
+    const keyFingerprint = ttsSecret.keyFingerprint;
 
     this.logger.log(
         `Loaded agent config agent=${agent.id} version=${version.id} v${version.versionNumber} ` +
         `storedVoiceId=${version.voiceId} ttsProvider=${voice.providerId} ` +
         `ttsVoiceId=${voice.providerVoiceId} ttsModel=${voice.modelId} lang=${voice.lang} ` +
-        `credentialMode=${ttsSecret.credentialMode} keyFingerprint=${keyFingerprint} ` +
+        `credentialMode=${ttsSecret.mode} keySource=${ttsKeySource} keyFingerprint=${keyFingerprint} ` +
         `sttProvider=${sttProviderId} sttMode=${sttCredentialMode} ` +
-        `llmProvider=${llmProviderId} llmMode=${llmCredentialMode}`,
+        `sttKeySource=${sttKeySource} llmProvider=${llmProviderId} ` +
+        `llmMode=${llmCredentialMode} llmKeySource=${llmKeySource}`,
     );
 
     return {
@@ -157,8 +193,8 @@ export class InternalService {
       credentials: {
         tts: {
           providerId: voice.providerId,
-          mode: ttsSecret.credentialMode,
-          apiKey: ttsSecret.key,
+          mode: ttsSecret.mode,
+          apiKey: ttsSecret.apiKey,
           keyFingerprint,
         },
         ...(sttSecret ? { stt: sttSecret } : {}),
@@ -168,26 +204,102 @@ export class InternalService {
         ttsProviderId: voice.providerId,
         ttsModel: voice.modelId,
         ttsVoiceId: voice.providerVoiceId,
-        ttsCredentialMode: ttsSecret.credentialMode,
+        ttsCredentialMode: ttsSecret.mode,
+        ttsKeySource,
         ttsKeyFingerprint: keyFingerprint,
         sttProviderId,
         sttModel,
         sttCredentialMode,
+        sttKeySource,
         ...(sttSecret ? { sttKeyFingerprint: sttSecret.keyFingerprint } : {}),
         llmProviderId,
         llmModel,
         llmCredentialMode,
+        llmKeySource,
         ...(llmSecret ? { llmKeyFingerprint: llmSecret.keyFingerprint } : {}),
         agentVersionNumber: version.versionNumber,
       },
     };
   }
 
+  private normalizeKeySource(
+    keySource: string | null | undefined,
+    legacyMode: ProviderCredentialMode,
+  ): string {
+    const normalized = keySource?.trim().toLowerCase();
+    if (normalized === ORG_DEFAULT_KEY_SOURCE || normalized === AGENT_OWN_KEY_SOURCE) {
+      return normalized;
+    }
+    if (normalized === DEFAULT_KEY_SOURCE) {
+      return DEFAULT_KEY_SOURCE;
+    }
+    return legacyMode === ProviderCredentialMode.BYOK
+      ? ORG_DEFAULT_KEY_SOURCE
+      : DEFAULT_KEY_SOURCE;
+  }
+
+  private async workerProviderSecretBySource(
+    organizationId: string,
+    providerId: string,
+    keySource: string,
+    credentialMode: ProviderCredentialMode,
+    encryptedKey: string | null,
+    label: 'STT' | 'LLM' | 'TTS',
+    required: boolean,
+  ): Promise<WorkerProviderSecret | null> {
+    if (keySource === AGENT_OWN_KEY_SOURCE) {
+      if (!encryptedKey) {
+        throw new ServiceUnavailableException(
+          `${label} agent-owned credential for provider "${providerId}" is missing`,
+        );
+      }
+      const apiKey = this.plugins.decryptSecretFromStorage(encryptedKey);
+      return {
+        providerId,
+        mode: ProviderCredentialMode.BYOK,
+        apiKey,
+        keyFingerprint: this.plugins.keyFingerprint(apiKey),
+      };
+    }
+
+    if (keySource === ORG_DEFAULT_KEY_SOURCE) {
+      const secret = await this.plugins.resolveOrgDefaultProviderSecret(
+        organizationId,
+        providerId,
+      );
+      if (!secret.ok) {
+        throw new ServiceUnavailableException(
+          `${label} saved workspace credential for provider "${providerId}" is not available: ${secret.error}`,
+        );
+      }
+      await this.plugins.markProviderCredentialUsed(secret.credentialId);
+      return {
+        providerId,
+        mode: ProviderCredentialMode.BYOK,
+        apiKey: secret.key,
+        keyFingerprint: this.plugins.keyFingerprint(secret.key),
+      };
+    }
+
+    const finovaSecret = await this.optionalWorkerProviderSecret(
+      organizationId,
+      providerId,
+      credentialMode,
+      label,
+    );
+    if (!finovaSecret && required) {
+      throw new ServiceUnavailableException(
+        `${label} Finova-managed credential for provider "${providerId}" is not available`,
+      );
+    }
+    return finovaSecret;
+  }
+
   private async optionalWorkerProviderSecret(
     organizationId: string,
     providerId: string,
     credentialMode: ProviderCredentialMode,
-    label: 'STT' | 'LLM',
+    label: 'STT' | 'LLM' | 'TTS',
   ): Promise<WorkerProviderSecret | null> {
     const secret = await this.plugins.resolveOrganizationProviderSecret(
       organizationId,

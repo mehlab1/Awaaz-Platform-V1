@@ -66,10 +66,16 @@ type ProviderAvailability = {
   models?: ProviderDefinition['models'];
   supportsByok: true;
   supportsFinovaManaged: true;
+  runtimeSupported: boolean;
+  runtimeUnsupportedReason: string | null;
   finovaManagedAvailable: boolean;
   organizationCredential: SanitizedCredential | null;
   available: boolean;
   availableVia: ProviderCredentialMode | null;
+  orgCredentialStatus:
+    | 'not_configured'
+    | 'configured_valid'
+    | 'configured_invalid';
   pricing?: ProviderPricingSummary;
 };
 
@@ -107,6 +113,12 @@ type ResolvedSecret =
 export type ResolvedProviderSecret = ResolvedSecret & {
   providerId: string;
   credentialId: string | null;
+};
+
+type EncryptedSecretPayload = {
+  secretCiphertext: string;
+  secretIv: string;
+  secretAuthTag: string;
 };
 
 type ProviderCredentialMutationData = {
@@ -338,6 +350,50 @@ export class PluginsService {
     };
   }
 
+  async resolveOrgDefaultProviderSecret(
+    organizationId: string,
+    providerId: string,
+  ): Promise<ResolvedProviderSecret> {
+    const provider = this.mustProvider(providerId);
+    const credential =
+      await this.prisma.organizationProviderCredential.findUnique({
+        where: {
+          organizationId_providerId: {
+            organizationId,
+            providerId: provider.id,
+          },
+        },
+      });
+
+    if (!credential?.secretCiphertext) {
+      return {
+        ok: false,
+        providerId: provider.id,
+        credentialId: credential?.id ?? null,
+        credentialMode: ProviderCredentialMode.BYOK,
+        error: 'Saved workspace key is not configured for this provider',
+      };
+    }
+
+    if (credential.status !== ProviderCredentialStatus.VALID) {
+      return {
+        ok: false,
+        providerId: provider.id,
+        credentialId: credential.id,
+        credentialMode: ProviderCredentialMode.BYOK,
+        error: 'Saved workspace key must be validated before use',
+      };
+    }
+
+    return {
+      ok: true,
+      providerId: provider.id,
+      credentialId: credential.id,
+      credentialMode: ProviderCredentialMode.BYOK,
+      key: this.decryptSecret(credential),
+    };
+  }
+
   resolveFinovaManagedProviderSecret(providerId: string): ResolvedProviderSecret {
     const provider = this.mustProvider(providerId);
     const finovaKey = this.finovaManagedKey(provider);
@@ -411,12 +467,26 @@ export class PluginsService {
       models: provider.models,
       supportsByok: true,
       supportsFinovaManaged: true,
+      runtimeSupported: provider.runtimeSupported ?? true,
+      runtimeUnsupportedReason: provider.runtimeUnsupportedReason ?? null,
       finovaManagedAvailable,
       organizationCredential,
       available: availableVia !== null,
       availableVia,
+      orgCredentialStatus: this.orgCredentialStatus(credential),
       ...(pricing ? { pricing } : {}),
     };
+  }
+
+  private orgCredentialStatus(
+    credential: OrganizationProviderCredential | null,
+  ): ProviderAvailability['orgCredentialStatus'] {
+    if (!credential?.secretCiphertext) {
+      return 'not_configured';
+    }
+    return credential.status === ProviderCredentialStatus.VALID
+      ? 'configured_valid'
+      : 'configured_invalid';
   }
 
   private async activePricingByProvider(): Promise<
@@ -643,6 +713,11 @@ export class PluginsService {
           url: 'https://api.groq.com/openai/v1/models',
           headers: { Authorization: `Bearer ${apiKey}` },
         };
+      case 'openai-models':
+        return {
+          url: 'https://api.openai.com/v1/models',
+          headers: { Authorization: `Bearer ${apiKey}` },
+        };
       case 'anthropic-models':
         return {
           url: 'https://api.anthropic.com/v1/models',
@@ -692,7 +767,24 @@ export class PluginsService {
     return null;
   }
 
-  private encryptSecret(secret: string) {
+  encryptSecretForStorage(secret: string): string {
+    return JSON.stringify(this.encryptSecret(secret));
+  }
+
+  decryptSecretFromStorage(encrypted: string | null | undefined): string {
+    if (!encrypted) {
+      throw new BadRequestException('Encrypted provider credential is missing');
+    }
+    let payload: EncryptedSecretPayload;
+    try {
+      payload = JSON.parse(encrypted) as EncryptedSecretPayload;
+    } catch {
+      throw new BadRequestException('Encrypted provider credential is invalid');
+    }
+    return this.decryptSecret(payload);
+  }
+
+  private encryptSecret(secret: string): EncryptedSecretPayload {
     const iv = randomBytes(AES_GCM_IV_BYTES);
     const cipher = createCipheriv('aes-256-gcm', this.encryptionKey(), iv, {
       authTagLength: AES_GCM_AUTH_TAG_BYTES,

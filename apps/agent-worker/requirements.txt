@@ -1,4 +1,6 @@
 livekit-agents==0.8.11
+livekit-plugins-anthropic==0.2.0
+anthropic==0.34.2
 livekit-plugins-deepgram==0.6.5
 livekit-plugins-openai==0.8.3
 livekit-plugins-silero==0.6.4

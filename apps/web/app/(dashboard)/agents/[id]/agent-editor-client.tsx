@@ -19,7 +19,6 @@ import {
   GitCompare,
   History,
   Info,
-  KeyRound,
   Loader2,
   MoreVertical,
   Play,
@@ -56,6 +55,7 @@ import {
   canPreviewVoice,
   CATALOG_ONLY_VOICE_MESSAGE,
   isCatalogOnlyVoiceProvider,
+  isRuntimeLlmModel,
   isRuntimeTtsProvider,
   RUNTIME_TTS_PROVIDER,
   type VoiceRuntimeStatusLabel,
@@ -98,11 +98,15 @@ const DEFAULT_LLM_PROVIDER = 'groq';
 const DEFAULT_STT_PROVIDER = 'deepgram';
 const DEFAULT_STT_MODEL = 'nova-2-conversationalai';
 const DEFAULT_CREDENTIAL_MODE = 'FINOVA_MANAGED' as const;
+const DEFAULT_KEY_SOURCE: ProviderKeySource = 'finova_managed';
 
 type CredentialMode = 'FINOVA_MANAGED' | 'BYOK';
+type ProviderKeySource = 'finova_managed' | 'org_default' | 'agent_own';
 
 const LLM_OPTIONS = [
   { value: DEFAULT_LLM_MODEL, label: 'Groq - Llama 3.3 70B Versatile' },
+  { value: 'gpt-4o', label: 'OpenAI - GPT-4o' },
+  { value: 'claude-sonnet-4-0', label: 'Anthropic - Claude Sonnet 4.0' },
 ] as const;
 
 const TTS_OPTIONS = [
@@ -277,12 +281,18 @@ interface AgentVersion {
   ttsModel?: string | null;
   ttsVoiceId?: string | null;
   ttsCredentialMode?: CredentialMode | null;
+  ttsKeySource?: ProviderKeySource | null;
+  ttsHasAgentKey?: boolean;
   llmProviderId?: string | null;
   llmModel?: string | null;
   llmCredentialMode?: CredentialMode | null;
+  llmKeySource?: ProviderKeySource | null;
+  llmHasAgentKey?: boolean;
   sttProviderId?: string | null;
   sttModel?: string | null;
   sttCredentialMode?: CredentialMode | null;
+  sttKeySource?: ProviderKeySource | null;
+  sttHasAgentKey?: boolean;
   temperature: number;
   maxTokens: number;
   firstMessage: string | null;
@@ -342,10 +352,13 @@ interface CatalogProviderDto {
   }>;
   supportsByok?: boolean;
   supportsFinovaManaged?: boolean;
+  runtimeSupported?: boolean;
+  runtimeUnsupportedReason?: string | null;
   finovaManagedAvailable?: boolean;
   organizationCredential?: ProviderCredentialDto | null;
   available: boolean;
   availableVia?: string | null;
+  orgCredentialStatus?: 'not_configured' | 'configured_valid' | 'configured_invalid';
 }
 
 interface ProviderCredentialDto {
@@ -409,8 +422,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [ttsCredentialMode, setTtsCredentialMode] = useState<CredentialMode>(DEFAULT_CREDENTIAL_MODE);
   const [llmCredentialMode, setLlmCredentialMode] = useState<CredentialMode>(DEFAULT_CREDENTIAL_MODE);
   const [sttCredentialMode, setSttCredentialMode] = useState<CredentialMode>(DEFAULT_CREDENTIAL_MODE);
-  const [providerKeyDrafts, setProviderKeyDrafts] = useState<Record<string, string>>({});
-  const [credentialSaveBusy, setCredentialSaveBusy] = useState<string | null>(null);
+  const [ttsKeySource, setTtsKeySource] = useState<ProviderKeySource>(DEFAULT_KEY_SOURCE);
+  const [llmKeySource, setLlmKeySource] = useState<ProviderKeySource>(DEFAULT_KEY_SOURCE);
+  const [sttKeySource, setSttKeySource] = useState<ProviderKeySource>(DEFAULT_KEY_SOURCE);
+  const [agentKeyDrafts, setAgentKeyDrafts] = useState<Record<string, string>>({});
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [promptHydrated, setPromptHydrated] = useState(false);
 
@@ -481,6 +496,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setTtsCredentialMode(DEFAULT_CREDENTIAL_MODE);
     setLlmCredentialMode(DEFAULT_CREDENTIAL_MODE);
     setSttCredentialMode(DEFAULT_CREDENTIAL_MODE);
+    setTtsKeySource(DEFAULT_KEY_SOURCE);
+    setLlmKeySource(DEFAULT_KEY_SOURCE);
+    setSttKeySource(DEFAULT_KEY_SOURCE);
+    setAgentKeyDrafts({});
     setSelectedVersionId(null);
     setAllVersionsLoaded(false);
     setShowAllVersions(false);
@@ -580,26 +599,32 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       selectedSttModel !== (selectedVersion.sttModel ?? DEFAULT_STT_MODEL) ||
       ttsCredentialMode !== credentialModeOrDefault(selectedVersion.ttsCredentialMode) ||
       llmCredentialMode !== credentialModeOrDefault(selectedVersion.llmCredentialMode) ||
-      sttCredentialMode !== credentialModeOrDefault(selectedVersion.sttCredentialMode));
+      sttCredentialMode !== credentialModeOrDefault(selectedVersion.sttCredentialMode) ||
+      ttsKeySource !== keySourceOrDefault(selectedVersion.ttsKeySource, selectedVersion.ttsCredentialMode) ||
+      llmKeySource !== keySourceOrDefault(selectedVersion.llmKeySource, selectedVersion.llmCredentialMode) ||
+      sttKeySource !== keySourceOrDefault(selectedVersion.sttKeySource, selectedVersion.sttCredentialMode) ||
+      Object.values(agentKeyDrafts).some((value) => value.trim().length > 0));
 
   const editorRuntimeAssessment = useMemo(
     () =>
       assessRuntimeConfig({
         voiceId: selectedVoiceId,
+        llmProviderId: selectedLlmProvider,
         model: selectedModelId,
         voices,
       }),
-    [selectedModelId, selectedVoiceId, voices],
+    [selectedLlmProvider, selectedModelId, selectedVoiceId, voices],
   );
 
   const liveRuntimeAssessment = useMemo(
     () =>
       assessRuntimeConfig({
         voiceId: liveVersion?.voiceId ?? '',
+        llmProviderId: liveVersion?.llmProviderId ?? DEFAULT_LLM_PROVIDER,
         model: liveVersion?.model ?? DEFAULT_LLM_MODEL,
         voices,
       }),
-    [liveVersion?.model, liveVersion?.voiceId, voices],
+    [liveVersion?.llmProviderId, liveVersion?.model, liveVersion?.voiceId, voices],
   );
 
   const selectedVersionRuntimeAssessment = useMemo(() => {
@@ -608,6 +633,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     return assessRuntimeConfig({
       voiceId: selectedVersion.voiceId,
+      llmProviderId: selectedVersion.llmProviderId ?? DEFAULT_LLM_PROVIDER,
       model: selectedVersion.model ?? DEFAULT_LLM_MODEL,
       voices,
     });
@@ -619,6 +645,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     return assessRuntimeConfig({
       voiceId: publishTarget.voiceId,
+      llmProviderId: publishTarget.llmProviderId ?? DEFAULT_LLM_PROVIDER,
       model: publishTarget.model ?? DEFAULT_LLM_MODEL,
       voices,
     });
@@ -631,6 +658,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     selectedVersion != null &&
     hasRuntimeChanges &&
     selectedVoiceId.trim().length > 0 &&
+    editorRuntimeAssessment.canPublishLive &&
     saveBusy === null &&
     !versionPanelBusy &&
     !voiceSaveBusy;
@@ -732,9 +760,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setSelectedSttProvider(baselineVersion?.sttProviderId ?? DEFAULT_STT_PROVIDER);
     setSelectedModelId(baselineVersion?.model ?? DEFAULT_LLM_MODEL);
     setSelectedSttModel(baselineVersion?.sttModel ?? DEFAULT_STT_MODEL);
-    setTtsCredentialMode(credentialModeOrDefault(baselineVersion?.ttsCredentialMode));
-    setLlmCredentialMode(credentialModeOrDefault(baselineVersion?.llmCredentialMode));
-    setSttCredentialMode(credentialModeOrDefault(baselineVersion?.sttCredentialMode));
+    applyVersionKeySources(baselineVersion);
     setSelectedVersionId(baselineVersion?.id ?? null);
     setPromptHydrated(true);
   }, [agent, draftPrompt, promptHydrated, versions, voices]);
@@ -1009,21 +1035,20 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(version.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(version.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(version.sttModel ?? DEFAULT_STT_MODEL);
-      setTtsCredentialMode(credentialModeOrDefault(version.ttsCredentialMode));
-      setLlmCredentialMode(credentialModeOrDefault(version.llmCredentialMode));
-      setSttCredentialMode(credentialModeOrDefault(version.sttCredentialMode));
+      applyVersionKeySources(version);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setPreviewingVersion(null);
       const versionRuntime = assessRuntimeConfig({
         voiceId: version.voiceId,
+        llmProviderId: version.llmProviderId ?? DEFAULT_LLM_PROVIDER,
         model: version.model ?? DEFAULT_LLM_MODEL,
         voices,
       });
       setToast(
         versionRuntime.canPublishLive
           ? `Viewing V${version.versionNumber}. Update this version or save V${nextVersionNumber} as a new version.`
-          : `Viewing V${version.versionNumber} (catalog-only draft - switch to a runtime TTS voice and Groq model before publishing).`,
+          : `Viewing V${version.versionNumber} (catalog-only draft - switch to runtime-supported providers before publishing).`,
       );
     },
     [hasUnsavedChanges, nextVersionNumber, selectedVersionId, setDraftPrompt, voices],
@@ -1058,9 +1083,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(restored.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(restored.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(restored.sttModel ?? DEFAULT_STT_MODEL);
-      setTtsCredentialMode(credentialModeOrDefault(restored.ttsCredentialMode));
-      setLlmCredentialMode(credentialModeOrDefault(restored.llmCredentialMode));
-      setSttCredentialMode(credentialModeOrDefault(restored.sttCredentialMode));
+      applyVersionKeySources(restored);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setRestoreTarget(null);
@@ -1080,14 +1103,23 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     const publishRuntime = assessRuntimeConfig({
       voiceId: publishTarget.voiceId,
+      llmProviderId: publishTarget.llmProviderId ?? DEFAULT_LLM_PROVIDER,
       model: publishTarget.model ?? DEFAULT_LLM_MODEL,
       voices,
     });
+    const publishKeyIssues = keySourceIssuesForPayload(
+      versionPayloadFromVersion(publishTarget),
+      publishTarget,
+    );
     if (!publishRuntime.canPublishLive) {
       setToast(
         publishRuntime.issues[0] ??
-          'Cannot publish live: current runtime supports Rime, Cartesia, ElevenLabs, or Inworld TTS; Deepgram, AssemblyAI, or Groq Whisper STT; and Groq LLM.',
+          'Cannot publish live: current runtime supports configured TTS/STT providers and Groq, OpenAI GPT-4o, or Anthropic Claude Sonnet LLM selections.',
       );
+      return;
+    }
+    if (publishKeyIssues.length > 0) {
+      setToast(publishKeyIssues[0]);
       return;
     }
     const publishedNumber = publishTarget.versionNumber;
@@ -1133,6 +1165,15 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const sttCredentialModeForVersion = source
       ? credentialModeOrDefault(source.sttCredentialMode)
       : sttCredentialMode;
+    const ttsKeySourceForVersion = source
+      ? keySourceOrDefault(source.ttsKeySource, source.ttsCredentialMode)
+      : ttsKeySource;
+    const llmKeySourceForVersion = source
+      ? keySourceOrDefault(source.llmKeySource, source.llmCredentialMode)
+      : llmKeySource;
+    const sttKeySourceForVersion = source
+      ? keySourceOrDefault(source.sttKeySource, source.sttCredentialMode)
+      : sttKeySource;
     const body: Record<string, unknown> = {
       systemPrompt: prompt,
       voiceId: voiceIdForVersion,
@@ -1143,10 +1184,25 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       ttsCredentialMode: ttsCredentialModeForVersion,
       llmCredentialMode: llmCredentialModeForVersion,
       sttCredentialMode: sttCredentialModeForVersion,
+      ttsKeySource: ttsKeySourceForVersion,
+      llmKeySource: llmKeySourceForVersion,
+      sttKeySource: sttKeySourceForVersion,
       temperature: source?.temperature ?? 0.7,
       maxTokens: source?.maxTokens ?? 1024,
       endCallPhrases: source?.endCallPhrases ?? [],
     };
+    const ttsAgentKey = agentKeyDrafts.tts?.trim();
+    const llmAgentKey = agentKeyDrafts.llm?.trim();
+    const sttAgentKey = agentKeyDrafts.stt?.trim();
+    if (ttsKeySourceForVersion === 'agent_own' && ttsAgentKey) {
+      body.ttsAgentKey = ttsAgentKey;
+    }
+    if (llmKeySourceForVersion === 'agent_own' && llmAgentKey) {
+      body.llmAgentKey = llmAgentKey;
+    }
+    if (sttKeySourceForVersion === 'agent_own' && sttAgentKey) {
+      body.sttAgentKey = sttAgentKey;
+    }
     const fm = source?.firstMessage ?? undefined;
     if (fm !== undefined && fm !== null && fm.length > 0) {
       body.firstMessage = fm;
@@ -1162,9 +1218,89 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     ttsCredentialMode,
     llmCredentialMode,
     sttCredentialMode,
+    ttsKeySource,
+    llmKeySource,
+    sttKeySource,
+    agentKeyDrafts,
     selectedVersion,
     agent?.currentVersion,
   ]);
+
+  const runtimeAssessmentForPayload = (payload: Record<string, unknown>) =>
+    assessRuntimeConfig({
+      voiceId: typeof payload.voiceId === 'string' ? payload.voiceId : '',
+      llmProviderId:
+        typeof payload.llmProviderId === 'string'
+          ? payload.llmProviderId
+          : DEFAULT_LLM_PROVIDER,
+      model:
+        typeof payload.model === 'string' ? payload.model : DEFAULT_LLM_MODEL,
+      voices,
+    });
+
+  const keySourceIssuesForPayload = (
+    payload: Record<string, unknown>,
+    version: AgentVersion | null | undefined,
+  ): string[] => {
+    const issues: string[] = [];
+    issues.push(
+      ...keySourceIssuesForProvider({
+        label: 'TTS',
+        providerId: selectedTtsProvider,
+        keySource: keySourceValue(payload.ttsKeySource),
+        hasAgentKey: Boolean(version?.ttsHasAgentKey),
+        agentKeyDraft: agentKeyDrafts.tts,
+      }),
+      ...keySourceIssuesForProvider({
+        label: 'LLM',
+        providerId:
+          typeof payload.llmProviderId === 'string'
+            ? payload.llmProviderId
+            : selectedLlmProvider,
+        keySource: keySourceValue(payload.llmKeySource),
+        hasAgentKey: Boolean(version?.llmHasAgentKey),
+        agentKeyDraft: agentKeyDrafts.llm,
+      }),
+      ...keySourceIssuesForProvider({
+        label: 'STT',
+        providerId:
+          typeof payload.sttProviderId === 'string'
+            ? payload.sttProviderId
+            : selectedSttProvider,
+        keySource: keySourceValue(payload.sttKeySource),
+        hasAgentKey: Boolean(version?.sttHasAgentKey),
+        agentKeyDraft: agentKeyDrafts.stt,
+      }),
+    );
+    return issues;
+  };
+
+  const keySourceIssuesForProvider = ({
+    label,
+    providerId,
+    keySource,
+    hasAgentKey,
+    agentKeyDraft,
+  }: {
+    label: 'TTS' | 'LLM' | 'STT';
+    providerId: string;
+    keySource: ProviderKeySource;
+    hasAgentKey: boolean;
+    agentKeyDraft?: string;
+  }): string[] => {
+    if (keySource === 'org_default') {
+      const provider = catalogProviders?.find((item) => item.id === providerId);
+      const status =
+        provider?.orgCredentialStatus ?? providerOrgCredentialStatus(provider);
+      return status === 'configured_valid'
+        ? []
+        : [`${label} saved workspace key for ${provider?.label ?? providerId} is missing or invalid.`];
+    }
+    if (keySource === 'agent_own' && !hasAgentKey && !agentKeyDraft?.trim()) {
+      return [`${label} agent-owned key is required before saving.`];
+    }
+    return [];
+  };
 
   const updateCurrentVersionFlow = async () => {
     if (saveInFlightRef.current || saveBusy !== null || versionPanelBusy) {
@@ -1182,6 +1318,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     if (!prompt.trim()) {
       setToast('System prompt cannot be empty.');
+      return;
+    }
+    const versionRuntime = runtimeAssessmentForPayload(versionPayload);
+    const keySourceIssues = keySourceIssuesForPayload(versionPayload, selectedVersion);
+    if (!versionRuntime.canPublishLive) {
+      setToast(
+        versionRuntime.issues[0] ??
+          'Select runtime-supported provider and model settings before saving.',
+      );
+      return;
+    }
+    if (keySourceIssues.length > 0) {
+      setToast(keySourceIssues[0]);
       return;
     }
     if (!hasUnsavedChanges) {
@@ -1227,9 +1376,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(updated.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(updated.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(updated.sttModel ?? DEFAULT_STT_MODEL);
-      setTtsCredentialMode(credentialModeOrDefault(updated.ttsCredentialMode));
-      setLlmCredentialMode(credentialModeOrDefault(updated.llmCredentialMode));
-      setSttCredentialMode(credentialModeOrDefault(updated.sttCredentialMode));
+      applyVersionKeySources(updated);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setToast(
@@ -1258,6 +1405,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       ttsCredentialMode: CredentialMode;
       llmCredentialMode: CredentialMode;
       sttCredentialMode: CredentialMode;
+      ttsKeySource: ProviderKeySource;
+      llmKeySource: ProviderKeySource;
+      sttKeySource: ProviderKeySource;
     }> = {},
     options: { toastMessage?: string; reloadCatalog?: boolean } = {},
   ): Promise<AgentVersion | null> => {
@@ -1271,6 +1421,33 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const nextVoiceId = overrides.voiceId ?? selectedVoiceId;
     if (!nextVoiceId.trim()) {
       setToast('Select a voice before saving runtime settings.');
+      return null;
+    }
+    const nextLlmProviderId = overrides.llmProviderId ?? selectedLlmProvider;
+    const nextModel = overrides.model ?? selectedModelId;
+    const nextRuntime = assessRuntimeConfig({
+      voiceId: nextVoiceId,
+      llmProviderId: nextLlmProviderId,
+      model: nextModel,
+      voices,
+    });
+    const nextPayload = {
+      ttsKeySource: overrides.ttsKeySource ?? ttsKeySource,
+      llmKeySource: overrides.llmKeySource ?? llmKeySource,
+      sttKeySource: overrides.sttKeySource ?? sttKeySource,
+      llmProviderId: nextLlmProviderId,
+      sttProviderId: overrides.sttProviderId ?? selectedSttProvider,
+    };
+    const keySourceIssues = keySourceIssuesForPayload(nextPayload, selectedVersion);
+    if (!nextRuntime.canPublishLive) {
+      setToast(
+        nextRuntime.issues[0] ??
+          'Select runtime-supported provider and model settings before saving.',
+      );
+      return null;
+    }
+    if (keySourceIssues.length > 0) {
+      setToast(keySourceIssues[0]);
       return null;
     }
 
@@ -1293,6 +1470,21 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             ttsCredentialMode: overrides.ttsCredentialMode ?? ttsCredentialMode,
             llmCredentialMode: overrides.llmCredentialMode ?? llmCredentialMode,
             sttCredentialMode: overrides.sttCredentialMode ?? sttCredentialMode,
+            ttsKeySource: overrides.ttsKeySource ?? ttsKeySource,
+            llmKeySource: overrides.llmKeySource ?? llmKeySource,
+            sttKeySource: overrides.sttKeySource ?? sttKeySource,
+            ...(agentKeyDrafts.tts?.trim() &&
+            (overrides.ttsKeySource ?? ttsKeySource) === 'agent_own'
+              ? { ttsAgentKey: agentKeyDrafts.tts.trim() }
+              : {}),
+            ...(agentKeyDrafts.llm?.trim() &&
+            (overrides.llmKeySource ?? llmKeySource) === 'agent_own'
+              ? { llmAgentKey: agentKeyDrafts.llm.trim() }
+              : {}),
+            ...(agentKeyDrafts.stt?.trim() &&
+            (overrides.sttKeySource ?? sttKeySource) === 'agent_own'
+              ? { sttAgentKey: agentKeyDrafts.stt.trim() }
+              : {}),
             temperature: selectedVersion.temperature,
             maxTokens: selectedVersion.maxTokens,
             firstMessage: selectedVersion.firstMessage,
@@ -1323,9 +1515,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(updated.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(updated.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(updated.sttModel ?? DEFAULT_STT_MODEL);
-      setTtsCredentialMode(credentialModeOrDefault(updated.ttsCredentialMode));
-      setLlmCredentialMode(credentialModeOrDefault(updated.llmCredentialMode));
-      setSttCredentialMode(credentialModeOrDefault(updated.sttCredentialMode));
+      applyVersionKeySources(updated);
       setOpenVersionMenuId(null);
       setToast(
         options.toastMessage ??
@@ -1361,6 +1551,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       if (!selectedVersion) {
         const pendingRuntime = assessRuntimeConfig({
           voiceId,
+          llmProviderId: selectedLlmProvider,
           model: selectedModelId,
           voices,
         });
@@ -1376,6 +1567,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
     const savedRuntime = assessRuntimeConfig({
       voiceId,
+      llmProviderId: selectedLlmProvider,
       model: selectedModelId,
       voices,
     });
@@ -1412,6 +1604,19 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     if (!prompt.trim()) {
       setToast('System prompt cannot be empty.');
+      return;
+    }
+    const versionRuntime = runtimeAssessmentForPayload(versionPayload);
+    const keySourceIssues = keySourceIssuesForPayload(versionPayload, selectedVersion);
+    if (!versionRuntime.canPublishLive) {
+      setToast(
+        versionRuntime.issues[0] ??
+          'Select runtime-supported provider and model settings before saving.',
+      );
+      return;
+    }
+    if (keySourceIssues.length > 0) {
+      setToast(keySourceIssues[0]);
       return;
     }
     if (!hasUnsavedChanges) {
@@ -1463,9 +1668,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(created.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(created.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(created.sttModel ?? DEFAULT_STT_MODEL);
-      setTtsCredentialMode(credentialModeOrDefault(created.ttsCredentialMode));
-      setLlmCredentialMode(credentialModeOrDefault(created.llmCredentialMode));
-      setSttCredentialMode(credentialModeOrDefault(created.sttCredentialMode));
+      applyVersionKeySources(created);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       console.debug('[AgentEditor] Saved version voice', {
@@ -1587,10 +1790,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     return assessRuntimeConfig({
       voiceId: tempSelectedVoiceId,
+      llmProviderId: selectedLlmProvider,
       model: selectedModelId,
       voices,
     });
-  }, [selectedModelId, tempSelectedVoiceId, voices]);
+  }, [selectedLlmProvider, selectedModelId, tempSelectedVoiceId, voices]);
 
   const providerMeta = (providerId: string) =>
     catalogProviders?.find((provider) => provider.id === providerId) ?? null;
@@ -1605,12 +1809,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     return matching.map((p) => ({
       value: p.id,
       label: p.label,
+      disabled: p.runtimeSupported === false,
       description:
-        p.finovaManagedAvailable
-          ? 'Finova Managed available'
-          : p.organizationCredential?.hasSecret
-            ? 'BYOK key configured'
-            : 'Setup required',
+        p.runtimeSupported === false
+          ? (p.runtimeUnsupportedReason ?? 'Unavailable for live runtime')
+          : providerCredentialDescription(p),
     }));
   };
 
@@ -1625,10 +1828,18 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       : provider.defaultModel
         ? [{ id: provider.defaultModel, label: provider.defaultModel }]
         : [];
-    const options = models.map((model) => ({
-      value: model.id,
-      label: model.label,
-    }));
+    const options = models.map((model) => {
+      const disabled =
+        provider.kind === 'llm' && !isRuntimeLlmModel(provider.id, model.id);
+      return {
+        value: model.id,
+        label: model.label,
+        disabled,
+        ...(disabled
+          ? { description: 'Unavailable for live runtime' }
+          : {}),
+      };
+    });
     return options.length > 0 ? options : fallback;
   };
 
@@ -1638,6 +1849,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   ]);
   let llmProviderOptions = buildProviderOptions('llm', [
     { value: DEFAULT_LLM_PROVIDER, label: 'Groq' },
+    { value: 'openai', label: 'OpenAI' },
+    { value: 'anthropic', label: 'Anthropic Claude' },
   ]);
   let sttOptions = buildModelOptions(selectedSttProvider, STT_OPTIONS);
   let llmOptions = buildModelOptions(selectedLlmProvider, LLM_OPTIONS);
@@ -1717,69 +1930,14 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setSelectedModelId(defaultModel);
   };
 
-  const saveProviderKey = async (providerId: string) => {
-    const apiKey = providerKeyDrafts[providerId]?.trim();
-    if (!apiKey) {
-      setToast('Enter an API key before saving BYOK credentials.');
-      return;
-    }
-
-    setCredentialSaveBusy(providerId);
-    setPageError(null);
-    try {
-      const res = await apiCall(`/api/v1/plugin-credentials/${providerId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credentialMode: 'BYOK', apiKey }),
-      });
-      if (!res.ok) {
-        throw new Error(await res.text() || res.statusText);
-      }
-
-      const validateRes = await apiCall(`/api/v1/plugin-credentials/${providerId}/validate`, {
-        method: 'POST',
-      });
-      if (!validateRes.ok) {
-        throw new Error(await validateRes.text() || validateRes.statusText);
-      }
-
-      const providerKind = providerMeta(providerId)?.kind;
-      if (providerKind === 'tts') {
-        setTtsCredentialMode('BYOK');
-      } else if (providerKind === 'llm') {
-        setLlmCredentialMode('BYOK');
-      } else if (providerKind === 'stt') {
-        setSttCredentialMode('BYOK');
-      }
-      setProviderKeyDrafts((current) => ({ ...current, [providerId]: '' }));
-      if (providerKind === 'tts') {
-        await saveRuntimeSettings(
-          { ttsCredentialMode: 'BYOK' },
-          { toastMessage: 'BYOK key saved and selected for TTS.', reloadCatalog: true },
-        );
-      } else if (providerKind === 'llm') {
-        await saveRuntimeSettings(
-          { llmCredentialMode: 'BYOK' },
-          { toastMessage: 'BYOK key saved and selected for LLM.', reloadCatalog: true },
-        );
-      } else if (providerKind === 'stt') {
-        await saveRuntimeSettings(
-          { sttCredentialMode: 'BYOK' },
-          { toastMessage: 'BYOK key saved and selected for STT.', reloadCatalog: true },
-        );
-      } else {
-        setToast('BYOK key saved and validated.');
-        await loadData(showAllVersions && allVersionsLoaded);
-      }
-
-      // Dispatch onboarding event
-      window.dispatchEvent(new CustomEvent('awaaz:onboarding:api-keys-configured'));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setPageError(message);
-    } finally {
-      setCredentialSaveBusy(null);
-    }
+  const applyVersionKeySources = (version: AgentVersion | null | undefined) => {
+    setTtsCredentialMode(credentialModeOrDefault(version?.ttsCredentialMode));
+    setLlmCredentialMode(credentialModeOrDefault(version?.llmCredentialMode));
+    setSttCredentialMode(credentialModeOrDefault(version?.sttCredentialMode));
+    setTtsKeySource(keySourceOrDefault(version?.ttsKeySource, version?.ttsCredentialMode));
+    setLlmKeySource(keySourceOrDefault(version?.llmKeySource, version?.llmCredentialMode));
+    setSttKeySource(keySourceOrDefault(version?.sttKeySource, version?.sttCredentialMode));
+    setAgentKeyDrafts({});
   };
 
   const hasUsableLiveConfig =
@@ -2184,9 +2342,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(created.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(created.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(created.sttModel ?? DEFAULT_STT_MODEL);
-      setTtsCredentialMode(credentialModeOrDefault(created.ttsCredentialMode));
-      setLlmCredentialMode(credentialModeOrDefault(created.llmCredentialMode));
-      setSttCredentialMode(credentialModeOrDefault(created.sttCredentialMode));
+      applyVersionKeySources(created);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
       setToast(`Duplicated V${version.versionNumber} as V${created.versionNumber}.`);
@@ -2736,18 +2892,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 detailValue={selectedSttModel}
                 detailOptions={sttOptions}
                 onDetailChange={setSelectedSttModel}
-                credentialMode={sttCredentialMode}
-                onCredentialModeChange={setSttCredentialMode}
+                keySource={sttKeySource}
+                onKeySourceChange={(value) => {
+                  setSttKeySource(value);
+                  setSttCredentialMode(credentialModeForKeySource(value));
+                }}
                 provider={providerMeta(selectedSttProvider)}
-                keyDraft={providerKeyDrafts[selectedSttProvider] ?? ''}
-                onKeyDraftChange={(value) =>
-                  setProviderKeyDrafts((current) => ({
-                    ...current,
-                    [selectedSttProvider]: value,
-                  }))
+                agentKeyDraft={agentKeyDrafts.stt ?? ''}
+                hasAgentKey={Boolean(selectedVersion?.sttHasAgentKey)}
+                onAgentKeyDraftChange={(value) =>
+                  setAgentKeyDrafts((current) => ({ ...current, stt: value }))
                 }
-                onSaveKey={() => saveProviderKey(selectedSttProvider)}
-                credentialBusy={credentialSaveBusy === selectedSttProvider}
                 onboardingTarget="api-keys-mode"
               />
 
@@ -2760,18 +2915,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 detailValue={selectedModelId}
                 detailOptions={llmOptions}
                 onDetailChange={setSelectedModelId}
-                credentialMode={llmCredentialMode}
-                onCredentialModeChange={setLlmCredentialMode}
+                keySource={llmKeySource}
+                onKeySourceChange={(value) => {
+                  setLlmKeySource(value);
+                  setLlmCredentialMode(credentialModeForKeySource(value));
+                }}
                 provider={providerMeta(selectedLlmProvider)}
-                keyDraft={providerKeyDrafts[selectedLlmProvider] ?? ''}
-                onKeyDraftChange={(value) =>
-                  setProviderKeyDrafts((current) => ({
-                    ...current,
-                    [selectedLlmProvider]: value,
-                  }))
+                agentKeyDraft={agentKeyDrafts.llm ?? ''}
+                hasAgentKey={Boolean(selectedVersion?.llmHasAgentKey)}
+                onAgentKeyDraftChange={(value) =>
+                  setAgentKeyDrafts((current) => ({ ...current, llm: value }))
                 }
-                onSaveKey={() => saveProviderKey(selectedLlmProvider)}
-                credentialBusy={credentialSaveBusy === selectedLlmProvider}
               />
 
               <PipelineProviderCard
@@ -2799,18 +2953,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     Browse
                   </Button>
                 }
-                credentialMode={ttsCredentialMode}
-                onCredentialModeChange={setTtsCredentialMode}
+                keySource={ttsKeySource}
+                onKeySourceChange={(value) => {
+                  setTtsKeySource(value);
+                  setTtsCredentialMode(credentialModeForKeySource(value));
+                }}
                 provider={providerMeta(selectedTtsProvider)}
-                keyDraft={providerKeyDrafts[selectedTtsProvider] ?? ''}
-                onKeyDraftChange={(value) =>
-                  setProviderKeyDrafts((current) => ({
-                    ...current,
-                    [selectedTtsProvider]: value,
-                  }))
+                agentKeyDraft={agentKeyDrafts.tts ?? ''}
+                hasAgentKey={Boolean(selectedVersion?.ttsHasAgentKey)}
+                onAgentKeyDraftChange={(value) =>
+                  setAgentKeyDrafts((current) => ({ ...current, tts: value }))
                 }
-                onSaveKey={() => saveProviderKey(selectedTtsProvider)}
-                credentialBusy={credentialSaveBusy === selectedTtsProvider}
               />
 
               <div className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/70 p-3">
@@ -4081,13 +4234,12 @@ function PipelineProviderCard({
   detailSummary,
   detailContent,
   detailAction,
-  credentialMode,
-  onCredentialModeChange,
+  keySource,
+  onKeySourceChange,
   provider,
-  keyDraft,
-  onKeyDraftChange,
-  onSaveKey,
-  credentialBusy,
+  agentKeyDraft,
+  hasAgentKey,
+  onAgentKeyDraftChange,
   onboardingTarget,
 }: {
   title: string;
@@ -4101,13 +4253,12 @@ function PipelineProviderCard({
   detailSummary?: string;
   detailContent?: ReactNode;
   detailAction?: ReactNode;
-  credentialMode: CredentialMode;
-  onCredentialModeChange: (value: CredentialMode) => void;
+  keySource: ProviderKeySource;
+  onKeySourceChange: (value: ProviderKeySource) => void;
   provider: CatalogProviderDto | null;
-  keyDraft: string;
-  onKeyDraftChange: (value: string) => void;
-  onSaveKey: () => void;
-  credentialBusy: boolean;
+  agentKeyDraft: string;
+  hasAgentKey: boolean;
+  onAgentKeyDraftChange: (value: string) => void;
   onboardingTarget?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -4142,7 +4293,7 @@ function PipelineProviderCard({
             <h4 className="truncate text-[11px] font-semibold uppercase tracking-wider text-foreground">
               {title}
             </h4>
-            <CredentialStatusBadge provider={provider} credentialMode={credentialMode} />
+            <CredentialStatusBadge provider={provider} keySource={keySource} />
           </div>
           <p className="mt-1 truncate text-[11px] text-muted-foreground">
             {providerLabel}
@@ -4181,12 +4332,11 @@ function PipelineProviderCard({
           </div>
           <CredentialModePanel
             provider={provider}
-            credentialMode={credentialMode}
-            onCredentialModeChange={onCredentialModeChange}
-            keyDraft={keyDraft}
-            onKeyDraftChange={onKeyDraftChange}
-            onSaveKey={onSaveKey}
-            credentialBusy={credentialBusy}
+            keySource={keySource}
+            onKeySourceChange={onKeySourceChange}
+            agentKeyDraft={agentKeyDraft}
+            hasAgentKey={hasAgentKey}
+            onAgentKeyDraftChange={onAgentKeyDraftChange}
           />
         </div>
       ) : null}
@@ -4196,124 +4346,110 @@ function PipelineProviderCard({
 
 function CredentialModePanel({
   provider,
-  credentialMode,
-  onCredentialModeChange,
-  keyDraft,
-  onKeyDraftChange,
-  onSaveKey,
-  credentialBusy,
+  keySource,
+  onKeySourceChange,
+  agentKeyDraft,
+  hasAgentKey,
+  onAgentKeyDraftChange,
 }: {
   provider: CatalogProviderDto | null;
-  credentialMode: CredentialMode;
-  onCredentialModeChange: (value: CredentialMode) => void;
-  keyDraft: string;
-  onKeyDraftChange: (value: string) => void;
-  onSaveKey: () => void;
-  credentialBusy: boolean;
+  keySource: ProviderKeySource;
+  onKeySourceChange: (value: ProviderKeySource) => void;
+  agentKeyDraft: string;
+  hasAgentKey: boolean;
+  onAgentKeyDraftChange: (value: string) => void;
 }) {
   const providerLabel = provider?.label ?? 'this provider';
-  const credential = provider?.organizationCredential ?? null;
-  const hasByokSecret = Boolean(credential?.hasSecret);
-  const byokStatus = credential?.status ?? 'NOT_CONFIGURED';
+  const orgStatus = providerOrgCredentialStatus(provider);
   const finovaReady = Boolean(provider?.finovaManagedAvailable);
-
-  if (credentialMode === 'FINOVA_MANAGED') {
-    return (
-      <div className="rounded-md border border-border/50 bg-muted/15 p-3">
-        <div className="flex items-start gap-2">
-          <Building2 className="mt-0.5 size-4 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-xs font-semibold text-foreground">
-                Finova Managed
-              </p>
-              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-950 dark:text-emerald-100">
-                Recommended
-              </span>
-            </div>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-              Use Finova&apos;s managed infrastructure. No API key required.
-            </p>
-            {!finovaReady ? (
-              <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
-                Finova Managed is not configured for {providerLabel}; BYOK is available if you add a key.
-              </p>
-            ) : null}
-          </div>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="mt-3 h-8 text-xs"
-          onClick={() => onCredentialModeChange('BYOK')}
-        >
-          <KeyRound className="size-3.5" aria-hidden />
-          Switch to BYOK
-        </Button>
-      </div>
-    );
-  }
+  const statusText = keySourceStatusText(keySource, orgStatus, finovaReady, hasAgentKey);
 
   return (
     <div className="rounded-md border border-border/50 bg-background p-3">
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2">
         <CredentialModeOption
-          active={false}
+          active={keySource === 'finova_managed'}
           title="Finova Managed"
-          description="No API key required"
-          onClick={() => onCredentialModeChange('FINOVA_MANAGED')}
+          description="Use platform-managed provider credentials"
+          onClick={() => onKeySourceChange('finova_managed')}
         />
         <CredentialModeOption
-          active
-          title="Bring Your Own Key"
-          description="Advanced provider billing"
-          onClick={() => onCredentialModeChange('BYOK')}
+          active={keySource === 'org_default'}
+          title="Saved Workspace Key"
+          description="Use the validated key from provider settings"
+          onClick={() => onKeySourceChange('org_default')}
+        />
+        <CredentialModeOption
+          active={keySource === 'agent_own'}
+          title="This Agent Only"
+          description="Store a key only on this agent version"
+          onClick={() => onKeySourceChange('agent_own')}
         />
       </div>
 
-      <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-        This setting is saved with runtime settings. The stored {providerLabel} key can be reused by other agents in this workspace.
-      </p>
-
-      <label className="mt-3 block">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          API Key
-        </span>
-        <input
-          type="password"
-          value={keyDraft}
-          onChange={(event) => onKeyDraftChange(event.target.value)}
-          placeholder={hasByokSecret ? 'Stored key is already configured' : `Paste ${providerLabel} API key`}
-          className="mt-1 h-9 w-full rounded-md border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
-        />
-      </label>
-
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          className="h-8 text-xs"
-          disabled={credentialBusy || !keyDraft.trim()}
-          onClick={onSaveKey}
-        >
-          {credentialBusy ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          ) : (
-            <Save className="size-3.5" aria-hidden />
-          )}
-          Save Key
-        </Button>
-        <span className="text-[11px] text-muted-foreground">
-          Status: {byokCredentialStatusLabel(hasByokSecret, byokStatus)}
-        </span>
-      </div>
-
-      {credential?.validationError ? (
-        <p className="mt-2 text-[11px] leading-relaxed text-destructive">
-          {credential.validationError}
-        </p>
+      {keySource === 'agent_own' ? (
+        <label className="mt-3 grid gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Agent Key
+          </span>
+          <input
+            type="password"
+            value={agentKeyDraft}
+            onChange={(event) => onAgentKeyDraftChange(event.target.value)}
+            placeholder={
+              hasAgentKey
+                ? 'Stored agent key is already configured'
+                : `Paste ${providerLabel} API key`
+            }
+            className="h-9 rounded-md border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </label>
       ) : null}
+
+      <div className="mt-3 flex items-start gap-2 rounded-md border border-border/50 bg-muted/15 p-3">
+        <Building2 className="mt-0.5 size-4 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold text-foreground">
+            {keySourceLabel(keySource)}
+          </p>
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            {keySourceDescription(keySource, providerLabel)}
+          </p>
+          <span className="mt-2 inline-flex rounded-full border border-border/60 bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+            Status: {statusText}
+          </span>
+          {provider?.organizationCredential?.validationError && keySource === 'org_default' ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-destructive">
+              {provider.organizationCredential.validationError}
+            </p>
+          ) : null}
+          {!finovaReady && keySource === 'finova_managed' ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
+              Finova Managed is not configured for {providerLabel}; choose another key source before saving.
+            </p>
+          ) : null}
+          {keySource === 'org_default' && orgStatus !== 'configured_valid' ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
+              Add and validate a workspace key in provider settings before using this source.
+            </p>
+          ) : null}
+          {keySource === 'agent_own' && !hasAgentKey && !agentKeyDraft.trim() ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
+              Add an agent-owned key before saving this source.
+            </p>
+          ) : null}
+          <Link
+            href="/settings/ai-providers"
+            className={cn(
+              buttonVariants({ variant: 'outline', size: 'sm' }),
+              'mt-3 h-8 text-xs',
+            )}
+          >
+            <Settings2 className="size-3.5" aria-hidden />
+            Provider Settings
+          </Link>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4359,20 +4495,17 @@ function CredentialModeOption({
 
 function CredentialStatusBadge({
   provider,
-  credentialMode,
+  keySource,
 }: {
   provider: CatalogProviderDto | null;
-  credentialMode: CredentialMode;
+  keySource: ProviderKeySource;
 }) {
-  const label =
-    credentialMode === 'BYOK'
-      ? byokCredentialStatusLabel(
-          Boolean(provider?.organizationCredential?.hasSecret),
-          provider?.organizationCredential?.status ?? 'NOT_CONFIGURED',
-        )
-      : provider?.finovaManagedAvailable === false
-        ? 'Setup Required'
-        : 'Ready';
+  const label = keySourceStatusText(
+    keySource,
+    providerOrgCredentialStatus(provider),
+    Boolean(provider?.finovaManagedAvailable),
+    false,
+  );
   const ready = label === 'Ready' || label === 'Validated' || label === 'Configured';
   return (
     <span
@@ -4386,22 +4519,6 @@ function CredentialStatusBadge({
       {label}
     </span>
   );
-}
-
-function byokCredentialStatusLabel(
-  hasSecret: boolean,
-  status: ProviderCredentialDto['status'],
-): string {
-  if (!hasSecret) {
-    return 'Key Required';
-  }
-  if (status === 'VALID') {
-    return 'Validated';
-  }
-  if (status === 'INVALID') {
-    return 'Invalid';
-  }
-  return 'Configured';
 }
 
 function SelectedVoiceTextarea({
@@ -4513,6 +4630,9 @@ function versionPayloadFromVersion(version: AgentVersion): Record<string, unknow
     ttsCredentialMode: credentialModeOrDefault(version.ttsCredentialMode),
     llmCredentialMode: credentialModeOrDefault(version.llmCredentialMode),
     sttCredentialMode: credentialModeOrDefault(version.sttCredentialMode),
+    ttsKeySource: keySourceOrDefault(version.ttsKeySource, version.ttsCredentialMode),
+    llmKeySource: keySourceOrDefault(version.llmKeySource, version.llmCredentialMode),
+    sttKeySource: keySourceOrDefault(version.sttKeySource, version.sttCredentialMode),
     temperature: version.temperature,
     maxTokens: version.maxTokens,
     firstMessage: version.firstMessage ?? undefined,
@@ -4528,6 +4648,95 @@ function credentialModeOrDefault(
   value: CredentialMode | null | undefined,
 ): CredentialMode {
   return value === 'BYOK' ? 'BYOK' : DEFAULT_CREDENTIAL_MODE;
+}
+
+function keySourceOrDefault(
+  value: ProviderKeySource | string | null | undefined,
+  legacyMode?: CredentialMode | null,
+): ProviderKeySource {
+  if (value === 'org_default' || value === 'agent_own' || value === 'finova_managed') {
+    return value;
+  }
+  return legacyMode === 'BYOK' ? 'org_default' : DEFAULT_KEY_SOURCE;
+}
+
+function keySourceValue(value: unknown): ProviderKeySource {
+  return keySourceOrDefault(typeof value === 'string' ? value : undefined);
+}
+
+function credentialModeForKeySource(value: ProviderKeySource): CredentialMode {
+  return value === 'finova_managed' ? 'FINOVA_MANAGED' : 'BYOK';
+}
+
+function providerOrgCredentialStatus(
+  provider: CatalogProviderDto | null | undefined,
+): 'not_configured' | 'configured_valid' | 'configured_invalid' {
+  if (provider?.orgCredentialStatus) {
+    return provider.orgCredentialStatus;
+  }
+  if (!provider?.organizationCredential?.hasSecret) {
+    return 'not_configured';
+  }
+  return provider.organizationCredential.status === 'VALID'
+    ? 'configured_valid'
+    : 'configured_invalid';
+}
+
+function keySourceLabel(value: ProviderKeySource): string {
+  if (value === 'org_default') {
+    return 'Saved Workspace Key';
+  }
+  if (value === 'agent_own') {
+    return 'This Agent Only';
+  }
+  return 'Finova Managed';
+}
+
+function keySourceDescription(
+  value: ProviderKeySource,
+  providerLabel: string,
+): string {
+  if (value === 'org_default') {
+    return `Uses the validated ${providerLabel} key from provider settings.`;
+  }
+  if (value === 'agent_own') {
+    return `Stores a ${providerLabel} key only on this agent version.`;
+  }
+  return 'Uses platform-managed provider infrastructure.';
+}
+
+function keySourceStatusText(
+  keySource: ProviderKeySource,
+  orgStatus: 'not_configured' | 'configured_valid' | 'configured_invalid',
+  finovaReady: boolean,
+  hasAgentKey: boolean,
+): string {
+  if (keySource === 'finova_managed') {
+    return finovaReady ? 'Ready' : 'Setup Required';
+  }
+  if (keySource === 'org_default') {
+    if (orgStatus === 'configured_valid') {
+      return 'Validated';
+    }
+    return orgStatus === 'configured_invalid' ? 'Invalid' : 'Setup Required';
+  }
+  return hasAgentKey ? 'Configured' : 'Setup Required';
+}
+
+function providerCredentialDescription(provider: CatalogProviderDto): string {
+  const credential = provider.organizationCredential;
+  if (credential?.status === 'INVALID') {
+    return 'Invalid credentials';
+  }
+  if (provider.finovaManagedAvailable) {
+    return 'Finova Managed available';
+  }
+  if (credential?.hasSecret) {
+    return credential.status === 'VALID'
+      ? 'BYOK key validated'
+      : 'BYOK key configured';
+  }
+  return 'Setup required in provider settings';
 }
 
 function versionTtsProvider(

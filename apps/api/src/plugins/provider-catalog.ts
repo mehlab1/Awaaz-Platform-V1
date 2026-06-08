@@ -3,6 +3,7 @@ export type PluginKind = 'tts' | 'llm' | 'stt';
 export type ProviderValidationStyle =
   | 'rime-voices'
   | 'groq-models'
+  | 'openai-models'
   | 'anthropic-models'
   | 'deepgram-projects'
   | 'cartesia-voices'
@@ -24,6 +25,8 @@ export interface ProviderDefinition {
   models?: readonly ProviderModelDefinition[];
   finovaEnvVars: string[];
   validationStyle: ProviderValidationStyle;
+  runtimeSupported?: boolean;
+  runtimeUnsupportedReason?: string;
 }
 
 export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
@@ -88,7 +91,7 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
   {
     id: 'anthropic',
     kind: 'llm',
-    label: 'Anthropic Claude (Coming Soon)',
+    label: 'Anthropic Claude',
     defaultModel: 'claude-sonnet-4-0',
     models: [
       {
@@ -96,13 +99,24 @@ export const PROVIDER_CATALOG: readonly ProviderDefinition[] = [
         label: 'Claude Sonnet 4.0',
         default: true,
       },
-      {
-        id: 'claude-opus-4-0',
-        label: 'Claude Opus 4.0',
-      },
     ],
     finovaEnvVars: ['FINOVA_ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY'],
     validationStyle: 'anthropic-models',
+  },
+  {
+    id: 'openai',
+    kind: 'llm',
+    label: 'OpenAI',
+    defaultModel: 'gpt-4o',
+    models: [
+      {
+        id: 'gpt-4o',
+        label: 'GPT-4o',
+        default: true,
+      },
+    ],
+    finovaEnvVars: ['FINOVA_OPENAI_API_KEY', 'OPENAI_API_KEY'],
+    validationStyle: 'openai-models',
   },
   {
     id: 'deepgram',

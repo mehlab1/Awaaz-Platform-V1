@@ -36,14 +36,17 @@ export interface WorkerAgentConfigMetadata {
   ttsModel: string;
   ttsVoiceId: string;
   ttsCredentialMode: ProviderCredentialMode;
+  ttsKeySource: string;
   ttsKeyFingerprint: string;
   sttProviderId: string;
   sttModel: string;
   sttCredentialMode: ProviderCredentialMode;
+  sttKeySource: string;
   sttKeyFingerprint?: string;
   llmProviderId: string;
   llmModel: string;
   llmCredentialMode: ProviderCredentialMode;
+  llmKeySource: string;
   llmKeyFingerprint?: string;
   agentVersionNumber: number;
 }
