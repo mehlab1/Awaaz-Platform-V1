@@ -126,6 +126,48 @@ export class CreateAgentVersionDto {
   @MaxLength(10_000)
   ttsAgentKey?: string;
 
+  @ApiPropertyOptional({ example: 'rime', maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  fallbackTtsProviderId?: string;
+
+  @ApiPropertyOptional({ example: 'rime-marsh', maxLength: 200 })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  fallbackTtsVoiceId?: string;
+
+  @ApiPropertyOptional({ example: 'v1', maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  fallbackTtsModel?: string;
+
+  @ApiPropertyOptional({ enum: ProviderCredentialMode })
+  @IsOptional()
+  @IsEnum(ProviderCredentialMode)
+  fallbackTtsCredentialMode?: ProviderCredentialMode;
+
+  @ApiPropertyOptional({ enum: PROVIDER_KEY_SOURCES })
+  @IsOptional()
+  @IsIn(PROVIDER_KEY_SOURCES)
+  fallbackTtsKeySource?: string;
+
+  @ApiPropertyOptional({
+    example: 'sk_provider_secret',
+    maxLength: 10000,
+    description: 'Write-only agent-owned TTS key when fallbackTtsKeySource is agent_own.',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(10_000)
+  fallbackTtsAgentKey?: string;
+
   @ApiPropertyOptional({ example: 0.7, minimum: 0, maximum: 2 })
   @IsOptional()
   @IsNumber()

@@ -149,6 +149,32 @@ export class InternalService {
       'LLM',
       false,
     );
+
+    let fallbackTtsSecret = null;
+    let fallbackTtsVoice = null;
+    let fallbackTtsKeySource = undefined;
+
+    if (version.fallbackTtsProviderId && version.fallbackTtsVoiceId) {
+      fallbackTtsVoice = await this.voices.resolveTtsForRuntime(
+        version.fallbackTtsVoiceId,
+        agent.organizationId,
+      );
+      const fallbackTtsCredentialMode =
+        version.fallbackTtsCredentialMode ?? ProviderCredentialMode.FINOVA_MANAGED;
+      fallbackTtsKeySource = this.normalizeKeySource(
+        version.fallbackTtsKeySource,
+        fallbackTtsCredentialMode,
+      );
+      fallbackTtsSecret = await this.workerProviderSecretBySource(
+        agent.organizationId,
+        fallbackTtsVoice.providerId,
+        fallbackTtsKeySource,
+        fallbackTtsCredentialMode,
+        version.fallbackTtsKeyEncrypted,
+        'TTS',
+        true,
+      );
+    }
     const keyFingerprint = ttsSecret.keyFingerprint;
 
     this.logger.log(
@@ -189,6 +215,14 @@ export class InternalService {
           modelId: voice.modelId,
           language: voice.lang,
         },
+        ...(fallbackTtsVoice && fallbackTtsSecret ? {
+          fallbackTts: {
+            providerId: fallbackTtsVoice.providerId,
+            voiceId: fallbackTtsVoice.providerVoiceId,
+            modelId: fallbackTtsVoice.modelId,
+            language: fallbackTtsVoice.lang,
+          }
+        } : {}),
       },
       credentials: {
         tts: {
@@ -199,6 +233,14 @@ export class InternalService {
         },
         ...(sttSecret ? { stt: sttSecret } : {}),
         ...(llmSecret ? { llm: llmSecret } : {}),
+        ...(fallbackTtsVoice && fallbackTtsSecret ? {
+          fallbackTts: {
+            providerId: fallbackTtsVoice.providerId,
+            mode: fallbackTtsSecret.mode,
+            apiKey: fallbackTtsSecret.apiKey,
+            keyFingerprint: fallbackTtsSecret.keyFingerprint,
+          }
+        } : {}),
       },
       metadata: {
         ttsProviderId: voice.providerId,
@@ -217,6 +259,14 @@ export class InternalService {
         llmCredentialMode,
         llmKeySource,
         ...(llmSecret ? { llmKeyFingerprint: llmSecret.keyFingerprint } : {}),
+        ...(fallbackTtsVoice && fallbackTtsSecret ? {
+          fallbackTtsProviderId: fallbackTtsVoice.providerId,
+          fallbackTtsModel: fallbackTtsVoice.modelId,
+          fallbackTtsVoiceId: fallbackTtsVoice.providerVoiceId,
+          fallbackTtsCredentialMode: fallbackTtsSecret.mode,
+          fallbackTtsKeySource,
+          fallbackTtsKeyFingerprint: fallbackTtsSecret.keyFingerprint,
+        } : {}),
         agentVersionNumber: version.versionNumber,
       },
     };

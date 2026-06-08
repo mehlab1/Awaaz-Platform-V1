@@ -72,11 +72,20 @@ export interface WorkerAgentConfigResponse {
     stt: WorkerPipelineSttConfig;
     llm: WorkerPipelineLlmConfig;
     tts: WorkerPipelineTtsConfig;
+    fallbackTts?: WorkerPipelineTtsConfig;
   };
   credentials: {
     tts: WorkerTtsCredentials;
     stt?: WorkerProviderCredentials;
     llm?: WorkerProviderCredentials;
+    fallbackTts?: WorkerTtsCredentials;
   };
-  metadata: WorkerAgentConfigMetadata;
+  metadata: WorkerAgentConfigMetadata & {
+    fallbackTtsProviderId?: string;
+    fallbackTtsModel?: string;
+    fallbackTtsVoiceId?: string;
+    fallbackTtsCredentialMode?: ProviderCredentialMode;
+    fallbackTtsKeySource?: string;
+    fallbackTtsKeyFingerprint?: string;
+  };
 }

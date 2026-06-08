@@ -331,6 +331,7 @@ export class AgentsService {
           ttsKeyEncrypted: true,
           llmKeyEncrypted: true,
           sttKeyEncrypted: true,
+          fallbackTtsKeyEncrypted: true,
         },
       });
       if (!existing) {
@@ -486,6 +487,12 @@ export class AgentsService {
             sttCredentialMode: source.sttCredentialMode,
             sttKeySource: source.sttKeySource,
             sttKeyEncrypted: source.sttKeyEncrypted,
+            fallbackTtsProviderId: source.fallbackTtsProviderId,
+            fallbackTtsModel: source.fallbackTtsModel,
+            fallbackTtsVoiceId: source.fallbackTtsVoiceId,
+            fallbackTtsCredentialMode: source.fallbackTtsCredentialMode,
+            fallbackTtsKeySource: source.fallbackTtsKeySource,
+            fallbackTtsKeyEncrypted: source.fallbackTtsKeyEncrypted,
             temperature: source.temperature,
             maxTokens: source.maxTokens,
             firstMessage: source.firstMessage,
@@ -924,6 +931,7 @@ export class AgentsService {
           ttsKeyEncrypted: string | null;
           llmKeyEncrypted: string | null;
           sttKeyEncrypted: string | null;
+          fallbackTtsKeyEncrypted: string | null;
         }
       | null,
   ) {
@@ -990,6 +998,31 @@ export class AgentsService {
       agentKey: dto.sttAgentKey,
       existingEncryptedKey: existing?.sttKeyEncrypted ?? null,
     });
+    
+    let fallbackTtsKey = null;
+    const fallbackTtsProviderId = dto.fallbackTtsProviderId?.trim().toLowerCase() || null;
+    const fallbackTtsModel = dto.fallbackTtsModel?.trim() || null;
+    const fallbackTtsVoiceId = dto.fallbackTtsVoiceId?.trim() || null;
+
+    if (fallbackTtsProviderId) {
+      if (!fallbackTtsVoiceId) {
+        throw new BadRequestException('Fallback TTS voice is required when fallback TTS provider is set');
+      }
+      if (fallbackTtsProviderId === resolvedVoice.providerId) {
+        throw new BadRequestException('Fallback TTS provider cannot be the same as the primary TTS provider');
+      }
+      
+      fallbackTtsKey = await this.resolveKeySourceForSave({
+        label: 'Fallback TTS',
+        organizationId,
+        providerId: fallbackTtsProviderId,
+        requestedKeySource: dto.fallbackTtsKeySource,
+        legacyCredentialMode: dto.fallbackTtsCredentialMode,
+        agentKey: dto.fallbackTtsAgentKey,
+        existingEncryptedKey: existing?.fallbackTtsKeyEncrypted ?? null,
+      });
+    }
+
     return {
       voiceId: resolvedVoice.storedVoiceId,
       model: llmModel,
@@ -999,6 +1032,12 @@ export class AgentsService {
       ttsCredentialMode: ttsKey.credentialMode,
       ttsKeySource: ttsKey.keySource,
       ttsKeyEncrypted: ttsKey.encryptedKey,
+      fallbackTtsProviderId,
+      fallbackTtsModel,
+      fallbackTtsVoiceId,
+      fallbackTtsCredentialMode: fallbackTtsKey?.credentialMode,
+      fallbackTtsKeySource: fallbackTtsKey?.keySource,
+      fallbackTtsKeyEncrypted: fallbackTtsKey?.encryptedKey,
       llmProviderId,
       llmModel,
       llmCredentialMode: llmKey.credentialMode,
@@ -1013,7 +1052,7 @@ export class AgentsService {
   }
 
   private async resolveKeySourceForSave(input: {
-    label: 'TTS' | 'LLM' | 'STT';
+    label: 'TTS' | 'LLM' | 'STT' | 'Fallback TTS';
     organizationId: string;
     providerId: string;
     requestedKeySource?: string;
@@ -1102,6 +1141,7 @@ export class AgentsService {
       ttsKeyEncrypted,
       llmKeyEncrypted,
       sttKeyEncrypted,
+      fallbackTtsKeyEncrypted,
       ...safeVersion
     } = version;
     return {
@@ -1109,6 +1149,7 @@ export class AgentsService {
       ttsHasAgentKey: Boolean(ttsKeyEncrypted),
       llmHasAgentKey: Boolean(llmKeyEncrypted),
       sttHasAgentKey: Boolean(sttKeyEncrypted),
+      fallbackTtsHasAgentKey: Boolean(fallbackTtsKeyEncrypted),
     };
   }
 }

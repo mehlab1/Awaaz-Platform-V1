@@ -283,6 +283,12 @@ interface AgentVersion {
   ttsCredentialMode?: CredentialMode | null;
   ttsKeySource?: ProviderKeySource | null;
   ttsHasAgentKey?: boolean;
+  fallbackTtsProviderId?: string | null;
+  fallbackTtsModel?: string | null;
+  fallbackTtsVoiceId?: string | null;
+  fallbackTtsCredentialMode?: CredentialMode | null;
+  fallbackTtsKeySource?: ProviderKeySource | null;
+  fallbackTtsHasAgentKey?: boolean;
   llmProviderId?: string | null;
   llmModel?: string | null;
   llmCredentialMode?: CredentialMode | null;
@@ -426,6 +432,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   const [llmKeySource, setLlmKeySource] = useState<ProviderKeySource>(DEFAULT_KEY_SOURCE);
   const [sttKeySource, setSttKeySource] = useState<ProviderKeySource>(DEFAULT_KEY_SOURCE);
   const [agentKeyDrafts, setAgentKeyDrafts] = useState<Record<string, string>>({});
+  const [fallbackTtsProvider, setFallbackTtsProvider] = useState<VoiceProviderId | ''>('');
+  const [fallbackVoiceId, setFallbackVoiceId] = useState('');
+  const [fallbackTtsCredentialMode, setFallbackTtsCredentialMode] = useState<CredentialMode>(DEFAULT_CREDENTIAL_MODE);
+  const [fallbackTtsKeySource, setFallbackTtsKeySource] = useState<ProviderKeySource>(DEFAULT_KEY_SOURCE);
+  const [voiceModalTarget, setVoiceModalTarget] = useState<'primary' | 'fallback'>('primary');
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [promptHydrated, setPromptHydrated] = useState(false);
 
@@ -474,14 +485,16 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
 
   useEffect(() => {
     if (voiceModalOpen) {
-      const currentVoice = voices.find((voice) => voice.rimeVoiceId === selectedVoiceId);
-      setTempSelectedVoiceId(selectedVoiceId);
-      setSelectedVoiceProvider(currentVoice ? voiceProviderId(currentVoice) : selectedTtsProvider);
+      const targetVoiceId = voiceModalTarget === 'fallback' ? fallbackVoiceId : selectedVoiceId;
+      const targetProvider = voiceModalTarget === 'fallback' ? fallbackTtsProvider : selectedTtsProvider;
+      const currentVoice = voices.find((voice) => voice.rimeVoiceId === targetVoiceId);
+      setTempSelectedVoiceId(targetVoiceId);
+      setSelectedVoiceProvider(currentVoice ? voiceProviderId(currentVoice) : (targetProvider || 'rime'));
       setVoiceGenderFilter('all');
       setVoiceAccentFilter('all');
       setVoiceTypeFilter('all');
     }
-  }, [voiceModalOpen, selectedTtsProvider, selectedVoiceId, voices]);
+  }, [voiceModalOpen, selectedTtsProvider, selectedVoiceId, fallbackTtsProvider, fallbackVoiceId, voiceModalTarget, voices]);
 
   useEffect(() => {
     promptDraftDispatchedRef.current = false;
@@ -499,6 +512,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setTtsKeySource(DEFAULT_KEY_SOURCE);
     setLlmKeySource(DEFAULT_KEY_SOURCE);
     setSttKeySource(DEFAULT_KEY_SOURCE);
+    setFallbackTtsProvider('');
+    setFallbackVoiceId('');
+    setFallbackTtsCredentialMode(DEFAULT_CREDENTIAL_MODE);
+    setFallbackTtsKeySource(DEFAULT_KEY_SOURCE);
     setAgentKeyDrafts({});
     setSelectedVersionId(null);
     setAllVersionsLoaded(false);
@@ -760,6 +777,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setSelectedSttProvider(baselineVersion?.sttProviderId ?? DEFAULT_STT_PROVIDER);
     setSelectedModelId(baselineVersion?.model ?? DEFAULT_LLM_MODEL);
     setSelectedSttModel(baselineVersion?.sttModel ?? DEFAULT_STT_MODEL);
+    setFallbackTtsProvider(baselineVersion?.fallbackTtsProviderId ?? '');
+    setFallbackVoiceId(baselineVersion?.fallbackTtsVoiceId ?? '');
     applyVersionKeySources(baselineVersion);
     setSelectedVersionId(baselineVersion?.id ?? null);
     setPromptHydrated(true);
@@ -1035,6 +1054,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(version.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(version.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(version.sttModel ?? DEFAULT_STT_MODEL);
+      setFallbackTtsProvider(version.fallbackTtsProviderId ?? '');
+      setFallbackVoiceId(version.fallbackTtsVoiceId ?? '');
       applyVersionKeySources(version);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
@@ -1083,6 +1104,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       setSelectedSttProvider(restored.sttProviderId ?? DEFAULT_STT_PROVIDER);
       setSelectedModelId(restored.model ?? DEFAULT_LLM_MODEL);
       setSelectedSttModel(restored.sttModel ?? DEFAULT_STT_MODEL);
+      setFallbackTtsProvider(restored.fallbackTtsProviderId ?? '');
+      setFallbackVoiceId(restored.fallbackTtsVoiceId ?? '');
       applyVersionKeySources(restored);
       setDraftPrompt('');
       setOpenVersionMenuId(null);
@@ -1187,6 +1210,11 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       ttsKeySource: ttsKeySourceForVersion,
       llmKeySource: llmKeySourceForVersion,
       sttKeySource: sttKeySourceForVersion,
+      fallbackTtsProviderId: fallbackTtsProvider || null,
+      fallbackTtsModel: null,
+      fallbackTtsVoiceId: fallbackVoiceId || null,
+      fallbackTtsCredentialMode,
+      fallbackTtsKeySource,
       temperature: source?.temperature ?? 0.7,
       maxTokens: source?.maxTokens ?? 1024,
       endCallPhrases: source?.endCallPhrases ?? [],
@@ -1194,6 +1222,7 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     const ttsAgentKey = agentKeyDrafts.tts?.trim();
     const llmAgentKey = agentKeyDrafts.llm?.trim();
     const sttAgentKey = agentKeyDrafts.stt?.trim();
+    const fallbackTtsAgentKey = agentKeyDrafts.fallbackTts?.trim();
     if (ttsKeySourceForVersion === 'agent_own' && ttsAgentKey) {
       body.ttsAgentKey = ttsAgentKey;
     }
@@ -1202,6 +1231,9 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     }
     if (sttKeySourceForVersion === 'agent_own' && sttAgentKey) {
       body.sttAgentKey = sttAgentKey;
+    }
+    if (fallbackTtsKeySource === 'agent_own' && fallbackTtsAgentKey) {
+      body.fallbackTtsAgentKey = fallbackTtsAgentKey;
     }
     const fm = source?.firstMessage ?? undefined;
     if (fm !== undefined && fm !== null && fm.length > 0) {
@@ -1408,6 +1440,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
       ttsKeySource: ProviderKeySource;
       llmKeySource: ProviderKeySource;
       sttKeySource: ProviderKeySource;
+      fallbackTtsProviderId?: string | null;
+      fallbackTtsVoiceId?: string | null;
+      fallbackTtsCredentialMode?: CredentialMode | null;
+      fallbackTtsKeySource?: ProviderKeySource | null;
     }> = {},
     options: { toastMessage?: string; reloadCatalog?: boolean } = {},
   ): Promise<AgentVersion | null> => {
@@ -1473,6 +1509,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             ttsKeySource: overrides.ttsKeySource ?? ttsKeySource,
             llmKeySource: overrides.llmKeySource ?? llmKeySource,
             sttKeySource: overrides.sttKeySource ?? sttKeySource,
+            fallbackTtsProviderId: overrides.fallbackTtsProviderId !== undefined ? overrides.fallbackTtsProviderId : (fallbackTtsProvider || null),
+            fallbackTtsVoiceId: overrides.fallbackTtsVoiceId !== undefined ? overrides.fallbackTtsVoiceId : (fallbackVoiceId || null),
+            fallbackTtsCredentialMode: overrides.fallbackTtsCredentialMode !== undefined ? overrides.fallbackTtsCredentialMode : fallbackTtsCredentialMode,
+            fallbackTtsKeySource: overrides.fallbackTtsKeySource !== undefined ? overrides.fallbackTtsKeySource : fallbackTtsKeySource,
             ...(agentKeyDrafts.tts?.trim() &&
             (overrides.ttsKeySource ?? ttsKeySource) === 'agent_own'
               ? { ttsAgentKey: agentKeyDrafts.tts.trim() }
@@ -1484,6 +1524,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
             ...(agentKeyDrafts.stt?.trim() &&
             (overrides.sttKeySource ?? sttKeySource) === 'agent_own'
               ? { sttAgentKey: agentKeyDrafts.stt.trim() }
+              : {}),
+            ...(agentKeyDrafts.fallbackTts?.trim() &&
+            (overrides.fallbackTtsKeySource ?? fallbackTtsKeySource) === 'agent_own'
+              ? { fallbackTtsAgentKey: agentKeyDrafts.fallbackTts.trim() }
               : {}),
             temperature: selectedVersion.temperature,
             maxTokens: selectedVersion.maxTokens,
@@ -1539,6 +1583,17 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
   };
 
   const onVoiceSelect = async (voiceId: string) => {
+    if (voiceModalTarget === 'fallback') {
+      const nextVoice = voices.find((voice) => voice.rimeVoiceId === voiceId) ?? null;
+      const nextTtsProvider = voiceProviderId(nextVoice);
+      setFallbackVoiceId(voiceId);
+      setFallbackTtsProvider(nextTtsProvider);
+      setVoiceModalOpen(false);
+      setVoiceSearchQuery('');
+      setVoiceModalTarget('primary');
+      return;
+    }
+
     const nextVoice = voices.find((voice) => voice.rimeVoiceId === voiceId) ?? null;
     const nextTtsProvider = voiceProviderId(nextVoice);
     setSelectedVoiceId(voiceId);
@@ -1937,6 +1992,8 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
     setTtsKeySource(keySourceOrDefault(version?.ttsKeySource, version?.ttsCredentialMode));
     setLlmKeySource(keySourceOrDefault(version?.llmKeySource, version?.llmCredentialMode));
     setSttKeySource(keySourceOrDefault(version?.sttKeySource, version?.sttCredentialMode));
+    setFallbackTtsCredentialMode(credentialModeOrDefault(version?.fallbackTtsCredentialMode));
+    setFallbackTtsKeySource(keySourceOrDefault(version?.fallbackTtsKeySource, version?.fallbackTtsCredentialMode));
     setAgentKeyDrafts({});
   };
 
@@ -2948,7 +3005,10 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                     size="sm"
                     className="h-8 shrink-0 text-xs"
                     disabled={saveBusy !== null || voiceSaveBusy}
-                    onClick={() => setVoiceModalOpen(true)}
+                    onClick={() => {
+                      setVoiceModalTarget('primary');
+                      setVoiceModalOpen(true);
+                    }}
                   >
                     Browse
                   </Button>
@@ -2963,6 +3023,52 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 hasAgentKey={Boolean(selectedVersion?.ttsHasAgentKey)}
                 onAgentKeyDraftChange={(value) =>
                   setAgentKeyDrafts((current) => ({ ...current, tts: value }))
+                }
+              />
+
+              <PipelineProviderCard
+                title="Fallback Text-to-Speech (Optional)"
+                providerValue={fallbackTtsProvider || ''}
+                providerOptions={[{ value: '', label: 'None' }, ...ttsProviderOptions]}
+                onProviderChange={(providerId) => {
+                  setFallbackTtsProvider(providerId);
+                  if (!providerId) setFallbackVoiceId('');
+                }}
+                detailLabel="Voice"
+                detailSummary={(voices.find(v => v.rimeVoiceId === fallbackVoiceId)?.name ?? fallbackVoiceId) || 'Select a voice...'}
+                detailContent={
+                  fallbackVoiceId ? (
+                    <SelectedVoiceTextarea
+                      voice={voices.find(v => v.rimeVoiceId === fallbackVoiceId)}
+                      voiceId={fallbackVoiceId}
+                    />
+                  ) : null
+                }
+                detailAction={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 shrink-0 text-xs"
+                    disabled={saveBusy !== null || voiceSaveBusy || !fallbackTtsProvider}
+                    onClick={() => {
+                      setVoiceModalTarget('fallback');
+                      setVoiceModalOpen(true);
+                    }}
+                  >
+                    Browse
+                  </Button>
+                }
+                keySource={fallbackTtsKeySource}
+                onKeySourceChange={(value) => {
+                  setFallbackTtsKeySource(value);
+                  setFallbackTtsCredentialMode(credentialModeForKeySource(value));
+                }}
+                provider={providerMeta(fallbackTtsProvider || '')}
+                agentKeyDraft={agentKeyDrafts.fallbackTts ?? ''}
+                hasAgentKey={Boolean(selectedVersion?.fallbackTtsHasAgentKey)}
+                onAgentKeyDraftChange={(value) =>
+                  setAgentKeyDrafts((current) => ({ ...current, fallbackTts: value }))
                 }
               />
 

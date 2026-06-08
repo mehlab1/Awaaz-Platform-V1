@@ -214,6 +214,12 @@ model AgentVersion {
   ttsCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
   ttsKeySource  String   @default("finova_managed") @map("tts_key_source")
   ttsKeyEncrypted String? @db.Text @map("tts_key_encrypted")
+  fallbackTtsProviderId String? @map("fallback_tts_provider_id")
+  fallbackTtsModel      String? @map("fallback_tts_model")
+  fallbackTtsVoiceId    String? @map("fallback_tts_voice_id")
+  fallbackTtsCredentialMode ProviderCredentialMode? @map("fallback_tts_credential_mode")
+  fallbackTtsKeySource  String? @map("fallback_tts_key_source")
+  fallbackTtsKeyEncrypted String? @db.Text @map("fallback_tts_key_encrypted")
   llmProviderId String   @default("groq")
   llmModel      String?
   llmCredentialMode ProviderCredentialMode @default(FINOVA_MANAGED)
