@@ -192,7 +192,11 @@ export function AiProvidersClient() {
         <Tabs defaultValue="llm" className="w-full">
           <TabsList className="mb-6 grid w-full grid-cols-3 lg:w-[400px]">
             {(Object.keys(providersByKind) as ProviderKind[]).map((kind) => (
-              <TabsTrigger key={kind} value={kind}>
+              <TabsTrigger 
+                key={kind} 
+                value={kind}
+                className="data-[state=active]:bg-zinc-900 data-[state=active]:text-zinc-50 dark:data-[state=active]:bg-zinc-50 dark:data-[state=active]:text-zinc-900 data-[state=active]:shadow-md"
+              >
                 {KIND_LABELS[kind]}
               </TabsTrigger>
             ))}
@@ -258,6 +262,11 @@ function ProviderCredentialCard({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMessage(null);
+    setError(null);
+  }, [draft.apiKey, draft.credentialMode, draft.metadata]);
 
   const handleSave = async () => {
     setBusy(true);
@@ -336,7 +345,7 @@ function ProviderCredentialCard({
       hasCredential);
 
   return (
-    <article className="rounded-lg border border-border/60 bg-background p-4 shadow-sm">
+    <article className="rounded-lg border-2 border-border/80 bg-background p-4 shadow-sm transition-shadow hover:shadow-md">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
