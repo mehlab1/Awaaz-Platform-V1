@@ -25,12 +25,6 @@ import { cn } from '@/lib/utils';
 
 type ProviderKind = 'llm' | 'stt' | 'tts';
 
-interface VoiceOption {
-  rimeVoiceId: string;
-  name: string;
-  provider?: string | null;
-}
-
 type ProviderDraft = {
   apiKey: string;
   credentialMode: CredentialMode;
@@ -68,35 +62,6 @@ export function AiProvidersClient() {
   } = useProviderCredentials();
   const { apiCall } = useOrgContext();
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({});
-  const [voices, setVoices] = useState<VoiceOption[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!activeOrgId) {
-      setVoices([]);
-      return undefined;
-    }
-    apiCall('/api/v1/voices', { method: 'GET' })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(await response.text() || response.statusText);
-        }
-        return response.json() as Promise<VoiceOption[]>;
-      })
-      .then((rows) => {
-        if (!cancelled) {
-          setVoices(rows);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setVoices([]);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeOrgId, apiCall]);
 
   useEffect(() => {
     const providers = catalog.data ?? [];
