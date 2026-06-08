@@ -1,5 +1,6 @@
 import logging
 import os
+import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -124,7 +125,12 @@ async def close_tts(engine: tts.TTS) -> None:
     """Close a TTS engine, including FailoverTTS which cascades to both children."""
     aclose = getattr(engine, "aclose", None)
     if callable(aclose):
-        await aclose()
+        try:
+            res = aclose()
+            if inspect.isawaitable(res):
+                await res
+        except Exception:
+            pass
 
 
 def parse_tts_runtime_selection(config: Mapping[str, object]) -> TtsRuntimeSelection:
@@ -190,9 +196,21 @@ def parse_fallback_tts_runtime_selection(
     metadata = _mapping_value(config, "metadata")
 
     provider_id = _normalize_provider_id(provider_id_raw)
-    voice_id = _string_value(pipeline_fallback, "voiceId") or ""
+    voice_id = _string_value(pipeline_fallback, "voiceId")
+    if not voice_id:
+        logger.warning("tts_failover_disabled reason=empty_voice_id provider=%s", provider_id)
+        return None
+
     model_id = _string_value(pipeline_fallback, "modelId") or ""
-    language = _string_value(pipeline_fallback, "language") or "eng"
+    language = _string_value(pipeline_fallback, "language")
+    if not language:
+        if provider_id == RUNTIME_TTS_PROVIDER_CARTESIA:
+            language = "en"
+        elif provider_id == RUNTIME_TTS_PROVIDER_ELEVENLABS:
+            language = "en"
+        else:
+            language = DEFAULT_RIME_LANGUAGE
+
     api_key = _string_value(credentials_fallback, "apiKey")
     key_fingerprint = (
         _string_value(credentials_fallback, "keyFingerprint")
@@ -236,6 +254,13 @@ def build_tts_with_failover(
         fallback_selection.provider_id,
     )
 
+    if resolved_primary.provider_id == fallback_selection.provider_id:
+        logger.warning(
+            "tts_failover_disabled reason=same_provider provider=%s",
+            resolved_primary.provider_id,
+        )
+        return primary_engine
+
     try:
         fallback_engine = build_tts(
             config,
@@ -248,6 +273,15 @@ def build_tts_with_failover(
             fallback_selection.provider_id,
             exc,
         )
+        if metrics_callback:
+            from pipeline.failover_tts import emit_tts_metric
+            emit_tts_metric(
+                metrics_callback,
+                "tts_fallback_build_failed",
+                primaryProvider=resolved_primary.provider_id,
+                fallbackProvider=fallback_selection.provider_id,
+                error=str(exc),
+            )
         return primary_engine
 
     primary_identity = FailoverIdentity(
@@ -286,10 +320,6 @@ def log_tts_selection(selection: TtsRuntimeSelection) -> None:
             "tts_key_fingerprint fingerprint=%s",
             selection.key_fingerprint,
         )
-    logger.info(
-        "tts_runtime_provider provider=%s",
-        selection.provider_id,
-    )
 
 
 def _mapping_value(

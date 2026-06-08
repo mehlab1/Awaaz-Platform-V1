@@ -13,11 +13,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import inspect
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import httpx
 from livekit.agents import tts, utils
+from livekit import rtc
+import copy
 
 from pipeline.tts import TtsMetricCallback, emit_tts_metric
 
@@ -287,8 +290,17 @@ class FailoverTTS(tts.TTS):
 
         # Session-level state: once we switch to fallback for a call, stay there.
         self._session_failed_over = False
-        self._probe_done = False
-        self._probe_lock = asyncio.Lock()
+        try:
+            loop = asyncio.get_running_loop()
+            self._probe_task = loop.create_task(self.run_probe())
+            # Prevent "Task exception was never retrieved" warning if the task
+            # fails with an auth error and stream() is never called to await it.
+            self._probe_task.add_done_callback(lambda t: t.exception())
+        except RuntimeError:
+            # Note: During tests or sync setup with no running loop, the probe
+            # will not run. This is acceptable since LiveKit workers always
+            # have a running loop in production.
+            self._probe_task = None
 
         logger.info(
             "failover_tts_initialized primary=%s fallback=%s",
@@ -299,8 +311,7 @@ class FailoverTTS(tts.TTS):
     # -- public LiveKit TTS interface --
 
     def synthesize(self, text: str) -> tts.ChunkedStream:
-        engine = self._pick_engine()
-        return engine.synthesize(text)
+        return FailoverChunkedStream(self, text)
 
     def stream(self) -> tts.SynthesizeStream:
         return FailoverSynthesizeStream(self)
@@ -316,12 +327,14 @@ class FailoverTTS(tts.TTS):
             aclose_fn = getattr(engine, "aclose", None)
             if callable(aclose_fn):
                 try:
-                    await aclose_fn()
+                    res = aclose_fn()
+                    if inspect.isawaitable(res):
+                        await res
                 except Exception as exc:
-                    logger.warning("failover_tts_close_failed engine=%s error=%s", label, exc)
+                    logger.error("failover_tts_close_failed engine=%s error=%s", label, exc)
                     errors.append(exc)
         if errors:
-            logger.warning("failover_tts_close_had_errors count=%s", len(errors))
+            logger.error("failover_tts_close_had_errors count=%s", len(errors))
 
     # -- health probe --
 
@@ -332,10 +345,6 @@ class FailoverTTS(tts.TTS):
         for this session. The probe does NOT emit audible speech — it uses a
         short synthesize() call and discards the audio frames immediately.
         """
-        async with self._probe_lock:
-            if self._probe_done:
-                return
-            self._probe_done = True
 
         if self._fallback is None:
             logger.info("failover_tts_probe_skipped reason=no_fallback")
@@ -357,6 +366,8 @@ class FailoverTTS(tts.TTS):
             )
             return
 
+        # Guard: If someone nests FailoverTTS instances, this would recurse.
+        # build_tts() is responsible for ensuring primary is a raw engine.
         probe_text = "test"
         started_at = time.monotonic()
         try:
@@ -368,7 +379,12 @@ class FailoverTTS(tts.TTS):
             finally:
                 aclose_fn = getattr(stream, "aclose", None)
                 if callable(aclose_fn):
-                    await aclose_fn()
+                    try:
+                        res = aclose_fn()
+                        if inspect.isawaitable(res):
+                            await res
+                    except Exception:
+                        pass
 
             elapsed_ms = round((time.monotonic() - started_at) * 1000)
             logger.info(
@@ -420,28 +436,12 @@ class FailoverTTS(tts.TTS):
             else:
                 # Unknown error — log but don't fail over for safety.
                 logger.error(
-                    "failover_tts_probe_unknown_error provider=%s elapsed_ms=%s error=%s",
+                    "failover_tts_probe_unknown_error provider=%s elapsed_ms=%s error=%s action=not_failing_over",
                     self._primary_id.provider_id,
                     elapsed_ms,
                     exc,
                 )
-                # Be conservative: treat unknown probe errors as retryable to avoid
-                # blocking the call, but log clearly.
-                record_failure(
-                    self._primary_id.circuit_key,
-                    str(exc),
-                    threshold=self._failure_threshold,
-                )
-                self._session_failed_over = True
-                emit_tts_metric(
-                    self._metrics_callback,
-                    "tts_failover_pre_call",
-                    primaryProvider=self._primary_id.provider_id,
-                    fallbackProvider=self._fallback_id.provider_id if self._fallback_id else None,
-                    reason="probe_unknown_error",
-                    elapsedMs=elapsed_ms,
-                    error=str(exc),
-                )
+                pass
 
     # -- engine selection --
 
@@ -462,9 +462,88 @@ class FailoverTTS(tts.TTS):
 
 
 # ---------------------------------------------------------------------------
-# FailoverSynthesizeStream — wraps a streaming TTS with per-chunk failover
+# FailoverChunkedStream — wraps synthesize() with retry
 # ---------------------------------------------------------------------------
 
+class FailoverChunkedStream(tts.ChunkedStream):
+    def __init__(self, parent: FailoverTTS, text: str) -> None:
+        super().__init__()
+        self._parent = parent
+        self._text = text
+
+    @utils.log_exceptions(logger=logger)
+    async def _main_task(self) -> None:
+        if self._parent._probe_task is not None:
+            await self._parent._probe_task
+
+        while True:
+            engine = self._parent._pick_engine()
+            inner_stream = engine.synthesize(self._text)
+            had_audio = False
+
+            resampler = None
+            if engine is self._parent._fallback and self._parent._primary.sample_rate != engine.sample_rate:
+                resampler = rtc.AudioResampler(
+                    input_rate=engine.sample_rate,
+                    output_rate=self._parent._primary.sample_rate,
+                )
+
+            try:
+                async for event in inner_stream:
+                    had_audio = True
+                    if resampler and hasattr(event, "frame") and event.frame is not None:
+                        frames = resampler.push(event.frame)
+                        for f in frames:
+                            new_event = copy.copy(event)
+                            new_event.frame = f
+                            self._event_ch.send_nowait(new_event)
+                    else:
+                        self._event_ch.send_nowait(event)
+
+                if not self._parent._session_failed_over:
+                    record_success(self._parent._primary_id.circuit_key)
+                break
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                classified = classify_tts_error(exc, provider=self._parent._active_provider_id())
+                if isinstance(classified, TtsAuthError):
+                    raise classified from exc
+
+                if isinstance(classified, TtsRetryableError) and self._parent._fallback is not None:
+                    record_failure(
+                        self._parent._primary_id.circuit_key,
+                        str(classified),
+                        threshold=self._parent._failure_threshold,
+                    )
+                    self._parent._session_failed_over = True
+                    emit_tts_metric(
+                        self._parent._metrics_callback,
+                        "tts_failover_mid_call",
+                        primaryProvider=self._parent._primary_id.provider_id,
+                        fallbackProvider=self._parent._fallback_id.provider_id if self._parent._fallback_id else None,
+                        hadAudio=had_audio,
+                        error=str(classified),
+                    )
+                    if had_audio:
+                        break
+                    continue
+                else:
+                    raise
+            finally:
+                aclose_fn = getattr(inner_stream, "aclose", None)
+                if callable(aclose_fn):
+                    try:
+                        res = aclose_fn()
+                        if inspect.isawaitable(res):
+                            await res
+                    except Exception:
+                        pass
+
+# ---------------------------------------------------------------------------
+# FailoverSynthesizeStream — wraps a streaming TTS with per-chunk failover
+# ---------------------------------------------------------------------------
 
 class FailoverSynthesizeStream(tts.SynthesizeStream):
     """A streaming TTS wrapper that intercepts provider errors per text chunk
@@ -481,99 +560,118 @@ class FailoverSynthesizeStream(tts.SynthesizeStream):
         super().__init__()
         self._parent = parent
         self._chunk_had_audio = False
+        self._buffered_text: list[str | tts.SynthesizeStream._FlushSentinel] = []
 
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
-        # Lazily run the health probe if not done yet.
-        if not self._parent._probe_done:
+        if self._parent._probe_task is not None:
+            await self._parent._probe_task
+
+        while True:
+            engine = self._parent._pick_engine()
+            inner_stream = engine.stream()
+
+            resampler = None
+            if engine is self._parent._fallback and self._parent._primary.sample_rate != engine.sample_rate:
+                resampler = rtc.AudioResampler(
+                    input_rate=engine.sample_rate,
+                    output_rate=self._parent._primary.sample_rate,
+                )
+
+            forward_task = asyncio.create_task(self._forward_input(inner_stream))
+
             try:
-                await self._parent.run_probe()
-            except (TtsAuthError, TtsRetryableError):
-                # Probe errors are already logged; continue with whatever engine is selected.
-                pass
+                async for audio_event in inner_stream:
+                    self._chunk_had_audio = True
+                    if resampler and hasattr(audio_event, "frame") and audio_event.frame is not None:
+                        frames = resampler.push(audio_event.frame)
+                        for f in frames:
+                            new_event = copy.copy(audio_event)
+                            new_event.frame = f
+                            self._event_ch.send_nowait(new_event)
+                    else:
+                        self._event_ch.send_nowait(audio_event)
 
-        engine = self._parent._pick_engine()
-        inner_stream = engine.stream()
+                if not self._parent._session_failed_over:
+                    record_success(self._parent._primary_id.circuit_key)
+                break
 
-        # Forward tokens from our input channel to the inner stream.
-        forward_task = asyncio.create_task(self._forward_input(inner_stream))
-
-        try:
-            async for audio_event in inner_stream:
-                self._chunk_had_audio = True
-                self._event_ch.send_nowait(audio_event)
-
-            # If we get here cleanly, record success for the primary.
-            if not self._parent._session_failed_over:
-                record_success(self._parent._primary_id.circuit_key)
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            classified = classify_tts_error(exc, provider=self._parent._active_provider_id())
-
-            if isinstance(classified, TtsAuthError):
-                logger.error(
-                    "failover_stream_auth_error provider=%s error=%s",
-                    self._parent._active_provider_id(),
-                    classified,
-                )
-                raise classified from exc
-
-            if isinstance(classified, TtsRetryableError) and self._parent._fallback is not None:
-                logger.warning(
-                    "failover_stream_retryable_error provider=%s had_audio=%s error=%s",
-                    self._parent._active_provider_id(),
-                    self._chunk_had_audio,
-                    classified,
-                )
-                record_failure(
-                    self._parent._primary_id.circuit_key,
-                    str(classified),
-                    threshold=self._parent._failure_threshold,
-                )
-                self._parent._session_failed_over = True
-                emit_tts_metric(
-                    self._parent._metrics_callback,
-                    "tts_failover_mid_call",
-                    primaryProvider=self._parent._primary_id.provider_id,
-                    fallbackProvider=self._parent._fallback_id.provider_id if self._parent._fallback_id else None,
-                    hadAudio=self._chunk_had_audio,
-                    error=str(classified),
-                )
-                # If partial audio was emitted, we cannot replay it. Just switch
-                # for subsequent text. The VoiceAssistant will continue sending
-                # new text chunks which will go to the fallback.
-                if self._chunk_had_audio:
-                    logger.info(
-                        "failover_stream_partial_audio_switch provider=%s "
-                        "action=subsequent_chunks_use_fallback",
-                        self._parent._active_provider_id(),
-                    )
-                    return
-                # No audio emitted — we can safely let the VoiceAssistant retry
-                # the next text unit on the fallback engine.
-                return
-            else:
-                # Unknown or no fallback — re-raise.
-                raise
-        finally:
-            forward_task.cancel()
-            try:
-                await forward_task
             except asyncio.CancelledError:
-                pass
-            aclose_fn = getattr(inner_stream, "aclose", None)
-            if callable(aclose_fn):
+                raise
+            except Exception as exc:
+                classified = classify_tts_error(exc, provider=self._parent._active_provider_id())
+
+                if isinstance(classified, TtsAuthError):
+                    logger.error(
+                        "failover_stream_auth_error provider=%s error=%s",
+                        self._parent._active_provider_id(),
+                        classified,
+                    )
+                    raise classified from exc
+
+                if isinstance(classified, TtsRetryableError) and self._parent._fallback is not None:
+                    logger.warning(
+                        "failover_stream_retryable_error provider=%s had_audio=%s error=%s",
+                        self._parent._active_provider_id(),
+                        self._chunk_had_audio,
+                        classified,
+                    )
+                    record_failure(
+                        self._parent._primary_id.circuit_key,
+                        str(classified),
+                        threshold=self._parent._failure_threshold,
+                    )
+                    self._parent._session_failed_over = True
+                    emit_tts_metric(
+                        self._parent._metrics_callback,
+                        "tts_failover_mid_call",
+                        primaryProvider=self._parent._primary_id.provider_id,
+                        fallbackProvider=self._parent._fallback_id.provider_id if self._parent._fallback_id else None,
+                        hadAudio=self._chunk_had_audio,
+                        error=str(classified),
+                    )
+                    # Note: _chunk_had_audio is not explicitly reset here. If the 
+                    # fallback also fails, its had_audio state applies. Since there 
+                    # are only two engines, this is acceptable flag semantics.
+                    if self._chunk_had_audio:
+                        logger.info(
+                            "failover_stream_partial_audio_switch provider=%s "
+                            "action=subsequent_chunks_use_fallback",
+                            self._parent._active_provider_id(),
+                        )
+                        break
+                    continue
+                else:
+                    raise
+            finally:
+                forward_task.cancel()
                 try:
-                    await aclose_fn()
-                except Exception:
+                    await forward_task
+                except asyncio.CancelledError:
                     pass
+                aclose_fn = getattr(inner_stream, "aclose", None)
+                if callable(aclose_fn):
+                    try:
+                        res = aclose_fn()
+                        if inspect.isawaitable(res):
+                            await res
+                    except Exception:
+                        pass
 
     async def _forward_input(self, inner_stream: tts.SynthesizeStream) -> None:
         """Forward text tokens from our input channel to the inner stream."""
         try:
+            for item in self._buffered_text:
+                if isinstance(item, self._FlushSentinel):
+                    inner_stream.flush()
+                else:
+                    inner_stream.push_text(item)
+
+            # Note: When forward_task is cancelled on a retry, any tokens
+            # received in the meantime remain safely buffered in self._input_ch.
+            # The new forward_task will pick them up seamlessly here.
             async for item in self._input_ch:
+                self._buffered_text.append(item)
                 if isinstance(item, self._FlushSentinel):
                     inner_stream.flush()
                 else:

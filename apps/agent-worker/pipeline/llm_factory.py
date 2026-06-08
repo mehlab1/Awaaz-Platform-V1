@@ -22,7 +22,9 @@ RUNTIME_LLM_PROVIDERS = frozenset(
 DEFAULT_LLM_PROVIDER = RUNTIME_LLM_PROVIDER_GROQ
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_OPENAI_MODEL = "gpt-4o"
-DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-0"
+DEFAULT_ANTHROPIC_MODEL = "claude-3-5-sonnet-latest"
+# Groq supports OpenAI compatibility routing. These are Groq's model identifiers
+# for those routed models, not native OpenAI models.
 GROQ_RUNTIME_MODELS = frozenset(
     {
         "llama-3.3-70b-versatile",
@@ -114,11 +116,15 @@ def parse_llm_runtime_selection(config: Mapping[str, object]) -> LlmRuntimeSelec
     credentials_llm = _mapping_value(credentials, "llm") if credentials else None
     metadata = _mapping_value(config, "metadata")
 
+    # llmProviderId in metadata is a legacy fallback path from older configs.
+    # We prioritize the new pipeline config if present.
     provider_id = _normalize_provider_id(
         _string_value(pipeline_llm, "providerId")
         or _string_value(metadata, "llmProviderId")
         or DEFAULT_LLM_PROVIDER,
     )
+    # If the user leaves the model field blank (or if it's missing in legacy config),
+    # we explicitly assign the provider's default model here.
     model_id = (
         _string_value(pipeline_llm, "model")
         or _string_value(metadata, "llmModel")

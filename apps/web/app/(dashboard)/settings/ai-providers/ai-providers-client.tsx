@@ -68,8 +68,6 @@ export function AiProvidersClient() {
   const { apiCall } = useOrgContext();
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({});
   const [voices, setVoices] = useState<VoiceOption[]>([]);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,53 +130,32 @@ export function AiProvidersClient() {
 
   const saveProvider = async (provider: CatalogProvider) => {
     const draft = draftFor(drafts, provider.id);
-    setMessage(null);
-    setError(null);
-    try {
-      await upsertCredential.mutateAsync({
-        providerId: provider.id,
-        input: {
-          credentialMode: draft.credentialMode,
-          ...(draft.credentialMode === 'BYOK' && draft.apiKey.trim()
-            ? { apiKey: draft.apiKey.trim() }
-            : {}),
-          metadata: cleanMetadata(draft.metadata),
-        },
-      });
-      setDrafts((current) => ({
-        ...current,
-        [provider.id]: { ...draft, apiKey: '' },
-      }));
-      setMessage(`${provider.label} settings saved.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    await upsertCredential.mutateAsync({
+      providerId: provider.id,
+      input: {
+        credentialMode: draft.credentialMode,
+        ...(draft.credentialMode === 'BYOK' && draft.apiKey.trim()
+          ? { apiKey: draft.apiKey.trim() }
+          : {}),
+        metadata: cleanMetadata(draft.metadata),
+      },
+    });
+    setDrafts((current) => ({
+      ...current,
+      [provider.id]: { ...draft, apiKey: '' },
+    }));
   };
 
   const validateProvider = async (provider: CatalogProvider) => {
-    setMessage(null);
-    setError(null);
-    try {
-      await validateCredential.mutateAsync(provider.id);
-      setMessage(`${provider.label} validation completed.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    await validateCredential.mutateAsync(provider.id);
   };
 
   const removeProvider = async (provider: CatalogProvider) => {
-    setMessage(null);
-    setError(null);
-    try {
-      await deleteCredential.mutateAsync(provider.id);
-      setDrafts((current) => ({
-        ...current,
-        [provider.id]: DEFAULT_DRAFT,
-      }));
-      setMessage(`${provider.label} credential deleted.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+    await deleteCredential.mutateAsync(provider.id);
+    setDrafts((current) => ({
+      ...current,
+      [provider.id]: DEFAULT_DRAFT,
+    }));
   };
 
   return (
@@ -196,16 +173,6 @@ export function AiProvidersClient() {
         </p>
       </div>
 
-      {message ? (
-        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-950 dark:text-emerald-100">
-          {message}
-        </p>
-      ) : null}
-      {error ? (
-        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
-        </p>
-      ) : null}
 
       {catalog.isLoading ? (
         <div className="grid gap-3">
@@ -239,20 +206,15 @@ export function AiProvidersClient() {
                   draft={draftFor(drafts, provider.id)}
                   voices={voices}
                   canManage={canManage}
-                  busy={
-                    upsertCredential.isPending ||
-                    validateCredential.isPending ||
-                    deleteCredential.isPending
-                  }
                   onDraftChange={(draft) =>
                     setDrafts((current) => ({
                       ...current,
                       [provider.id]: draft,
                     }))
                   }
-                  onSave={() => void saveProvider(provider)}
-                  onValidate={() => void validateProvider(provider)}
-                  onDelete={() => void removeProvider(provider)}
+                  onSave={() => saveProvider(provider)}
+                  onValidate={() => validateProvider(provider)}
+                  onDelete={() => removeProvider(provider)}
                 />
               ))}
             </div>
@@ -268,7 +230,6 @@ function ProviderCredentialCard({
   draft,
   voices,
   canManage,
-  busy,
   onDraftChange,
   onSave,
   onValidate,
@@ -278,20 +239,67 @@ function ProviderCredentialCard({
   draft: ProviderDraft;
   voices: VoiceOption[];
   canManage: boolean;
-  busy: boolean;
   onDraftChange: (draft: ProviderDraft) => void;
-  onSave: () => void;
-  onValidate: () => void;
-  onDelete: () => void;
+  onSave: () => Promise<void>;
+  onValidate: () => Promise<void>;
+  onDelete: () => Promise<void>;
 }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await onSave();
+      setMessage(`${provider.label} settings saved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleValidate = async () => {
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await onValidate();
+      setMessage(`${provider.label} validation completed.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Are you sure you want to delete the credential for ${provider.label}? Any agents relying on this will break.`)) {
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await onDelete();
+      setMessage(`${provider.label} credential deleted.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
   const credential = provider.organizationCredential;
-  const byokStatus = provider.orgCredentialStatus ?? orgCredentialStatus(provider);
+  const byokStatus = provider.orgCredentialStatus ?? 'not_configured';
   const displayStatus: BadgeStatus = 
     credential?.credentialMode === 'FINOVA_MANAGED'
       ? (provider.finovaManagedAvailable ? 'finova_managed' : 'finova_unavailable')
       : (byokStatus as BadgeStatus);
   const providerVoices = voices.filter(
-    (voice) => normalize(voice.provider) === provider.id,
+    (voice) => voice.provider === provider.id,
   );
   const hasCredential = Boolean(credential?.hasSecret);
   const canSave =
@@ -357,11 +365,7 @@ function ProviderCredentialCard({
               type="password"
               value={draft.apiKey}
               disabled={!canManage}
-              placeholder={
-                hasCredential
-                  ? 'Stored key is already configured'
-                  : `Paste ${provider.label} API key`
-              }
+              placeholder={`Paste ${provider.label} API key`}
               onChange={(event) =>
                 onDraftChange({ ...draft, apiKey: event.target.value })
               }
@@ -384,7 +388,7 @@ function ProviderCredentialCard({
             size="sm"
             className="h-8 text-xs"
             disabled={!canSave}
-            onClick={onSave}
+            onClick={handleSave}
           >
             {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
             Save
@@ -395,7 +399,7 @@ function ProviderCredentialCard({
             size="sm"
             className="h-8 text-xs"
             disabled={!canManage || busy || !hasCredential}
-            onClick={onValidate}
+            onClick={handleValidate}
           >
             <RefreshCw className="size-3.5" />
             Validate
@@ -406,7 +410,7 @@ function ProviderCredentialCard({
             size="sm"
             className="h-8 text-xs"
             disabled={!canManage || busy || !credential}
-            onClick={onDelete}
+            onClick={handleDelete}
           >
             <Trash2 className="size-3.5" />
             Delete
@@ -418,8 +422,18 @@ function ProviderCredentialCard({
           ) : null}
         </div>
 
-        {credential?.validationError ? (
-          <p className="text-xs leading-relaxed text-destructive">
+        {message ? (
+          <p className="text-xs leading-relaxed text-emerald-600 dark:text-emerald-400 mt-2">
+            {message}
+          </p>
+        ) : null}
+        {error ? (
+          <p className="text-xs leading-relaxed text-destructive mt-2">
+            {error}
+          </p>
+        ) : null}
+        {credential?.validationError && !error ? (
+          <p className="text-xs leading-relaxed text-destructive mt-2">
             {credential.validationError}
           </p>
         ) : null}
@@ -644,18 +658,5 @@ function cleanMetadata(metadata: Record<string, string>) {
   );
 }
 
-function orgCredentialStatus(
-  provider: CatalogProvider,
-): 'not_configured' | 'configured_valid' | 'configured_invalid' {
-  if (!provider.organizationCredential?.hasSecret) {
-    return 'not_configured';
-  }
-  return provider.organizationCredential.status === 'VALID'
-    ? 'configured_valid'
-    : 'configured_invalid';
-}
 
-function normalize(value: string | null | undefined): string {
-  return value?.trim().toLowerCase() ?? '';
-}
 
