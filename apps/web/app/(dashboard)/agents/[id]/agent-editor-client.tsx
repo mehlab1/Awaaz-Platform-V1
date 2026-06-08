@@ -3047,51 +3047,55 @@ export function AgentEditorClient({ agentId }: { agentId: string }) {
                 }
               />
 
-              <PipelineProviderCard
-                title="Fallback Text-to-Speech (Optional)"
-                providerValue={fallbackTtsProvider || ''}
-                providerOptions={[{ value: '', label: 'None' }, ...ttsProviderOptions]}
-                onProviderChange={(providerId) => {
-                  setFallbackTtsProvider(providerId);
-                  if (!providerId) setFallbackVoiceId('');
-                }}
-                detailLabel="Voice"
-                detailSummary={(voices.find(v => v.rimeVoiceId === fallbackVoiceId)?.name ?? fallbackVoiceId) || 'Select a voice...'}
-                detailContent={
-                  fallbackVoiceId ? (
-                    <SelectedVoiceTextarea
-                      voice={voices.find(v => v.rimeVoiceId === fallbackVoiceId)}
-                      voiceId={fallbackVoiceId}
-                    />
-                  ) : null
-                }
-                detailAction={
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 shrink-0 text-xs"
-                    disabled={saveBusy !== null || voiceSaveBusy || !fallbackTtsProvider}
-                    onClick={() => {
-                      setVoiceModalTarget('fallback');
-                      setVoiceModalOpen(true);
-                    }}
-                  >
-                    Browse
-                  </Button>
-                }
-                keySource={fallbackTtsKeySource}
-                onKeySourceChange={(value) => {
-                  setFallbackTtsKeySource(value);
-                  setFallbackTtsCredentialMode(credentialModeForKeySource(value));
-                }}
-                provider={providerMeta(fallbackTtsProvider || '')}
-                agentKeyDraft={agentKeyDrafts.fallbackTts ?? ''}
-                hasAgentKey={Boolean(selectedVersion?.fallbackTtsHasAgentKey)}
-                onAgentKeyDraftChange={(value) =>
-                  setAgentKeyDrafts((current) => ({ ...current, fallbackTts: value }))
-                }
-              />
+              <div className="relative ml-6">
+                {/* Visual branching tree line */}
+                <div className="absolute -left-6 top-0 h-10 w-6 rounded-bl-xl border-b-2 border-l-2 border-border/50" aria-hidden />
+                <PipelineProviderCard
+                  title="Fallback TTS (Optional)"
+                  providerValue={fallbackTtsProvider || ''}
+                  providerOptions={[{ value: '', label: 'None' }, ...ttsProviderOptions]}
+                  onProviderChange={(providerId) => {
+                    setFallbackTtsProvider(providerId);
+                    if (!providerId) setFallbackVoiceId('');
+                  }}
+                  detailLabel="Voice"
+                  detailSummary={(voices.find(v => v.rimeVoiceId === fallbackVoiceId)?.name ?? fallbackVoiceId) || 'Select a voice...'}
+                  detailContent={
+                    fallbackVoiceId ? (
+                      <SelectedVoiceTextarea
+                        voice={voices.find(v => v.rimeVoiceId === fallbackVoiceId)}
+                        voiceId={fallbackVoiceId}
+                      />
+                    ) : null
+                  }
+                  detailAction={
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 shrink-0 text-xs"
+                      disabled={saveBusy !== null || voiceSaveBusy || !fallbackTtsProvider}
+                      onClick={() => {
+                        setVoiceModalTarget('fallback');
+                        setVoiceModalOpen(true);
+                      }}
+                    >
+                      Browse
+                    </Button>
+                  }
+                  keySource={fallbackTtsKeySource}
+                  onKeySourceChange={(value) => {
+                    setFallbackTtsKeySource(value);
+                    setFallbackTtsCredentialMode(credentialModeForKeySource(value));
+                  }}
+                  provider={providerMeta(fallbackTtsProvider || '')}
+                  agentKeyDraft={agentKeyDrafts.fallbackTts ?? ''}
+                  hasAgentKey={Boolean(selectedVersion?.fallbackTtsHasAgentKey)}
+                  onAgentKeyDraftChange={(value) =>
+                    setAgentKeyDrafts((current) => ({ ...current, fallbackTts: value }))
+                  }
+                />
+              </div>
 
               <div className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-background/70 p-3">
                 <p className="min-w-0 text-[11px] leading-relaxed text-muted-foreground">
@@ -4489,7 +4493,6 @@ function CredentialModePanel({
   const providerLabel = provider?.label ?? 'this provider';
   const orgStatus = providerOrgCredentialStatus(provider);
   const finovaReady = Boolean(provider?.finovaManagedAvailable);
-  const statusText = keySourceStatusText(keySource, orgStatus, finovaReady, hasAgentKey);
 
   return (
     <div className="rounded-md border border-border/50 bg-background p-3">
@@ -4500,82 +4503,77 @@ function CredentialModePanel({
           description="Use platform-managed provider credentials"
           onClick={() => onKeySourceChange('finova_managed')}
         />
-        <CredentialModeOption
-          active={keySource === 'org_default'}
-          title="Saved Workspace Key"
-          description="Use the validated key from provider settings"
-          onClick={() => onKeySourceChange('org_default')}
-        />
+        
+        {/* Finova Managed Error state */}
+        {keySource === 'finova_managed' && !finovaReady && (
+          <p className="px-2 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+            Finova Managed is currently unavailable for {providerLabel}.
+          </p>
+        )}
+
+        <div className="relative">
+          <CredentialModeOption
+            active={keySource === 'org_default'}
+            title="Saved Workspace Key"
+            description="Use the validated key from provider settings"
+            onClick={() => onKeySourceChange('org_default')}
+          />
+          <Link
+            href="/settings/ai-providers"
+            className="absolute right-3 top-3 text-muted-foreground hover:text-foreground transition-colors"
+            title="Go to Provider Settings"
+          >
+            <Settings2 className="size-4" />
+          </Link>
+        </div>
+
+        {/* Workspace Key Error state */}
+        {keySource === 'org_default' && orgStatus !== 'configured_valid' && (
+          <div className="flex items-center gap-2 px-2 text-[11px] font-medium text-destructive">
+            <AlertTriangle className="size-3.5" />
+            <span>Workspace key not configured or invalid.</span>
+          </div>
+        )}
+
         <CredentialModeOption
           active={keySource === 'agent_own'}
           title="This Agent Only"
           description="Store a key only on this agent version"
           onClick={() => onKeySourceChange('agent_own')}
         />
-      </div>
 
-      {keySource === 'agent_own' ? (
-        <label className="mt-3 grid gap-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Agent Key
-          </span>
-          <input
-            type="password"
-            value={agentKeyDraft}
-            onChange={(event) => onAgentKeyDraftChange(event.target.value)}
-            placeholder={
-              hasAgentKey
-                ? 'Stored agent key is already configured'
-                : `Paste ${providerLabel} API key`
-            }
-            className="h-9 rounded-md border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
-          />
-        </label>
-      ) : null}
-
-      <div className="mt-3 flex items-start gap-2 rounded-md border border-border/50 bg-muted/15 p-3">
-        <Building2 className="mt-0.5 size-4 shrink-0 text-blue-600 dark:text-blue-300" aria-hidden />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold text-foreground">
-            {keySourceLabel(keySource)}
-          </p>
-          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-            {keySourceDescription(keySource, providerLabel)}
-          </p>
-          <span className="mt-2 inline-flex rounded-full border border-border/60 bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-            Status: {statusText}
-          </span>
-          {provider?.organizationCredential?.validationError && keySource === 'org_default' ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-destructive">
-              {provider.organizationCredential.validationError}
-            </p>
-          ) : null}
-          {!finovaReady && keySource === 'finova_managed' ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
-              Finova Managed is not configured for {providerLabel}; choose another key source before saving.
-            </p>
-          ) : null}
-          {keySource === 'org_default' && orgStatus !== 'configured_valid' ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
-              Add and validate a workspace key in provider settings before using this source.
-            </p>
-          ) : null}
-          {keySource === 'agent_own' && !hasAgentKey && !agentKeyDraft.trim() ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-100">
-              Add an agent-owned key before saving this source.
-            </p>
-          ) : null}
-          <Link
-            href="/settings/ai-providers"
-            className={cn(
-              buttonVariants({ variant: 'outline', size: 'sm' }),
-              'mt-3 h-8 text-xs',
-            )}
-          >
-            <Settings2 className="size-3.5" aria-hidden />
-            Provider Settings
-          </Link>
-        </div>
+        {/* Agent Key Input UI */}
+        {keySource === 'agent_own' && (
+          <div className="mt-1 flex items-end gap-2 pl-1">
+            <label className="grid flex-1 gap-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                API Key
+              </span>
+              <input
+                type="password"
+                value={agentKeyDraft}
+                onChange={(event) => onAgentKeyDraftChange(event.target.value)}
+                placeholder={
+                  hasAgentKey
+                    ? 'Stored agent key is already configured'
+                    : `Paste ${providerLabel} API key`
+                }
+                className="h-9 w-full rounded-md border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </label>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 shrink-0 px-3 text-xs"
+              onClick={() => {
+                alert('Key will be validated upon saving the agent version.');
+              }}
+            >
+              Validate
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

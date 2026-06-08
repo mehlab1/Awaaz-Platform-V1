@@ -218,7 +218,6 @@ export function AiProvidersClient() {
                     key={provider.id}
                     provider={provider}
                     draft={draftFor(drafts, provider.id)}
-                    voices={voices}
                     canManage={canManage}
                     onDraftChange={(draft) =>
                       setDrafts((current) => ({
@@ -243,7 +242,6 @@ export function AiProvidersClient() {
 function ProviderCredentialCard({
   provider,
   draft,
-  voices,
   canManage,
   onDraftChange,
   onSave,
@@ -252,7 +250,6 @@ function ProviderCredentialCard({
 }: {
   provider: CatalogProvider;
   draft: ProviderDraft;
-  voices: VoiceOption[];
   canManage: boolean;
   onDraftChange: (draft: ProviderDraft) => void;
   onSave: () => Promise<void>;
@@ -333,9 +330,6 @@ function ProviderCredentialCard({
     isFinovaManaged
       ? (provider.finovaManagedAvailable ? 'finova_managed' : 'finova_unavailable')
       : (byokStatus as BadgeStatus);
-  const providerVoices = voices.filter(
-    (voice) => voice.provider === provider.id,
-  );
   const hasCredential = Boolean(credential?.hasSecret);
   const canSave =
     canManage &&
