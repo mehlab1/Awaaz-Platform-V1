@@ -9,7 +9,6 @@ import { formatDistanceToNow } from 'date-fns';
 import {
   AlertTriangle,
   ArrowLeft,
-  Building2,
   Check,
   ChevronDown,
   ChevronRight,
@@ -4805,29 +4804,6 @@ function providerOrgCredentialStatus(
   return provider.organizationCredential.status === 'VALID'
     ? 'configured_valid'
     : 'configured_invalid';
-}
-
-function keySourceLabel(value: ProviderKeySource): string {
-  if (value === 'org_default') {
-    return 'Saved Workspace Key';
-  }
-  if (value === 'agent_own') {
-    return 'This Agent Only';
-  }
-  return 'Finova Managed';
-}
-
-function keySourceDescription(
-  value: ProviderKeySource,
-  providerLabel: string,
-): string {
-  if (value === 'org_default') {
-    return `Uses the validated ${providerLabel} key from provider settings.`;
-  }
-  if (value === 'agent_own') {
-    return `Stores a ${providerLabel} key only on this agent version.`;
-  }
-  return 'Uses platform-managed provider infrastructure.';
 }
 
 function keySourceStatusText(

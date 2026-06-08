@@ -12,7 +12,6 @@ import {
   XCircle,
 } from 'lucide-react';
 
-import { useOrgContext } from '@/components/org-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -53,14 +52,12 @@ export type BadgeStatus = 'not_configured' | 'configured_valid' | 'configured_in
 
 export function AiProvidersClient() {
   const {
-    activeOrgId,
     canManage,
     catalog,
     upsertCredential,
     validateCredential,
     deleteCredential,
   } = useProviderCredentials();
-  const { apiCall } = useOrgContext();
   const [drafts, setDrafts] = useState<Record<string, ProviderDraft>>({});
 
   useEffect(() => {
