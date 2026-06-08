@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from livekit.agents import llm
-from livekit.plugins import anthropic, openai
+from livekit.plugins import anthropic, openai, groq
 
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def build_llm(
         raise ValueError(
             "FINOVA_GROQ_API_KEY or GROQ_API_KEY is required for Groq LLM"
         )
-    return openai.LLM.with_groq(
+    return groq.LLM(
         model=resolved.model_id,
         api_key=api_key,
     )

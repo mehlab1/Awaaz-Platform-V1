@@ -54,6 +54,8 @@ const DEFAULT_DRAFT: ProviderDraft = {
   metadata: {},
 };
 
+export type BadgeStatus = 'not_configured' | 'configured_valid' | 'configured_invalid' | 'finova_managed' | 'finova_unavailable';
+
 export function AiProvidersClient() {
   const {
     activeOrgId,
@@ -283,7 +285,11 @@ function ProviderCredentialCard({
   onDelete: () => void;
 }) {
   const credential = provider.organizationCredential;
-  const status = provider.orgCredentialStatus ?? orgCredentialStatus(provider);
+  const byokStatus = provider.orgCredentialStatus ?? orgCredentialStatus(provider);
+  const displayStatus: BadgeStatus = 
+    credential?.credentialMode === 'FINOVA_MANAGED'
+      ? (provider.finovaManagedAvailable ? 'finova_managed' : 'finova_unavailable')
+      : (byokStatus as BadgeStatus);
   const providerVoices = voices.filter(
     (voice) => normalize(voice.provider) === provider.id,
   );
@@ -303,7 +309,7 @@ function ProviderCredentialCard({
             <h3 className="truncate text-sm font-semibold text-foreground">
               {provider.label}
             </h3>
-            <ProviderStatusBadge status={status} />
+            <ProviderStatusBadge status={displayStatus} />
             {provider.runtimeSupported === false ? (
               <Badge variant="secondary">Runtime unavailable</Badge>
             ) : null}
@@ -336,7 +342,9 @@ function ProviderCredentialCard({
             className="h-9 rounded-md border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <option value="BYOK">Saved Workspace Key</option>
-            <option value="FINOVA_MANAGED">Finova Managed</option>
+            <option value="FINOVA_MANAGED" disabled={!provider.finovaManagedAvailable}>
+              Finova Managed {!provider.finovaManagedAvailable ? '(Unavailable)' : ''}
+            </option>
           </select>
         </label>
 
@@ -569,7 +577,7 @@ function MetadataInput({
 function ProviderStatusBadge({
   status,
 }: {
-  status: 'not_configured' | 'configured_valid' | 'configured_invalid';
+  status: BadgeStatus;
 }) {
   const config = {
     not_configured: {
@@ -578,12 +586,22 @@ function ProviderStatusBadge({
       className: 'border-border bg-muted/20 text-muted-foreground',
     },
     configured_valid: {
-      label: 'Valid',
+      label: 'BYOK Valid',
       icon: CheckCircle2,
       className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-950 dark:text-emerald-100',
     },
     configured_invalid: {
-      label: 'Invalid',
+      label: 'BYOK Invalid',
+      icon: XCircle,
+      className: 'border-destructive/30 bg-destructive/10 text-destructive',
+    },
+    finova_managed: {
+      label: 'Finova Managed',
+      icon: CheckCircle2,
+      className: 'border-blue-500/30 bg-blue-500/10 text-blue-900 dark:text-blue-100',
+    },
+    finova_unavailable: {
+      label: 'Unavailable',
       icon: XCircle,
       className: 'border-destructive/30 bg-destructive/10 text-destructive',
     },

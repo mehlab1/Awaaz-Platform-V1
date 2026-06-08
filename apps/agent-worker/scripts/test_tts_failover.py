@@ -11,8 +11,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from livekit.agents import tts, utils
+from livekit.agents import tts, utils, APIConnectOptions
 from livekit import rtc
+
+_CONN_OPTS = APIConnectOptions()
 
 from pipeline.failover_tts import (
     FailoverIdentity,
@@ -69,39 +71,30 @@ class MockTTS(tts.TTS):
 
 class MockSynthesizeStream(tts.SynthesizeStream):
     def __init__(self, parent: MockTTS) -> None:
-        super().__init__()
+        super().__init__(tts=parent, conn_options=_CONN_OPTS)
 
-    @utils.log_exceptions()
-    async def _main_task(self) -> None:
+    async def _run(self, output_emitter) -> None:
         pass
 
 
 class MockChunkedStream(tts.ChunkedStream):
     def __init__(self, text: str, parent: MockTTS) -> None:
-        super().__init__()
+        super().__init__(tts=parent, input_text=text, conn_options=_CONN_OPTS)
         self._text = text
         self._parent = parent
 
-    @utils.log_exceptions()
-    async def _main_task(self) -> None:
-        # Emit a single silent audio frame.
-        request_id = "mock-req"
-        segment_id = "mock-seg"
+    async def _run(self, output_emitter) -> None:
+        # Emit a single silent audio chunk via the output emitter.
         num_samples = 160  # 10ms at 16kHz
         audio_bytes = b"\x00\x00" * num_samples
-        frame = rtc.AudioFrame(
-            audio_bytes,
-            self._parent.sample_rate,
-            self._parent.num_channels,
-            num_samples,
+        output_emitter.initialize(
+            request_id="mock-req",
+            sample_rate=self._parent.sample_rate,
+            num_channels=self._parent.num_channels,
+            mime_type="audio/pcm",
         )
-        self._event_ch.send_nowait(
-            tts.SynthesizedAudio(
-                request_id=request_id,
-                segment_id=segment_id,
-                frame=frame,
-            )
-        )
+        output_emitter.push(audio_bytes)
+        output_emitter.flush()
 
 
 class FailingTTS(tts.TTS):
@@ -132,11 +125,10 @@ class FailingTTS(tts.TTS):
 
 class FailingChunkedStream(tts.ChunkedStream):
     def __init__(self, parent: FailingTTS) -> None:
-        super().__init__()
+        super().__init__(tts=parent, input_text="test", conn_options=_CONN_OPTS)
         self._parent = parent
 
-    @utils.log_exceptions()
-    async def _main_task(self) -> None:
+    async def _run(self, output_emitter) -> None:
         import httpx
         raise httpx.HTTPStatusError(
             "Server Error",
@@ -171,11 +163,10 @@ class AuthFailingTTS(tts.TTS):
 
 class AuthFailingChunkedStream(tts.ChunkedStream):
     def __init__(self, parent: AuthFailingTTS) -> None:
-        super().__init__()
+        super().__init__(tts=parent, input_text="test", conn_options=_CONN_OPTS)
         self._parent = parent
 
-    @utils.log_exceptions()
-    async def _main_task(self) -> None:
+    async def _run(self, output_emitter) -> None:
         import httpx
         raise httpx.HTTPStatusError(
             "Unauthorized",

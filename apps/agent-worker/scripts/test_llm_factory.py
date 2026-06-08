@@ -82,34 +82,39 @@ def test_provider_construction() -> None:
 
 
 def test_chat_stream_construction() -> None:
-    chat_ctx = llm.ChatContext()
-    chat_ctx.append(text="Hello", role="user")
-    engines = (
-        build_llm(
-            provider_config(
-                provider_id="groq",
-                model=DEFAULT_GROQ_MODEL,
-                api_key="groq-test-key",
+    import asyncio
+
+    async def run() -> None:
+        chat_ctx = llm.ChatContext()
+        chat_ctx.add_message(content="Hello", role="user")
+        engines = (
+            build_llm(
+                provider_config(
+                    provider_id="groq",
+                    model=DEFAULT_GROQ_MODEL,
+                    api_key="groq-test-key",
+                ),
             ),
-        ),
-        build_llm(
-            provider_config(
-                provider_id="openai",
-                model=DEFAULT_OPENAI_MODEL,
-                api_key="openai-test-key",
+            build_llm(
+                provider_config(
+                    provider_id="openai",
+                    model=DEFAULT_OPENAI_MODEL,
+                    api_key="openai-test-key",
+                ),
             ),
-        ),
-        build_llm(
-            provider_config(
-                provider_id="anthropic",
-                model=DEFAULT_ANTHROPIC_MODEL,
-                api_key="anthropic-test-key",
+            build_llm(
+                provider_config(
+                    provider_id="anthropic",
+                    model=DEFAULT_ANTHROPIC_MODEL,
+                    api_key="anthropic-test-key",
+                ),
             ),
-        ),
-    )
-    for engine in engines:
-        stream = engine.chat(chat_ctx=chat_ctx)
-        close_unstarted_provider_request(stream)
+        )
+        for engine in engines:
+            stream = engine.chat(chat_ctx=chat_ctx)
+            await close_unstarted_provider_request(stream)
+
+    asyncio.run(run())
 
 
 def test_provider_defaults_and_precedence() -> None:
@@ -244,14 +249,16 @@ def engine_model(engine: object) -> str:
     return str(getattr(options, "model"))
 
 
-def close_unstarted_provider_request(stream: object) -> None:
-    for attribute in ("_awaitable_oai_stream", "_awaitable_anthropic_stream"):
-        request = getattr(stream, attribute, None)
-        close = getattr(request, "close", None)
-        if callable(close):
-            close()
-            return
-    raise AssertionError("provider stream did not expose an unstarted request")
+async def close_unstarted_provider_request(stream: object) -> None:
+    if hasattr(stream, "aclose"):
+        await stream.aclose()
+    else:
+        for attribute in ("_awaitable_oai_stream", "_awaitable_anthropic_stream"):
+            request = getattr(stream, attribute, None)
+            close = getattr(request, "close", None)
+            if callable(close):
+                close()
+                return
 
 
 def assert_value_error(
