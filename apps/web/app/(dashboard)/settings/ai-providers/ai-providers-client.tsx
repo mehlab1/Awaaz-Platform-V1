@@ -254,7 +254,18 @@ function ProviderCredentialCard({
     setError(null);
     try {
       await onSave();
-      setMessage(`${provider.label} settings saved.`);
+      
+      if (draft.credentialMode === 'BYOK') {
+        try {
+          await onValidate();
+          setMessage(`${provider.label} settings saved and validated successfully.`);
+        } catch (validationErr) {
+          setMessage(`${provider.label} settings saved, but validation failed.`);
+          setError(validationErr instanceof Error ? validationErr.message : String(validationErr));
+        }
+      } else {
+        setMessage(`${provider.label} settings saved.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -294,8 +305,12 @@ function ProviderCredentialCard({
   };
   const credential = provider.organizationCredential;
   const byokStatus = provider.orgCredentialStatus ?? 'not_configured';
+  const isFinovaManaged = 
+    credential?.credentialMode === 'FINOVA_MANAGED' || 
+    (!credential && provider.availableVia === 'FINOVA_MANAGED');
+
   const displayStatus: BadgeStatus = 
-    credential?.credentialMode === 'FINOVA_MANAGED'
+    isFinovaManaged
       ? (provider.finovaManagedAvailable ? 'finova_managed' : 'finova_unavailable')
       : (byokStatus as BadgeStatus);
   const providerVoices = voices.filter(

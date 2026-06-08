@@ -21,7 +21,7 @@ This document breaks down the verification of Module 2 into hyper-granular, file
   - Add OpenAI explicitly to the catalog.
   - Ensure API validation (`AgentsService`) aligns exactly with `llm_factory.py` allowlist so unsupported providers throw a `400 BadRequest` before saving.
 
-### Phase 1.3: Agent Editor Guardrails (UI)
+### Phase 1.3: Agent Editor Guardrails (UI) [x] Verified
 - **Target Files**: `apps/web/app/(dashboard)/agents/[id]/agent-editor-client.tsx`, `apps/web/lib/agent-runtime-guardrails.ts`
 - **Verification Goals**:
   - The UI dropdowns must disable and visually label (e.g., "Not Supported") any LLM provider not currently enabled in the runtime.
