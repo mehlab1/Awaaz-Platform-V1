@@ -7,6 +7,7 @@ from livekit.agents import tts
 
 from pipeline.cartesia_tts import CartesiaTTS
 from pipeline.elevenlabs_tts import ElevenLabsTTS
+from pipeline.failover_tts import FailoverIdentity, FailoverTTS
 from pipeline.inworld_tts import InworldTTS
 from pipeline.tts import RimeTTS, TtsMetricCallback
 
@@ -120,6 +121,7 @@ def build_tts(
 
 
 async def close_tts(engine: tts.TTS) -> None:
+    """Close a TTS engine, including FailoverTTS which cascades to both children."""
     aclose = getattr(engine, "aclose", None)
     if callable(aclose):
         await aclose()
@@ -164,6 +166,109 @@ def parse_tts_runtime_selection(config: Mapping[str, object]) -> TtsRuntimeSelec
         api_key=api_key,
         key_fingerprint=key_fingerprint,
         metadata_provider_id=metadata_provider_id,
+    )
+
+
+def parse_fallback_tts_runtime_selection(
+    config: Mapping[str, object],
+) -> TtsRuntimeSelection | None:
+    """Parse the optional fallbackTts pipeline/credentials from the worker config.
+
+    Returns None if no fallback is configured.
+    """
+    pipeline = _mapping_value(config, "pipeline")
+    pipeline_fallback = _mapping_value(pipeline, "fallbackTts") if pipeline else None
+    if not pipeline_fallback:
+        return None
+
+    provider_id_raw = _string_value(pipeline_fallback, "providerId")
+    if not provider_id_raw:
+        return None
+
+    credentials = _mapping_value(config, "credentials")
+    credentials_fallback = _mapping_value(credentials, "fallbackTts") if credentials else None
+    metadata = _mapping_value(config, "metadata")
+
+    provider_id = _normalize_provider_id(provider_id_raw)
+    voice_id = _string_value(pipeline_fallback, "voiceId") or ""
+    model_id = _string_value(pipeline_fallback, "modelId") or ""
+    language = _string_value(pipeline_fallback, "language") or "eng"
+    api_key = _string_value(credentials_fallback, "apiKey")
+    key_fingerprint = (
+        _string_value(credentials_fallback, "keyFingerprint")
+        or _string_value(metadata, "fallbackTtsKeyFingerprint")
+    )
+
+    return TtsRuntimeSelection(
+        provider_id=provider_id,
+        voice_id=voice_id,
+        model_id=model_id,
+        language=language,
+        api_key=api_key,
+        key_fingerprint=key_fingerprint,
+        metadata_provider_id=_string_value(metadata, "fallbackTtsProviderId"),
+    )
+
+
+def build_tts_with_failover(
+    config: Mapping[str, object],
+    primary_selection: TtsRuntimeSelection | None = None,
+    *,
+    metrics_callback: TtsMetricCallback | None = None,
+) -> tts.TTS:
+    """Build a TTS engine from the worker config, wrapping in FailoverTTS if
+    a fallback is configured.
+
+    This is the recommended entry point for agent.py.
+    """
+    resolved_primary = primary_selection or parse_tts_runtime_selection(config)
+    primary_engine = build_tts(config, resolved_primary, metrics_callback=metrics_callback)
+
+    fallback_selection = parse_fallback_tts_runtime_selection(config)
+    if fallback_selection is None:
+        logger.info("tts_failover_disabled reason=no_fallback_configured")
+        return primary_engine
+
+    log_tts_selection(fallback_selection)
+    logger.info(
+        "tts_fallback_configured primary=%s fallback=%s",
+        resolved_primary.provider_id,
+        fallback_selection.provider_id,
+    )
+
+    try:
+        fallback_engine = build_tts(
+            config,
+            fallback_selection,
+            metrics_callback=metrics_callback,
+        )
+    except Exception as exc:
+        logger.error(
+            "tts_fallback_build_failed provider=%s error=%s action=continuing_without_fallback",
+            fallback_selection.provider_id,
+            exc,
+        )
+        return primary_engine
+
+    primary_identity = FailoverIdentity(
+        provider_id=resolved_primary.provider_id,
+        voice_id=resolved_primary.voice_id,
+        model_id=resolved_primary.model_id,
+        key_fingerprint=resolved_primary.key_fingerprint,
+    )
+    fallback_identity = FailoverIdentity(
+        provider_id=fallback_selection.provider_id,
+        voice_id=fallback_selection.voice_id,
+        model_id=fallback_selection.model_id,
+        key_fingerprint=fallback_selection.key_fingerprint,
+    )
+
+    return FailoverTTS(
+        primary_engine,
+        fallback_engine,
+        primary_identity,
+        fallback_identity,
+        metrics_callback=metrics_callback,
     )
 
 

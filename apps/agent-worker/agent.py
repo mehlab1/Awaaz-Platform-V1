@@ -17,7 +17,7 @@ from livekit.plugins import silero
 from api_client import AwaazAPIClient
 from pipeline.llm_factory import build_llm, parse_llm_runtime_selection
 from pipeline.stt_factory import build_stt, parse_stt_runtime_selection
-from pipeline.tts_factory import build_tts, close_tts, parse_tts_runtime_selection
+from pipeline.tts_factory import build_tts, build_tts_with_failover, close_tts, parse_tts_runtime_selection
 from tools.end_call import end_call
 from tools.transfer_to_human import transfer_to_human
 
@@ -847,7 +847,7 @@ class AwaazAgent:
             )
 
             setup_stage = "build_tts"
-            tts_engine = build_tts(
+            tts_engine = build_tts_with_failover(
                 config,
                 tts_selection,
                 metrics_callback=timing.record_tts_metric,
@@ -941,6 +941,21 @@ class AwaazAgent:
             participant_sid(participant),
             participant_kind(participant),
         )
+
+        # Run the pre-call TTS health probe if failover is configured.
+        # This does NOT emit audible speech — it discards audio frames.
+        from pipeline.failover_tts import FailoverTTS as _FailoverTTS
+
+        if isinstance(tts_engine, _FailoverTTS):
+            try:
+                await tts_engine.run_probe()
+            except Exception as probe_err:
+                logger.warning(
+                    "tts_pre_call_probe_error call_id=%s error=%s action=continuing_with_selected_engine",
+                    call_id,
+                    probe_err,
+                )
+
         assistant.start(ctx.room, participant)
         register_timing_events(
             assistant,
